@@ -1,0 +1,111 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div id="@ElementId" style="@Style"></div>
+
+@code {
+    [Parameter] public string Value { get; set; }
+    //A plain delegate rather than EventCallback: an EventCallback would re-render the parent (Home) on
+    //every keystroke — wasteful, since nothing in Home's markup depends on the query text (Monaco draws it).
+    [Parameter] public Action<string> ValueChanged { get; set; }
+    [Parameter] public string Language { get; set; } = "gremlin";
+    [Parameter] public string Style { get; set; } = "height: 15em; border: 1px solid var(--bs-border-color);";
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public string DebugRangesJson { get; set; }//JSON [[start,end],…] of the debuggable steps, or null
+    [Parameter] public int ActiveStep { get; set; } = -1;
+    [Parameter] public string CursorRangeJson { get; set; }//JSON [start,end] of a nested sub-traversal step, or null
+    [Parameter] public EventCallback<int> OnStepClicked { get; set; }
+
+    private readonly string ElementId = "monaco-" + Guid.NewGuid().ToString("N");
+    private DotNetObjectReference<MonacoEditor> selfRef;
+    private bool created;
+    private string lastSynced;
+    private string lastLanguage;
+    private bool lastReadOnly;
+    private string lastDebugRanges;
+    private int lastActiveStep = -1;
+    private string lastCursorRange;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            selfRef = DotNetObjectReference.Create(this);
+
+            await JS.InvokeVoidAsync("monacoInterop.create", ElementId, Value ?? string.Empty, selfRef, Language);
+
+            created = true;
+            lastSynced = Value;
+            lastLanguage = Language;
+
+            //An editor born read-only has to be told so here: the sync below only runs on a later render,
+            //and a preview that nothing else touches never gets one.
+            if (ReadOnly)
+            {
+                lastReadOnly = true;
+                await JS.InvokeVoidAsync("monacoInterop.setReadOnly", true);
+            }
+        }
+        else if (created)
+        {
+            if (Value != lastSynced)
+            {
+                //The parent changed the bound value (e.g. switched query tab) — push it into the editor.
+                lastSynced = Value;
+                await JS.InvokeVoidAsync("monacoInterop.setValue", Value ?? string.Empty);
+            }
+
+            if (Language != lastLanguage)
+            {
+                lastLanguage = Language;
+                await JS.InvokeVoidAsync("monacoInterop.setLanguage", Language);
+            }
+
+            if (ReadOnly != lastReadOnly)
+            {
+                lastReadOnly = ReadOnly;
+                await JS.InvokeVoidAsync("monacoInterop.setReadOnly", ReadOnly);
+            }
+
+            if (DebugRangesJson != lastDebugRanges || ActiveStep != lastActiveStep || CursorRangeJson != lastCursorRange)
+            {
+                lastDebugRanges = DebugRangesJson;
+                lastActiveStep = ActiveStep;
+                lastCursorRange = CursorRangeJson;
+
+                if (string.IsNullOrEmpty(DebugRangesJson))
+                    await JS.InvokeVoidAsync("monacoInterop.clearDebug");
+                else
+                    await JS.InvokeVoidAsync("monacoInterop.setDebug", DebugRangesJson, ActiveStep, CursorRangeJson);
+            }
+        }
+    }
+
+    //Called from JS on every edit; mirror the text up to the parent without echoing it back and without
+    //forcing a Home re-render (this is a plain delegate, and a JSInvokable doesn't auto-render).
+    [JSInvokable]
+    public void OnMonacoChanged(string text)
+    {
+        lastSynced = text;
+        Value = text;
+        ValueChanged?.Invoke(text);
+    }
+
+    //Called from JS when a debug step is clicked in the editor.
+    [JSInvokable]
+    public async Task OnDebugStepClicked(int index)
+    {
+        await OnStepClicked.InvokeAsync(index);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("monacoInterop.dispose");
+        }
+        catch { }
+
+        selfRef?.Dispose();
+    }
+}

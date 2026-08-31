@@ -1,0 +1,333 @@
+﻿@using GraphDBViewerWeb.Code
+@implements IDisposable
+@inject LlmConnectionStore Store
+
+@* The saved AI-model picker + its add/edit form, shared by every AI feature ("Ask AI" today, the
+   knowledge-graph generator next) so a model configured once is offered everywhere. Owns the CRUD via
+   LlmConnectionStore; the parent only learns which connection is picked, through SelectedChanged. *@
+
+@if (!PickOnly)
+{
+    <label class="form-label mb-1">AI model</label>
+}
+
+<div class="@(PickOnly ? "" : "input-group mb-2")" style="@(PickOnly ? "" : "max-width: 380px;")">
+    <select class="form-select @(PickOnly ? "form-select-sm" : "")"
+            style="@(PickOnly ? "max-width: 260px;" : "")"
+            value="@selectedKey"
+            @onchange="OnSelectionChangedAsync"
+            title="Which saved AI model answers. Models are added and edited under Settings → AI settings.">
+        @if (connections.Count == 0)
+        {
+            <option value="">@(PickOnly ? "-- No model: add one in Settings --" : "-- No models yet: add one --")</option>
+        }
+        @foreach (var kv in connections)
+        {
+            <option value="@kv.Key">@kv.Key (@kv.Value.ProviderType)</option>
+        }
+    </select>
+
+    @* Picking and editing are separated on purpose: somewhere that only needs to choose a model shows a
+       dropdown and nothing else, so the panel around it stays about the thing it is for. *@
+    @if (!PickOnly)
+    {
+        <button class="btn btn-success" style="border-top-color: var(--bs-border-color); border-bottom-color: var(--bs-border-color); border-left: 0; border-right: 0;" @onclick="StartAdd" title="Add an AI model">+</button>
+        <button class="btn btn-danger" style="border-top-color: var(--bs-border-color); border-bottom-color: var(--bs-border-color); border-left: 0; border-right-color: var(--bs-border-color);" @onclick="DeleteAsync" disabled="@(Selected == null)" title="Delete selected model">&minus;</button>
+    }
+</div>
+
+@if (showForm)
+{
+    <div class="card border-secondary p-3 mb-3">
+        <div class="mb-2">
+            <label class="form-label">Name <span class="text-danger">*</span></label>
+            <input class="form-control @(formError != null ? "is-invalid" : "")" placeholder="e.g. Claude Opus" @bind="formName" />
+            @if (formError != null)
+            {
+                <div class="invalid-feedback">@formError</div>
+            }
+        </div>
+
+        <div class="mb-2">
+            <label class="form-label d-block">Provider</label>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Provider">
+                <button type="button" class="btn @(form.ProviderType == "Anthropic" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "Anthropic"'>Anthropic</button>
+                <button type="button" class="btn @(form.ProviderType == "OpenAI" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "OpenAI"'>OpenAI</button>
+                <button type="button" class="btn @(form.ProviderType == "Gemini" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "Gemini"'>Gemini</button>
+                <button type="button" class="btn @(form.ProviderType == "Custom" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "Custom"'>Other</button>
+            </div>
+            <div class="form-text" style="font-size: 0.75em;">Gemini = Google's free-tier models: get a key from Google AI Studio (aistudio.google.com). Other = any OpenAI-compatible server (Ollama, LM Studio, vLLM, Azure, self-hosted).</div>
+        </div>
+
+        @if (form.ProviderType != "Anthropic")
+        {
+            <div class="mb-2">
+                <label class="form-label">Base URL @if (BaseUrlOptional){<text>(optional)</text>}else{<span class="text-danger">*</span>}</label>
+                <input class="form-control" placeholder="@BaseUrlPlaceholder" @bind="form.BaseUrl" />
+            </div>
+        }
+
+        <div class="mb-2 row">
+            <div class="col">
+                <label class="form-label">Model @if (ModelRequired){<span class="text-danger">*</span>}</label>
+                <input class="form-control" placeholder="@ModelPlaceholder" @bind="form.Model" />
+            </div>
+            <div class="col">
+                <label class="form-label">API key @if (ApiKeyRequired){<span class="text-danger">*</span>}</label>
+                <input class="form-control" type="password" @bind="form.ApiKey" />
+            </div>
+            @* Only Anthropic sends a cap — the OpenAI-compatible adapter leaves it to the
+               server, so the box would do nothing for the other providers. *@
+            @if (SendsMaxTokens)
+            {
+                <div class="col-3">
+                    <label class="form-label">Max tokens</label>
+                    <input class="form-control" type="number" min="1" @bind="form.MaxTokens" title="Ceiling on the answer's length. It's a limit, not an allowance. You're billed for what the model actually writes, so raise it if a long answer stops mid-sentence." />
+                </div>
+            }
+        </div>
+
+        <div class="d-flex gap-2 mt-1">
+            <button class="btn btn-primary" @onclick="SaveFormAsync">@(isEditing ? "Save" : "Add")</button>
+            <button class="btn btn-outline-secondary" @onclick="CancelForm" title="Discard these edits and go back to what is saved">Cancel</button>
+        </div>
+    </div>
+}
+
+@code {
+    ///<summary>
+    ///Show the dropdown alone — no add / delete / edit, and no form. For a panel that needs to know which
+    ///model to use but is not the place to manage them; with none saved, the dropdown says where to add one.
+    ///</summary>
+    [Parameter] public bool PickOnly { get; set; }
+
+    ///<summary>Raised whenever the picked connection changes — on load, selection, save and delete.
+    ///Null means no models exist. The parent generates with what this hands it.</summary>
+    [Parameter] public EventCallback<LlmConnection> SelectedChanged { get; set; }
+
+    private Dictionary<string, LlmConnection> connections = new();
+    private string selectedKey;
+
+    //Add / edit form state.
+    private bool showForm;
+    private bool isEditing;
+    private string formName;
+    private string originalName;
+    private LlmConnection form = new();
+    private string formError;
+
+    private LlmConnection Selected
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(selectedKey) && connections.TryGetValue(selectedKey, out var c))
+                return c;
+
+            return null;
+        }
+    }
+
+    private string ModelPlaceholder
+    {
+        get
+        {
+            //Anthropic is the one provider whose model is optional (see ModelRequired), so its placeholder
+            //has to name the model a blank field actually runs — and it reads that from the provider, so the
+            //two can't drift apart again. The others are required fields, where the placeholder is only an
+            //example of what to type.
+            if (form.ProviderType == "Anthropic")
+                return $"{AnthropicProvider.DefaultModel} (default)";
+
+            if (form.ProviderType == "OpenAI")
+                return "gpt-4o-mini";
+
+            if (form.ProviderType == "Gemini")
+                return "gemini-2.5-flash";
+
+            return "model name";
+        }
+    }
+
+    //Gemini and OpenAI have a sensible default endpoint, so the Base URL is optional; a custom server needs one.
+    private bool BaseUrlOptional => form.ProviderType == "OpenAI" || form.ProviderType == "Gemini";
+
+    //An API key is required for the hosted providers; a local OpenAI-compatible server ("Other") may not need one.
+    private bool ApiKeyRequired => form.ProviderType != "Custom";
+
+    //Every provider needs a model id except Anthropic, which falls back to a built-in default.
+    private bool ModelRequired => form.ProviderType != "Anthropic";
+
+    //Only the Anthropic adapter sends an output cap; the OpenAI-compatible one lets the server decide.
+    private bool SendsMaxTokens => form.ProviderType == "Anthropic";
+
+    private string BaseUrlPlaceholder
+    {
+        get
+        {
+            if (form.ProviderType == "Gemini")
+                return OpenAiProvider.GeminiBaseUrl;
+
+            if (form.ProviderType == "Custom")
+                return "http://localhost:11434/v1";
+
+            return OpenAiProvider.DefaultBaseUrl;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Store.Changed += OnStoreChangedAsync;
+
+        connections = await Store.LoadAsync();
+        selectedKey = connections.Keys.FirstOrDefault();
+
+        if (!PickOnly)
+            ShowSelectedInForm();
+
+        await NotifySelectedAsync();
+    }
+
+    public void Dispose()
+    {
+        Store.Changed -= OnStoreChangedAsync;
+    }
+
+    ///<summary>
+    ///Another picker saved. Reload, and keep the selection if what was selected is still there — the one
+    ///that did the editing has already moved its own selection, and moving it a second time would undo
+    ///that. A selection that no longer exists falls back to whatever does.
+    ///</summary>
+    private async Task OnStoreChangedAsync()
+    {
+        connections = await Store.LoadAsync();
+
+        if (selectedKey == null || !connections.ContainsKey(selectedKey))
+            selectedKey = connections.Keys.FirstOrDefault();
+
+        //Only when this picker is not mid-edit: reloading the form under somebody's hands would throw
+        //away what they are typing because a different panel saved something.
+        if (!PickOnly && !showForm)
+            ShowSelectedInForm();
+
+        await NotifySelectedAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task NotifySelectedAsync()
+    {
+        await SelectedChanged.InvokeAsync(Selected);
+    }
+
+    private async Task OnSelectionChangedAsync(ChangeEventArgs e)
+    {
+        selectedKey = e.Value?.ToString();
+
+        //The form shows whatever is selected, so picking a different model is what used to be Edit.
+        ShowSelectedInForm();
+
+        await NotifySelectedAsync();
+    }
+
+    ///<summary>
+    ///Loads the selected model into the form, or closes the form when there is nothing selected.
+    ///
+    ///This is the whole of what the Edit button used to do. The settings of the model you have chosen are
+    ///not a separate mode worth a button — they are what this panel is for — so they are simply shown.
+    ///</summary>
+    private void ShowSelectedInForm()
+    {
+        var selected = Selected;
+
+        if (selected == null)
+        {
+            showForm = false;
+
+            return;
+        }
+
+        isEditing = true;
+        form = new LlmConnection(selected);
+        formName = selected.Name;
+        originalName = selected.Name;
+        formError = null;
+        showForm = true;
+    }
+
+    private void StartAdd()
+    {
+        isEditing = false;
+        form = new LlmConnection();
+        formName = string.Empty;
+        originalName = null;
+        formError = null;
+        showForm = true;
+    }
+
+    private void StartEdit()
+    {
+        if (Selected == null)
+            return;
+
+        isEditing = true;
+        form = new LlmConnection(Selected);
+        formName = Selected.Name;
+        originalName = Selected.Name;
+        formError = null;
+        showForm = true;
+    }
+
+    private async Task SaveFormAsync()
+    {
+        var name = formName?.Trim();
+
+        if (string.IsNullOrEmpty(name))
+        {
+            formError = "Name is required.";
+            return;
+        }
+
+        if ((!isEditing || name != originalName) && connections.ContainsKey(name))
+        {
+            formError = "A model with that name already exists.";
+            return;
+        }
+
+        if (isEditing && originalName != null && name != originalName)
+            connections.Remove(originalName);
+
+        form.Name = name;
+        connections[name] = form;
+        selectedKey = name;
+        showForm = false;
+        formError = null;
+
+        await Store.SaveAsync(connections);
+
+        ShowSelectedInForm();
+
+        await NotifySelectedAsync();
+    }
+
+    private void CancelForm()
+    {
+        formError = null;
+
+        //Nothing to close any more — the form is always the selected model — so this puts back what is
+        //saved and throws away the edits on screen.
+        ShowSelectedInForm();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (Selected == null)
+            return;
+
+        connections.Remove(selectedKey);
+        selectedKey = connections.Keys.FirstOrDefault();
+
+        ShowSelectedInForm();
+
+        await Store.SaveAsync(connections);
+        await NotifySelectedAsync();
+    }
+}

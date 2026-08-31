@@ -61,6 +61,9 @@ public class EmbedSettingsTests
     [InlineData("rdf", "Sparql")]
     [InlineData("gremlin", "ApacheTinkerPop")]
     [InlineData("apachetinkerpop", "ApacheTinkerPop")]
+    [InlineData("neo4j", "Neo4j")]
+    [InlineData("memgraph", "Neo4j")]
+    [InlineData("cypher", "Neo4j")]
     public void NormalizeDbType_MapsAliases(string input, string expected)
     {
         Assert.Equal(expected, EmbedSettings.NormalizeDbType(input));
@@ -125,6 +128,29 @@ public class EmbedSettingsTests
         Assert.Equal("Sparql", conn.DatabaseType);
         Assert.Equal("https://query.wikidata.org/sparql", conn.Endpoint);
         Assert.True(s.HasConnection);
+    }
+
+    [Theory]
+    [InlineData("?host=db.example.com&viaServer=false", false)]
+    [InlineData("?host=db.example.com&viaServer=true", true)]
+    [InlineData("?host=db.example.com&proxy=off", false)]
+    [InlineData("?host=db.example.com&PROXY=0", false)]
+    public void BuildConnection_ViaServerFollowsTheUrl(string query, bool expected)
+    {
+        var conn = EmbedSettings.Parse(query).BuildConnection();
+
+        Assert.Equal(expected, conn.ViaServer);
+    }
+
+    [Fact]
+    public void BuildConnection_ViaServerOmitted_KeepsTheAppDefault()
+    {
+        var s = EmbedSettings.Parse("?host=db.example.com");
+
+        //Nothing said, nothing pinned: the embed tracks whatever the app defaults to rather than
+        //freezing the value that happened to be current when the embed URL was written.
+        Assert.Null(s.ViaServer);
+        Assert.Equal(new GremlinDB.GremlinConnection().ViaServer, s.BuildConnection().ViaServer);
     }
 
     [Fact]

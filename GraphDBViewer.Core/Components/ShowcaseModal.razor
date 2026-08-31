@@ -1,0 +1,39 @@
+﻿@* A full-screen overlay showing the deployment's own showcase page in an iframe — for the public
+   web-only build, the landing page it bundles at wwwroot/showcase. A deployment that has none leaves
+   ViewerHostOptions.ShowcaseUrl null, and then this never renders and the buttons that open it are
+   never offered. Opened from the settings menu and from the About dialog. *@
+
+@inject NavigationManager Nav
+@inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+
+@if (Visible && !string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
+{
+    <div style="position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; background: var(--bs-body-bg);">
+        <div class="d-flex align-items-center justify-content-between px-3 py-2 border-bottom" style="flex-shrink: 0;">
+            <span class="fw-bold d-inline-flex align-items-center gap-2">✨ @HostOptions.AppName: feature showcase</span>
+            <button type="button" class="btn-close" @onclick="OnClose" title="Close the showcase"></button>
+        </div>
+        <iframe src="@ShowcaseSrc" title="@($"{HostOptions.AppName} feature showcase")" style="flex: 1 1 auto; width: 100%; height: 100%; border: 0;"></iframe>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    ///<summary>
+    ///An absolute URL is used as given. A relative one resolves against the app base URI rather than
+    ///being handed to the iframe bare: the base URI always ends in '/', while a base href on a sub-path
+    ///deployment may not, and that missing slash drops the last segment and points at the wrong folder.
+    ///</summary>
+    private string ShowcaseSrc
+    {
+        get
+        {
+            if (Uri.IsWellFormedUriString(HostOptions.ShowcaseUrl, UriKind.Absolute))
+                return HostOptions.ShowcaseUrl;
+            else
+                return $"{Nav.BaseUri}{HostOptions.ShowcaseUrl.TrimStart('/')}";
+        }
+    }
+}

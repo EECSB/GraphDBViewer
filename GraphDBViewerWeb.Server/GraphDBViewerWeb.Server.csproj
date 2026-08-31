@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--The optional backend edition. The viewer works with no server at all — that is the whole point of
+      GraphDBViewerWeb — so this host exists for the one thing a browser cannot do: reach a database it is
+      not allowed or able to dial. An endpoint that sends no CORS headers, a plain-http endpoint on an
+      https page, a host only the server can route to, or Bolt, which needs a raw TCP socket.
+
+      It is deliberately only that. No accounts, no database, no server-side storage: it serves the same
+      WebAssembly app the static build serves, and adds one endpoint that runs a query on its behalf. The
+      full-stack platform with accounts and saved workspaces is Treeality, a separate product.-->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--Serves the client's _framework files and static assets from this host.-->
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.11" />
+
+    <!--The official Bolt driver. It is here and not in the core because it opens raw TCP sockets, which
+        WebAssembly cannot; the browser route uses the vendored JavaScript driver instead.-->
+    <PackageReference Include="Neo4j.Driver" Version="5.28.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--The app itself. Referencing it puts its published output under this host's wwwroot, and brings
+        GraphDBViewer.Core along with it — which is where IGraphDb, the engines and the wire contracts
+        this host shares with the browser live.-->
+    <ProjectReference Include="..\GraphDBViewerWeb\GraphDBViewerWeb.csproj" />
+  </ItemGroup>
+
+</Project>

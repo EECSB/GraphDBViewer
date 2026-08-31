@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <h1 align="center">
   <img src="GraphDBViewerWeb/wwwroot/favicon.svg" alt="Graph DB Viewer logo" height="52" align="absmiddle" style="vertical-align: middle;" />
@@ -7,15 +7,22 @@
 
 ### Query, visualize and edit your graph database — right in the browser.
 
-**A zero-backend, single-file Blazor WebAssembly app** for exploring Gremlin, openCypher and SPARQL graphs.
-Connect straight from the browser, run queries, and see your data as an interactive **2D** or **3D** graph, a **table**, or raw **JSON** — then edit it and commit the changes back.
+**A Blazor WebAssembly app** for exploring Gremlin, Cypher, AQL, DQL, GUN and SPARQL graphs. Run it as
+**static files with no backend at all**, or behind a **small optional server** that reaches the databases
+a browser cannot (one that sends no CORS headers, one on a private network, or Neo4j over Bolt).
+Connect, run queries, and see your data as an interactive **2D** or **3D** graph, a **table**, or raw
+**JSON** — then edit it and commit the changes back.
 
-<sub>Blazor WebAssembly · .NET 10 · Cytoscape.js · 3d-force-graph / three.js · Monaco Editor · no server tier</sub>
+<sub>Blazor WebAssembly · .NET 10 · Cytoscape.js · 3d-force-graph / three.js · Monaco Editor · runs with or without a server</sub>
 
 <p>
   <a href="https://eecs.blog/BlazorApps/GraphDBViewer/"><b>▶ Try it live</b></a>
   &nbsp;·&nbsp;
   <a href="#running-locally">Run it locally</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/EECSB/GraphDBViewerWeb/actions/workflows/ci.yml"><img src="https://github.com/EECSB/GraphDBViewerWeb/actions/workflows/ci.yml/badge.svg" alt="CI" style="vertical-align: middle;" /></a>
+  &nbsp;
+  <a href="https://hub.docker.com/r/eecsb/graphdbviewer-server"><img src="https://img.shields.io/docker/v/eecsb/graphdbviewer-server?label=docker&sort=semver" alt="Docker image version" style="vertical-align: middle;" /></a>
 </p>
 
 </div>
@@ -52,6 +59,7 @@ Graph DB Viewer began as part of another project of mine. While exploring graph 
 - [Running locally](#running-locally)
   - [Optional: a local Gremlin database to play with](#optional-a-local-gremlin-database-to-play-with)
 - [Deploying](#deploying)
+  - [The server edition (Docker)](#the-server-edition-docker)
 - [Embedding in another page](#embedding-in-another-page)
 - [How it works](#how-it-works)
 - [Project layout](#project-layout)
@@ -63,7 +71,15 @@ Graph DB Viewer began as part of another project of mine. While exploring graph 
 
 ## What it is
 
-Graph DB Viewer is a **client-only** graph tool. There is **no server, no login, and no install** — the whole app is static files that run in your browser and talk to your database directly. Everything you save (connections, queries, history, theme, open tabs) lives in your browser's `localStorage`.
+Graph DB Viewer runs **in your browser**. There is **no login and no install** — the app is static files
+that talk to your database directly, and everything you save (connections, queries, history, theme, open
+tabs) stays on your machine, in the browser's IndexedDB.
+
+Some databases a browser simply cannot reach, however it is written: one that sends no CORS headers, one
+on a private network, one on plain `http` behind an `https` page, or Neo4j and Memgraph over Bolt, which
+rides a raw TCP socket. For those there is an **optional server edition** — the same app, with a small
+host that makes the connection on its behalf, shipped as a container. It adds no accounts and no
+server-side storage, and one build serves both ways. See [the server edition](#the-server-edition-docker).
 
 It's designed for developers who want a fast, private, self-hostable alternative to heavier graph desktop tools: paste a query, get a picture, poke at the data, and move on.
 
@@ -71,12 +87,15 @@ It's designed for developers who want a fast, private, self-hostable alternative
 
 | | |
 |---|---|
-| 🔌 **Browser-direct connections** | Talk to TinkerPop / Cosmos DB (Gremlin) over WebSocket **or** HTTP, and to SPARQL/RDF endpoints — no proxy in between. |
+| 🔌 **Six engines, browser-direct** | Gremlin (TinkerPop, Cosmos DB), Cypher (Neo4j, Memgraph), AQL (ArangoDB), DQL (Dgraph), GUN and SPARQL/RDF — straight from the browser, no proxy in between. |
+| 🐳 **Optional server edition** | One container for the databases a browser cannot reach: no CORS headers, a private network, or Bolt. Same app, still no accounts and no server-side storage. |
 | 🎨 **Four view modes** | The same result as **JSON**, an interactive **2D** graph, a **3D** graph, or a sortable **Table**. |
 | 🧭 **Multiple layouts** | 6 layouts in 2D (force, tree, concentric, circle, grid, random) and 6 in 3D (force + five DAG modes). |
 | 🐞 **gdotV-style query debugger** | Step through a traversal and watch the traverser count after every step — see exactly where results vanish. |
 | ✏️ **Full editing** | Add / edit / delete vertices, edges and properties. Changes are staged and committed explicitly. |
 | 🧠 **Schema-aware autocomplete** | Monaco editor with real vertex labels, edge labels and property keys pulled from your live database. |
+| ✨ **Ask in English** | Describe what you want and a model writes the query, against your live schema — bring your own key (Anthropic, OpenAI, Gemini or any OpenAI-compatible endpoint). |
+| ✨ **Text to knowledge graph** | Paste text, a document or a Wikipedia article and get a graph out, previewed and merged before anything is committed. |
 | 📥 **Import** | Paste GraphSON, **Graphviz DOT** or **Mermaid** and visualize it offline — or turn it into `addV`/`addE`. |
 | 📤 **Export** | Table → CSV / colored Excel; graph → PNG / JPEG / SVG; 3D scene → OBJ / PLY / STL / glTF. |
 | 🌙 **Dark mode + PWA** | Persisted dark theme, keyboard shortcuts, and installable/offline via a service worker. |
@@ -92,7 +111,7 @@ It's designed for developers who want a fast, private, self-hostable alternative
 - **SPARQL / RDF endpoints** — Fuseki, Blazegraph, GraphDB, Virtuoso, and public endpoints like **Wikidata** and **DBpedia**. `SELECT` → results table, `ASK` → boolean, `CONSTRUCT`/`DESCRIBE` → a graph.
 - **Database-type selector** on the connection form, with a **CORS/reachability warning** and a **supported-databases table** right in the UI.
 - **SSL toggle** (`ws`↔`wss`, `http`↔`https`), auto-derived from the port and type, with a live protocol badge and a reminder to switch SSL off for a database without a secure endpoint (and that you may need to enable CORS or put a proxy in front).
-- **Saved connections** — full add / edit / delete with duplicate-name validation, persisted to `localStorage`.
+- **Saved connections** — full add / edit / delete with duplicate-name validation, persisted to the browser's IndexedDB.
 - **Connection status** indicator in the top bar, a connectivity test on connect, and a graceful close on disconnect.
 
 ### 📝 Write & run queries
@@ -104,8 +123,8 @@ It's designed for developers who want a fast, private, self-hostable alternative
 - **Load DB** — pull the whole graph (vertices **and** edges, including isolated/edgeless vertices) with a configurable vertex limit.
 - **Saved queries** — CRUD, stored locally, one click to reload.
 - **Query history** — the last 20 executed queries, de-duplicated (re-running one moves it to the top), click to restore.
-- **Examples tab** — curated queries grouped into **Inspect**, **Visualize** and **Mutate**, plus one-click **sample graphs** (a table-assembly tree, a social network, and flight routes) that load additively so you always have something to look at.
-- **✨ Ask AI** — describe what you want in plain English and a **bring-your-own-key** AI model (Anthropic / OpenAI / Gemini / any OpenAI-compatible server) writes the Gremlin / openCypher / SPARQL query into the editor for review — grounded in the connected schema, never auto-run. Tool-capable models can double-check themselves with read-only queries first.
+- **Examples tab** — curated queries grouped into **Inspect**, **Visualize** and **Mutate**, plus one-click **sample graphs** (a table-assembly tree, a social network, flight routes, and 3D objects) that load additively so you always have something to look at.
+- **✨ Ask AI** — describe what you want in plain English and a **bring-your-own-key** AI model (Anthropic / OpenAI / Gemini / any OpenAI-compatible server) writes the Gremlin / openCypher / SPARQL query into the editor for review — grounded in the connected schema. It is a running conversation, not one shot. Tool-capable models can run queries against the live graph to check themselves, under a per-panel setting: **ask each time** (the default), **auto-run reads**, or **auto-run reads and writes**. A write is always something the model proposes — below the top setting it waits for you, on a card that also offers to hand the query to the editor instead.
 - **Cancellable** — connect, Run Query, Load DB, Schema fetch and Commit all run under a cancellation token with a Cancel button.
 
 ### 🎨 Visualize four ways
@@ -154,7 +173,7 @@ A **gdotV-style step-through debugger** for Gremlin:
 **Import / paste**
 - Paste **GraphSON** (from the app's own *Copy graph*), **Graphviz DOT**, or **Mermaid** flowcharts and **visualize them offline** — no connection needed.
 - DOT / Mermaid also **generate `addV` / `addE`** into the query editor, ready to import into a real database.
-- **✨ Generate with AI** — paste text, load a file (`.docx`, `.xlsx`, `.csv`, `.txt`/`.md` or any text-based format), or **fetch a Wikipedia article**, and an AI model extracts a knowledge graph from it: strict-JSON output, validated and entity-de-duplicated client-side, previewed with counts and warnings, then staged as `addV` / `addE` — **merging into or replacing** the current drawing, your choice, with nothing committed until you say so.
+- **✨ Generate with AI** — paste text, load a file (**PDF**, `.docx`, `.xlsx`, `.csv`, `.txt`/`.md` or any text-based format), or **fetch a Wikipedia article**, and an AI model extracts a knowledge graph from it: strict-JSON output, validated and entity-de-duplicated client-side, previewed with counts and warnings, then staged as `addV` / `addE` — **merging into or replacing** the current drawing, your choice, with nothing committed until you say so.
 - **Cloud file picker** *(currently hidden)* — the **Dropbox / OneDrive / Google Drive** file-picker button is temporarily disabled; the provider interop still ships in the codebase.
 
 **Export**
@@ -174,15 +193,28 @@ A **gdotV-style step-through debugger** for Gremlin:
 
 ## Supported databases
 
-| Database | Protocol | Status |
-|---|---|---|
-| Apache TinkerPop / TinkerGraph | Gremlin over WebSocket or HTTP | ✅ Supported |
-| Azure Cosmos DB (Gremlin API) | Gremlin over WebSocket/HTTP + HMAC-SHA256 | ✅ Supported |
-| Apache Jena Fuseki, Blazegraph, GraphDB, Virtuoso | SPARQL 1.1 over HTTP | ✅ Supported |
-| Public SPARQL (Wikidata, DBpedia) | SPARQL over HTTPS | ✅ Supported |
-| Neo4j / Memgraph, ArangoDB, Dgraph, Neptune, … | — | 🔭 On the roadmap |
+| Database | Query language | Protocol | Route |
+|---|---|---|---|
+| Apache TinkerPop / TinkerGraph | Gremlin | WebSocket or HTTP | Browser or server |
+| Azure Cosmos DB (Gremlin API) | Gremlin | WebSocket / HTTP + HMAC-SHA256 | Browser or server |
+| Neo4j / Memgraph | Cypher | Bolt | Browser (vendored JS driver) or server (.NET driver) |
+| ArangoDB | AQL | HTTP cursor API | Browser or server |
+| Dgraph | DQL | HTTP | Browser or server |
+| GUN | — (form-based) | peer-to-peer | Browser only — the page *is* a peer |
+| Fuseki, Blazegraph, GraphDB, Virtuoso | SPARQL 1.1 | HTTP | Browser or server |
+| Public SPARQL (Wikidata, DBpedia) | SPARQL | HTTPS | Browser or server |
 
-> Because connections are made **directly from the browser**, the target endpoint must be reachable from your machine **and** must either allow CORS (HTTP/SPARQL) or accept a WebSocket from your origin. The app shows a reachability warning to remind you.
+Not every engine can do everything, and where one cannot it is a reason rather than an unfinished job:
+GUN cannot enumerate itself, so it has no browse; SPARQL has no query builder, so every
+compose-a-query-for-you feature is off for it.
+
+**Amazon Neptune** stays out of scope: it needs VPC access plus SigV4 request signing, which is more than
+a proxy.
+
+> **Reachability.** On the Browser route the endpoint must be reachable from your machine *and* either
+> allow CORS (HTTP/SPARQL) or accept a WebSocket from your origin; the app shows a warning to remind you.
+> The [server edition](#the-server-edition-docker) lifts that — it dials from the host instead, which is
+> the whole reason it exists.
 
 ---
 
@@ -222,6 +254,13 @@ No Docker handy? Pick the **SPARQL / RDF** database type and the public **Wikida
 
 It's a **static Blazor WebAssembly** app, so it deploys anywhere that serves static files — GitHub Pages, Azure Static Web Apps, Netlify, S3, Nginx, etc.
 
+Every tagged release attaches a ready-made **zip of the built app** — download it from
+[Releases](https://github.com/EECSB/GraphDBViewerWeb/releases), unpack it into your web root, and that is
+the deployment. It unpacks as the site root, so `index.html` lands where you point the host. Every CI run
+attaches the same zip as a build artifact if you want the tip rather than a release.
+
+To build it yourself:
+
 ```bash
 cd GraphDBViewerWeb
 dotnet publish -c Release
@@ -229,6 +268,56 @@ dotnet publish -c Release
 ```
 
 Serve the contents of `publish/wwwroot`. To host the **presentation page** on GitHub Pages, point Pages at the repo's `docs/` folder — [`docs/index.html`](docs/index.html) is self-contained.
+
+### The server edition (Docker)
+
+[![Docker image version](https://img.shields.io/docker/v/eecsb/graphdbviewer-server?label=docker&sort=semver)](https://hub.docker.com/r/eecsb/graphdbviewer-server)
+
+**Why there is a server version at all.** The viewer talks to your database straight from the browser,
+and for most databases that is the whole story — it is why this app needs no backend. But there are four
+things a browser will not do, and no amount of client-side code changes them:
+
+| | |
+|---|---|
+| **No CORS headers** | A browser discards a cross-origin response the database did not explicitly permit. Most database servers send no such headers, and plenty cannot be configured to. |
+| **Mixed content** | A page served over `https` may not open a plain-`http` connection. A database without TLS is unreachable from any hosted page. |
+| **Private addresses** | A database on `10.x`, or behind a VPN, is reachable from your server and not from a visitor's browser. |
+| **Bolt** | Neo4j and Memgraph speak a protocol that rides a raw TCP socket. No browser will open one. |
+
+So the server edition is a small ASP.NET Core host that serves the very same app and adds one endpoint,
+which runs the query on the server's behalf. Connections then carry a **Server / Browser** choice, per
+connection — you pick the route only where you need it.
+
+It is still not a backend in the usual sense. **No accounts, no database, no server-side storage:** your
+connections, queries and workspace stay in your browser exactly as they do without it.
+
+```bash
+docker run --rm -p 8080:8080 eecsb/graphdbviewer-server
+```
+
+Then open <http://localhost:8080>. Or with Compose:
+
+```yaml
+services:
+  graphdbviewer:
+    image: eecsb/graphdbviewer-server
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+```
+
+Images are published for **amd64 and arm64**, so a Raspberry Pi or an Apple-silicon Mac runs the same tag.
+
+**One build serves both editions.** The app asks its host on startup whether it proxies connections, so
+the identical output works either way — put it on a static host and the Server option simply never
+appears. Nothing to configure, and no separate download.
+
+> [!WARNING]
+> **Keep it on a network you trust.** The proxy endpoint takes no authentication and will dial whatever
+> it is asked to — that is the point of a developer tool, and it means anything able to reach the
+> container can make it open connections on its behalf, including to addresses only it can route to. On
+> the Server route a connection's credentials travel to the host rather than staying in your browser.
+> Put TLS and access control in front of it before it goes anywhere public.
 
 ## Embedding in another page
 
@@ -274,12 +363,16 @@ The viewer connects **directly from the browser**, so the [same reachability/COR
 
 ## How it works
 
-- **Blazor WebAssembly**, client-only — there is no server tier and no `Gremlin.Net` dependency; it uses `System.Net.Http` + `System.Text.Json` so it runs in WASM.
+- **Blazor WebAssembly** — no `Gremlin.Net` dependency; the drivers are built on `System.Net.Http` and
+  `System.Text.Json` so they run in WASM. The optional server edition reuses those same drivers on the
+  host, which is why the viewer cannot tell the two routes apart.
 - **Transports:** raw WebSocket with GraphSON 3 framing, and HTTP REST (with Cosmos DB HMAC-SHA256 auth).
-- **Persistence:** `Blazored.LocalStorage` for connections, saved queries, history, last query, open tabs and theme.
-- **Rendering:** Cytoscape.js (2D) and 3d-force-graph / three.js (3D), driven through thin JS interop layers. The Monaco editor is vendored under `wwwroot/lib/monaco` (no CDN, no bundler).
+- **Persistence:** IndexedDB (far more room than localStorage, compressed, with a one-time migration of
+  anything already saved) for connections, saved queries, history, last query, open tabs and theme.
+- **Rendering:** Cytoscape.js (2D) and 3d-force-graph / three.js (3D), driven through thin JS interop layers. The Monaco editor is vendored in the `GraphDBViewer.Core` class library and served at
+  `_content/GraphDBViewer.Core/lib/monaco` (no CDN, no bundler).
 
-Key source files:
+Key source files — all of them in the `GraphDBViewer.Core` class library:
 
 | File | Responsibility |
 |---|---|
@@ -297,11 +390,20 @@ Key source files:
 ## Project layout
 
 ```
-GraphDBViewerWeb/            # the Blazor WebAssembly app
-  Code/                      # C# core, grouped into Gremlin/ · Sparql/ · Graph/ · Utils/
+GraphDBViewer.Core/          # the viewer, as a Razor class library — this is where the app lives
+  Code/                      # C# core: Db/ (a folder per engine) · Graph/ · Llm/ · Models/
+                             #          Storage/ · Utils/ · Interop/
   Components/                # Razor UI components (TopBar, TableView, MonacoEditor, …)
-  Pages/Home/Home.razor(.cs)      # main page
-  wwwroot/                   # index.html, JS interop, vendored libs (Cytoscape, three, Monaco)
+  Layout/ · Pages/Home/      # the layout, and the single page
+  wwwroot/                   # JS interop, styles, icons, vendored libs (Cytoscape, three, Monaco)
+                             # served to the host at _content/GraphDBViewer.Core/
+GraphDBViewerWeb/            # the Blazor WebAssembly host — a composition root, and little else
+  Program.cs                 # service registration, and what this edition tells the viewer it is
+  App.razor                  # the router
+  wwwroot/index.html         # the page shell, favicon, PWA manifest + service workers, showcase/
+GraphDBViewerWeb.Server/     # the optional backend edition: serves the app + the query proxy
+  Api/ · Db/                 # the proxy endpoint, its connection pool, the host-side Bolt driver
+Dockerfile                   # builds that host into a container
 GraphDBViewerWeb.Tests/      # xUnit tests for the pure C# logic + bUnit markup tests
 docs/index.html             # this project's presentation / landing page
 README.md
@@ -333,9 +435,18 @@ The double-click-expansion spec is the one test that needs a live, seeded Gremli
 
 ## Privacy & limitations
 
-- **Everything stays local.** Queries go straight from your browser to your database; connection details and history are stored only in your browser's `localStorage`.
-- Auth keys are stored in `localStorage` in plain text — appropriate for a single-user local/developer tool, but don't use it on a shared machine with production credentials.
-- Some databases require a backend proxy to reach from a browser (e.g. Amazon Neptune's VPC + SigV4). Those are out of scope for this client-only tool.
+- **Everything stays local.** Queries go straight from your browser to your database; connection details
+  and history are stored only in your browser, in IndexedDB. Nothing is sent anywhere else.
+- Auth keys are stored **in plain text** — appropriate for a single-user local/developer tool, but do not
+  use it on a shared machine with production credentials.
+- **On the Server route, that changes.** A connection proxied through the server edition sends its
+  credentials to that host, and the host opens the connection instead of your browser. That is the trade the
+  route exists to make. It is the default in that edition, and switchable per connection: set a
+  connection to Browser and it behaves exactly as it does without a host.
+- Some databases cannot be reached from a browser at all — no CORS headers, a private network, plain
+  `http` under `https`, or Bolt. The [server edition](#the-server-edition-docker) is the answer to those.
+  A few need more than a proxy (Amazon Neptune wants VPC access plus SigV4 signing) and remain out of
+  scope.
 
 ## License
 

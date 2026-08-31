@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const geo = require('../GraphDBViewerWeb/wwwroot/js/graphGeometry.js');
+const geo = require('../GraphDBViewer.Core/wwwroot/js/graphGeometry.js');
 
 test('normalizeModelUrl rewrites OneDrive share links to the content endpoint', () => {
     const out = geo.normalizeModelUrl('https://1drv.ms/u/c/abc/def');

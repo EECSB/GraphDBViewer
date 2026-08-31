@@ -1,0 +1,18 @@
+# Keep the build context small and the image reproducible: everything below is either rebuilt inside
+# the container, irrelevant to it, or must not travel into an image at all.
+**/bin/
+**/obj/
+node_modules/
+test-results/
+publish-test/
+.git/
+.github/
+.claude/
+.vs/
+.env
+*.ps1
+*.md
+!README.md
+
+# Real API keys and database credentials. Never in an image.
+dev-secrets.json

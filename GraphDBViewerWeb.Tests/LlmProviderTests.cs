@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Text.Json;
 using GraphDBViewerWeb.Code;
 
@@ -291,5 +291,55 @@ public class LlmProviderTests
         Assert.Equal("run_read_query", tool0.GetProperty("name").GetString());
         Assert.Equal("object", tool0.GetProperty("input_schema").GetProperty("type").GetString());
         Assert.Equal("string", tool0.GetProperty("input_schema").GetProperty("properties").GetProperty("query").GetProperty("type").GetString());
+    }
+
+    //Effort is only meaningful to OpenAI reasoning models, so the body carries it only when a caller
+    //asked for one. A chat model rejects reasoning_effort rather than ignoring it.
+    [Fact]
+    public void OpenAiBody_CarriesTheEffortWhenOneIsChosen()
+    {
+        var body = OpenAiProvider.BuildRequestBody("o3", "sys", "user", null, "high");
+
+        Assert.Contains("\"reasoning_effort\":\"high\"", body);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void OpenAiBody_SaysNothingAboutEffortWhenNoneIsChosen(string effort)
+    {
+        var body = OpenAiProvider.BuildRequestBody("gpt-4o", "sys", "user", null, effort);
+
+        Assert.DoesNotContain("reasoning_effort", body);
+    }
+
+    //The tool loop is where a reasoning model earns the setting, so it must carry it too.
+    [Fact]
+    public void OpenAiToolBody_CarriesTheEffortToo()
+    {
+        var body = OpenAiProvider.BuildRequestBodyWithTools("o3", new List<object>(), new List<object>(), null, "low");
+
+        Assert.Contains("\"reasoning_effort\":\"low\"", body);
+    }
+
+    [Theory]
+    [InlineData("OpenAI", "o3", true)]
+    [InlineData("OpenAI", "gpt-5-mini", true)]
+    [InlineData("OpenAI", "gpt-4o", false)]
+    [InlineData("OpenAI", "", false)]
+    [InlineData("Anthropic", "o3", false)]
+    [InlineData("Gemini", "o3", false)]
+    //Google's compatibility layer takes the same field, on the models that think: 2.5 and up.
+    [InlineData("Gemini", "gemini-2.5-flash", true)]
+    [InlineData("Gemini", "gemini-2.5-pro", true)]
+    [InlineData("Gemini", "gemini-3-pro-preview", true)]
+    [InlineData("Gemini", "gemini-1.5-pro", false)]
+    [InlineData("Gemini", "gemini-2.0-flash", false)]
+    [InlineData("Custom", "gemini-2.5-flash", false)]
+    public void EffortIsOfferedOnlyWhereItIsUnderstood(string provider, string model, bool expected)
+    {
+        var connection = new LlmConnection { ProviderType = provider, Model = model };
+
+        Assert.Equal(expected, LlmConnection.SupportsEffort(connection));
     }
 }

@@ -1,0 +1,97 @@
+﻿@inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+
+@if (Visible)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);" @onmousedown="() => backdropMouseDown = true" @onclick="CloseIfBackdropAsync">
+        <div class="modal-dialog modal-lg" style="margin-top: 5rem;" @onmousedown="() => backdropMouseDown = false" @onmousedown:stopPropagation="true" @onclick:stopPropagation="true">
+            <div class="modal-content">
+
+                <div class="modal-header">
+                    <h5 class="modal-title">About</h5>
+                    <button type="button" class="btn-close" @onclick="OnClose"></button>
+                </div>
+
+                <div class="modal-body">
+                    @* One description for both editions, with the difference between them stated rather than
+                       implied, and the one you are running marked. HasServerRoute is what tells them apart:
+                       it is true only in a build that has a backend to route through. *@
+                    <p class="mb-2">
+                        <strong>@HostOptions.AppName</strong> is a web app to visualize, edit and interact with graph
+                        databases. It speaks <strong>Gremlin</strong> (Apache TinkerPop, Azure Cosmos DB),
+                        <strong>Cypher</strong> (Neo4j, Memgraph), <strong>SPARQL</strong>, <strong>AQL</strong>
+                        (ArangoDB), <strong>DQL</strong> (Dgraph) and <strong>GUN</strong>.
+                    </p>
+                    <p class="mb-2">
+                        It runs as WebAssembly in your browser. Connections and queries are saved locally and kept in a
+                        history; results can be read as JSON or explored in interactive 2D and 3D editors where nodes and
+                        edges can be navigated and edited, and graphs imported and exported. An AI model of your choosing
+                        can answer questions about the connected graph, write queries for it, and build one out of plain
+                        text. You supply the key, and it is stored in your browser.
+                    </p>
+
+                    <p class="mb-1"><strong>Two editions</strong></p>
+                    <ul class="mb-3 ps-4">
+                        <li class="mb-1">
+                            <strong>Web edition</strong>@(HostOptions.HasServerRoute ? "." : " (what you are running).")
+                            Everything happens in the browser. It reaches any database the browser itself can reach:
+                            one that returns CORS headers, or speaks WebSocket or Bolt-over-WebSocket. Nothing is
+                            installed and nothing is hosted.
+                        </li>
+                        <li>
+                            <strong>Server edition</strong>@(HostOptions.HasServerRoute ? " (what you are running)." : ".")
+                            The same app with a backend behind it, containerized in Docker. Connections can be made from
+                            the host instead of the browser, which reaches the databases the browser cannot: endpoints
+                            that send no CORS headers, raw-socket protocols, and anything on a private network. The
+                            choice is made per connection, with the <em>Make requests from</em> switch.
+                        </li>
+                    </ul>
+
+                    @if (!string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
+                    {
+                        <button type="button" class="btn btn-outline-primary btn-sm mb-3" @onclick="OnOpenShowcase">✨ Open the feature showcase</button>
+                    }
+
+                    <div class="d-flex flex-column gap-2">
+                        <a href="https://eecs.blog/decent-apps/#title6" target="_blank" rel="noopener noreferrer" class="d-inline-flex align-items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="me-2" style="flex-shrink: 0;">
+                                <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m7.5-6.923c-.67.204-1.335.82-1.887 1.855A8 8 0 0 0 5.145 4H7.5zM4.09 4a9.3 9.3 0 0 1 .64-1.539 7 7 0 0 1 .597-.933A7.03 7.03 0 0 0 2.255 4zm-.582 3.5c.03-.877.138-1.718.312-2.5H1.674a7 7 0 0 0-.656 2.5zM4.847 5a12.5 12.5 0 0 0-.338 2.5H7.5V5zM8.5 5v2.5h2.99a12.5 12.5 0 0 0-.337-2.5zM4.51 8.5a12.5 12.5 0 0 0 .337 2.5H7.5V8.5zm3.99 0V11h2.653c.187-.765.306-1.608.338-2.5zM5.145 12q.208.58.468 1.068c.552 1.035 1.218 1.65 1.887 1.855V12zm.182 2.472a7 7 0 0 1-.597-.933A9.3 9.3 0 0 1 4.09 12H2.255a7 7 0 0 0 3.072 2.472M3.82 11a13.7 13.7 0 0 1-.312-2.5h-2.49c.062.89.291 1.733.656 2.5zm6.853 3.472A7 7 0 0 0 13.745 12H11.91a9.3 9.3 0 0 1-.64 1.539 7 7 0 0 1-.597.933M8.5 12v2.923c.67-.204 1.335-.82 1.887-1.855q.26-.487.468-1.068zm3.68-1h2.146c.365-.767.594-1.61.656-2.5h-2.49a13.7 13.7 0 0 1-.312 2.5m2.802-3.5a7 7 0 0 0-.656-2.5H12.18c.174.782.282 1.623.312 2.5zM11.27 2.461c.247.464.462.98.64 1.539h1.835a7 7 0 0 0-3.072-2.472c.218.284.418.598.597.933M10.855 4a8 8 0 0 0-.468-1.068C9.835 1.897 9.17 1.282 8.5 1.077V4z"/>
+                            </svg>
+                            Read about it on the blog
+                        </a>
+                        @if (!string.IsNullOrEmpty(HostOptions.ServerEditionUrl))
+                        {
+                            <a href="@HostOptions.ServerEditionUrl" target="_blank" rel="noopener noreferrer" class="d-inline-flex align-items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="me-2" style="flex-shrink: 0;">
+                                    <path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5 8 5.961 14.154 3.5zM15 4.239l-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.838L1 4.239v7.923zM7.443.184a1.5 1.5 0 0 1 1.114 0l7.129 2.852A.5.5 0 0 1 16 3.5v8.662a1 1 0 0 1-.629.928l-7.185 2.874a.5.5 0 0 1-.372 0L.63 13.09a1 1 0 0 1-.63-.928V3.5a.5.5 0 0 1 .314-.464z"/>
+                                </svg>
+                                Get the server edition
+                            </a>
+                        }
+                        <a href="https://github.com/EECSB/GraphDBViewerWeb" target="_blank" rel="noopener noreferrer" class="d-inline-flex align-items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" class="me-2" style="flex-shrink: 0;">
+                                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8"/>
+                            </svg>
+                            GitHub repo
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnOpenShowcase { get; set; }
+
+    //Tracks where the mouse was pressed: a text-selection drag that starts inside the dialog and
+    //releases on the backdrop must not close the modal — only a press that begins on the backdrop does.
+    private bool backdropMouseDown;
+
+    private async Task CloseIfBackdropAsync()
+    {
+        if (backdropMouseDown)
+            await OnClose.InvokeAsync();
+    }
+}

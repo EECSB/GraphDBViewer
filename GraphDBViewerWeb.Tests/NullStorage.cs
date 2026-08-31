@@ -8,6 +8,8 @@ namespace GraphDBViewerWeb.Tests;
 ///</summary>
 internal sealed class NullStorage : IAppStorage
 {
+    public event Action StorageQuotaExceeded { add { } remove { } }
+
     public Task<T> GetAsync<T>(string key)
     {
         return Task.FromResult<T>(default);

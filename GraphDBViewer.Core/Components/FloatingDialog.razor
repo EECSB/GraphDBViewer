@@ -1,0 +1,92 @@
+﻿@inject IJSRuntime JS
+
+@* The shell the AI popups sit in: a window rather than a modal. It does not dim the page, does not trap
+   the pointer, and can be dragged by its header and resized from its corner, so a query can be edited
+   and run with the assistant still open beside it.
+
+   It is hidden with CSS instead of being removed, which is the whole reason a conversation survives
+   closing the dialog: the content keeps its component state because it is never unmounted. *@
+
+<div class="gdbv-dialog card shadow-lg @(Visible ? "" : "d-none")" @ref="panel" style="width: @Width; height: @Height;">
+
+    <div class="card-header gdbv-dialog-header d-flex align-items-center gap-2" @ref="handle">
+        <span class="fw-semibold flex-grow-1">@Title</span>
+        @HeaderContent
+        <button type="button" class="btn-close" aria-label="Close" @onclick="OnClose"></button>
+    </div>
+
+    <div class="card-body d-flex flex-column overflow-auto">
+        @ChildContent
+    </div>
+
+    @if (FooterContent != null)
+    {
+        <div class="card-footer d-flex justify-content-end gap-2">
+            @FooterContent
+        </div>
+    }
+
+    @* Its own grip rather than the CSS one. A browser's native resizer is a few faint pixels with a hit
+       area to match, which is neither findable nor easy to hit; this is drawn at a size worth aiming at. *@
+    <div class="gdbv-dialog-resize" @ref="grip" title="Drag to resize">
+        <svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true">
+            <path d="M14 9.5v4a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1 0-1h2.793L9.146 9.854a.5.5 0 1 1 .708-.708L13 12.293V9.5a.5.5 0 0 1 1 0z" />
+            <path d="M2 6.5v-4a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 0 1H3.707l3.147 3.146a.5.5 0 1 1-.708.708L3 3.707V6.5a.5.5 0 0 1-1 0z" />
+        </svg>
+    </div>
+
+</div>
+
+@code {
+    ///<summary>Whether the window is on screen. False hides it; it is never torn down, so its content keeps its state.</summary>
+    [Parameter] public bool Visible { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    [Parameter] public string Title { get; set; }
+
+    ///<summary>Identifies the window to the geometry store, so each reopens where its own was left.</summary>
+    [Parameter] public string StorageKey { get; set; }
+
+    ///<summary>Opening size, used only until the window has been resized once.</summary>
+    [Parameter] public string Width { get; set; } = "min(980px, 94vw)";
+
+    [Parameter] public string Height { get; set; } = "min(780px, 90vh)";
+
+    ///<summary>Extra controls for the title bar, to the left of the close button.</summary>
+    [Parameter] public RenderFragment HeaderContent { get; set; }
+
+    [Parameter] public RenderFragment ChildContent { get; set; }
+
+    ///<summary>A button row along the bottom, or null for a window with none.</summary>
+    [Parameter] public RenderFragment FooterContent { get; set; }
+
+    private ElementReference panel;
+    private ElementReference handle;
+    private ElementReference grip;
+
+    //Whether the window was on screen at the last render, so placement runs when it appears and not
+    //on every render while it is open. It cannot run any earlier than that: measuring a d-none element
+    //gives a zero-sized box, and centering that would put the window in the corner.
+    private bool wasVisible;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Visible == wasVisible)
+            return;
+
+        wasVisible = Visible;
+
+        if (!Visible)
+            return;
+
+        //Attaching on each appearance rather than once is deliberate: it re-clamps a window whose saved
+        //position is off the edge of a screen smaller than the one it was saved on, and raises it above
+        //its peers so the one just opened is the one in front.
+        try
+        {
+            await JS.InvokeVoidAsync("floatingDialog.attach", panel, handle, grip, StorageKey);
+        }
+        catch { }
+    }
+}

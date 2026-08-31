@@ -1,0 +1,24 @@
+@* The AI models on their own, rather than only inside a feature that happens to use them. The same
+   list feeds Ask AI and knowledge-graph generation, so adding a key here is the once-per-browser step
+   both of them need. *@
+
+<FloatingDialog Visible="Visible"
+                OnClose="OnClose"
+                Title="AI settings"
+                StorageKey="ai-settings-2"
+                Width="min(820px, 92vw)"
+                Height="min(860px, 92vh)">
+
+    <LlmConnectionPicker />
+
+    <div class="form-text mt-3">
+        Keys are kept in this browser and sent only to the provider they belong to. Nothing is
+        stored on a server, so a model added here is added for this browser alone.
+    </div>
+
+</FloatingDialog>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}

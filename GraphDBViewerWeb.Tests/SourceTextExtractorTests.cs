@@ -71,16 +71,74 @@ public class SourceTextExtractorTests
         Assert.Contains("Acme, Robotics, 1999", text);
     }
 
+    //Builds a real PDF so the reader is tested against one, rather than against a fixture that agrees
+    //with whatever the reader happens to do.
+    private static MemoryStream PdfSaying(params string[] lines)
+    {
+        var builder = new UglyToad.PdfPig.Writer.PdfDocumentBuilder();
+        var font = builder.AddStandard14Font(UglyToad.PdfPig.Fonts.Standard14Fonts.Standard14Font.Helvetica);
+        var page = builder.AddPage(UglyToad.PdfPig.Content.PageSize.A4);
+
+        int y = 700;
+
+        foreach (var line in lines)
+        {
+            page.AddText(line, 12, new UglyToad.PdfPig.Core.PdfPoint(50, y), font);
+            y -= 24;
+        }
+
+        return new MemoryStream(builder.Build());
+    }
+
+    //The panel used to turn a PDF away saying the browser had no extractor. It has one now, and it is
+    //the same managed parser the desktop side of this codebase uses.
     [Fact]
-    public void Extract_Pdf_RefusedWithGuidance()
+    public void Extract_Pdf_ReadsTheText()
+    {
+        using var stream = PdfSaying("Acme Robotics was founded in 1999.", "Alice Chen leads the lab.");
+
+        var (text, error) = SourceTextExtractor.Extract("report.pdf", stream);
+
+        Assert.Null(error);
+        Assert.Contains("Acme Robotics", text);
+        Assert.Contains("1999", text);
+        Assert.Contains("Alice Chen", text);
+    }
+
+    //Every page, not just the first: a datasheet's interesting part is rarely on page one.
+    [Fact]
+    public void Extract_Pdf_ReadsEveryPage()
+    {
+        var builder = new UglyToad.PdfPig.Writer.PdfDocumentBuilder();
+        var font = builder.AddStandard14Font(UglyToad.PdfPig.Fonts.Standard14Fonts.Standard14Font.Helvetica);
+
+        var first = builder.AddPage(UglyToad.PdfPig.Content.PageSize.A4);
+        first.AddText("Page one mentions Bolt.", 12, new UglyToad.PdfPig.Core.PdfPoint(50, 700), font);
+
+        var second = builder.AddPage(UglyToad.PdfPig.Content.PageSize.A4);
+        second.AddText("Page two mentions Cog.", 12, new UglyToad.PdfPig.Core.PdfPoint(50, 700), font);
+
+        using var stream = new MemoryStream(builder.Build());
+
+        var (text, error) = SourceTextExtractor.Extract("two-pager.pdf", stream);
+
+        Assert.Null(error);
+        Assert.Contains("Bolt", text);
+        Assert.Contains("Cog", text);
+    }
+
+    //Something that only claims to be a PDF fails the way an unreadable .docx does — named, and without
+    //a stack trace — rather than being refused before anything is tried.
+    [Fact]
+    public void Extract_Pdf_ThatIsNotOne_SaysSo()
     {
         using var stream = TextStream("%PDF-1.7 whatever");
 
         var (text, error) = SourceTextExtractor.Extract("report.pdf", stream);
 
         Assert.Null(text);
+        Assert.Contains("report.pdf", error);
         Assert.Contains("PDF", error);
-        Assert.Contains(".txt", error);
     }
 
     [Fact]
