@@ -82,6 +82,7 @@ public class KgGenerateModalTests : BunitContext
         Services.AddSingleton<IAppStorage>(storage);
         Services.AddSingleton(new HttpClient(handler));
         Services.AddScoped<LlmConnectionStore>();
+        Services.AddSingleton(WebOnlyHost.Options());
 
         return Render<KgGenerateModal>(p => p
             .Add(c => c.Visible, true)
@@ -246,21 +247,40 @@ public class KgGenerateModalTests : BunitContext
         Assert.Contains("Alice works at Acme.", value);
     }
 
+    //A PDF used to be turned away at the door with an explanation about the browser. It is read now, by
+    //the same managed parser the desktop half of this codebase uses.
     [Fact]
-    public async Task UploadedPdf_IsRefusedWithGuidance()
+    public async Task UploadedPdf_IsReadIntoTheSourceText()
+    {
+        var cut = RenderModal(await StorageWithConnectionAsync(), SampleReply);
+
+        var builder = new UglyToad.PdfPig.Writer.PdfDocumentBuilder();
+        var font = builder.AddStandard14Font(UglyToad.PdfPig.Fonts.Standard14Fonts.Standard14Font.Helvetica);
+        var page = builder.AddPage(UglyToad.PdfPig.Content.PageSize.A4);
+        page.AddText("Acme Robotics employs Alice Chen.", 12, new UglyToad.PdfPig.Core.PdfPoint(50, 700), font);
+
+        cut.FindComponent<Microsoft.AspNetCore.Components.Forms.InputFile>()
+            .UploadFiles(InputFileContent.CreateFromBinary(builder.Build(), "report.pdf"));
+
+        cut.WaitForAssertion(() =>
+        {
+            var textarea = cut.Find("textarea[placeholder^='Paste notes']");
+            var value = textarea.GetAttribute("value") ?? textarea.TextContent;
+
+            Assert.Contains("Acme Robotics", value);
+        });
+    }
+
+    //And something that only claims to be one fails by name, rather than by stack trace.
+    [Fact]
+    public async Task UploadedPdf_ThatIsNotOne_SaysWhichFile()
     {
         var cut = RenderModal(await StorageWithConnectionAsync(), SampleReply);
 
         cut.FindComponent<Microsoft.AspNetCore.Components.Forms.InputFile>()
             .UploadFiles(InputFileContent.CreateFromText("%PDF-1.7 …", "report.pdf"));
 
-        cut.WaitForAssertion(() =>
-        {
-            //TextContent decodes entities, so the apostrophe in the message compares cleanly.
-            var alert = cut.Find(".alert-danger").TextContent;
-            Assert.Contains("PDF text extraction", alert);
-            Assert.Contains("save it as .txt", alert);
-        });
+        cut.WaitForAssertion(() => Assert.Contains("report.pdf", cut.Find(".alert-danger").TextContent));
     }
 
     [Fact]

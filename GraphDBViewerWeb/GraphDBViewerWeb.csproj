@@ -1,28 +1,59 @@
-<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+﻿<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ServiceWorkerAssetsManifest>service-worker-assets.js</ServiceWorkerAssetsManifest>
+    <!--Pinned for the same reason GraphDBViewer.Core pins it: Razor component namespaces derive from
+        RootNamespace, and this project still compiles App.razor. Both sides agreeing on GraphDBViewerWeb
+        is what lets the core's components and this host's live in one namespace.-->
+    <RootNamespace>GraphDBViewerWeb</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.8" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.8" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.11" PrivateAssets="all" />
 
+    <!--Program.cs calls AddBlazoredLocalStorage directly. The core depends on it too, for the one-time
+        migration out of localStorage, and both must agree on the version.-->
     <PackageReference Include="Blazored.LocalStorage" Version="4.5.0" />
+  </ItemGroup>
 
-    <PackageReference Include="Net.Codecrete.QrCodeGenerator" Version="3.0.0" />
+  <ItemGroup>
+    <!--The viewer. Everything this app shows comes from here — components, pages, the database engines —
+        and its wwwroot arrives at _content/GraphDBViewer.Core/, which is what index.html points at. The
+        directory is a generated copy synced from the Treeality repo: never edit it here, see
+        ../sync-core.ps1.-->
+    <ProjectReference Include="..\GraphDBViewer.Core\GraphDBViewer.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <ServiceWorker Include="wwwroot\service-worker.js" PublishedContent="wwwroot\service-worker.published.js" />
   </ItemGroup>
 
+
   <ItemGroup>
-    <Folder Include="Models\" />
-    <Folder Include="wwwroot\lib\js\" />
+    <!--Set aside from the boot manifest and fetched on first use. PdfPig is roughly 870 KB compressed,
+        close to a fifth of the whole download, and it does nothing until somebody loads a PDF. The names
+        must match PdfReaderAssemblies.Names in the core, which is what asks for them.-->
+    <BlazorWebAssemblyLazyLoad Include="UglyToad.PdfPig.wasm" />
+    <BlazorWebAssemblyLazyLoad Include="UglyToad.PdfPig.Core.wasm" />
+    <BlazorWebAssemblyLazyLoad Include="UglyToad.PdfPig.Fonts.wasm" />
+    <BlazorWebAssemblyLazyLoad Include="UglyToad.PdfPig.Tokenization.wasm" />
+    <BlazorWebAssemblyLazyLoad Include="UglyToad.PdfPig.Tokens.wasm" />
+    <BlazorWebAssemblyLazyLoad Include="UglyToad.PdfPig.DocumentLayoutAnalysis.wasm" />
+    <BlazorWebAssemblyLazyLoad Include="UglyToad.PdfPig.Package.wasm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--Never published. dev-secrets.json holds real API keys and real database credentials, and it sits in
+        wwwroot because that is where the app fetches it from — which also means anything serving the
+        published output would hand it to whoever asks for /dev-secrets.json. It is git-ignored and its own
+        summary says it is expected to be absent everywhere but a development machine; this is what makes
+        that true of a build as well as of the repo. Development is unaffected: there the file is served
+        off disk, not out of the publish folder.-->
+    <Content Update="wwwroot\dev-secrets.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
 </Project>

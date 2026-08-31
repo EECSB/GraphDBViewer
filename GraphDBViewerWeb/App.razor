@@ -1,4 +1,7 @@
-﻿<Router AppAssembly="@typeof(App).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+﻿@* AppAssembly points at GraphDBViewer.Core, not at this assembly: every routable page lives in the
+   shared core now, so scanning this thin host would find none of them. Naming a page type rather than
+   the assembly keeps the reference honest if the core is ever renamed. *@
+<Router AppAssembly="@typeof(Pages.NotFound).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
         <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)"/>
         <FocusOnNavigate RouteData="@routeData" Selector="h1" />

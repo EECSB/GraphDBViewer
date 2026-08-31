@@ -1,0 +1,103 @@
+# Attaches the web-only app to a GitHub Release as a zip, so a released version is a thing you can
+# download and serve rather than something you have to build. Tag a commit v1.2.3 and push the tag.
+#
+# The same tag also triggers publish-docker.yml, which pushes the backend edition to Docker Hub. The two
+# run independently -- nothing here waits on that -- but the notes written below name the image, because
+# a release that mentions only the zip reads as though the container does not exist.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release (e.g. v1.2.3)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # Must match IMAGE_NAME in publish-docker.yml. Named in both because Actions has no way to share a
+  # value between workflows short of a repository variable, which would then have to be configured
+  # before either could run. Renaming the image means renaming it twice.
+  IMAGE_NAME: graphdbviewer-server
+
+jobs:
+  release:
+    name: Package and publish the release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # The tag is the version, minus its leading v. Everything downstream is named from this.
+      - name: Read the version from the tag
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Publish the web-only app
+        run: dotnet publish GraphDBViewerWeb/GraphDBViewerWeb.csproj -c Release -p:WasmBuildNative=false -o publish
+
+      # Zipped from inside wwwroot, so it unpacks as the site root rather than a nested folder — the
+      # contents are what a static host serves.
+      - name: Package
+        run: |
+          cd publish/wwwroot
+          zip -qr "$GITHUB_WORKSPACE/graph-db-viewer-web-$VERSION.zip" .
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "graph-db-viewer-web-$VERSION.zip" --clobber
+          else
+            gh release create "$TAG" "graph-db-viewer-web-$VERSION.zip" \
+              --title "$TAG" \
+              --generate-notes
+          fi
+
+      # Generated notes are commit subjects and nothing else, so the container is invisible to anyone
+      # reading the release. Skipped when no Docker Hub account is configured, matching publish-docker.yml:
+      # there is no image to point at then, and half an image name is worse than none.
+      - name: Name the Docker image in the release notes
+        if: vars.DOCKERHUB_USERNAME != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+        run: |
+          BODY=$(gh release view "$TAG" --json body -q .body)
+
+          # Idempotent: re-running this workflow over an existing release must not stack the section up
+          # twice, and must not overwrite notes somebody has edited by hand around it.
+          if printf '%s' "$BODY" | grep -q '^## Docker image'; then
+            echo "The notes already name the image."
+            exit 0
+          fi
+
+          {
+            printf '%s\n\n' "$BODY"
+            printf '## Docker image\n\n'
+            printf 'This version as a container — the backend edition, which adds a proxy for databases a\n'
+            printf 'browser cannot reach (an endpoint with no CORS headers, plain http on an https page, Bolt,\n'
+            printf 'or a host only the server can route to):\n\n'
+            printf '```\n'
+            printf 'docker run --rm -p 8080:8080 %s:%s\n' "$IMAGE" "$VERSION"
+            printf '```\n\n'
+            printf 'Then open http://localhost:8080. Published to Docker Hub from this same tag.\n\n'
+            printf 'The zip attached to this release needs none of that: unpack it onto any static host and\n'
+            printf 'open it. Everything runs in the browser, and the toggle for the server route hides itself\n'
+            printf 'when there is no host answering behind it.\n'
+          } > notes.md
+
+          gh release edit "$TAG" --notes-file notes.md

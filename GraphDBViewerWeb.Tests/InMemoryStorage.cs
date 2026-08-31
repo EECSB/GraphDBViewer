@@ -13,6 +13,8 @@ internal sealed class InMemoryStorage : IAppStorage
 {
     private readonly Dictionary<string, string> _data = new();
 
+    public event Action StorageQuotaExceeded { add { } remove { } }
+
     public Task<T> GetAsync<T>(string key)
     {
         if (!_data.TryGetValue(key, out var json))

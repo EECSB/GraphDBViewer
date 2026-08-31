@@ -54,7 +54,7 @@ public class GremlinExamplesTests
     [Fact]
     public void Example_DefaultsToNonDestructive()
     {
-        var example = new GremlinExamples.Example("Count", "g.V().count()");
+        var example = new QueryExample("Count", "g.V().count()");
         Assert.False(example.Destructive);
     }
 

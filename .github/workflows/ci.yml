@@ -1,0 +1,87 @@
+# Builds, tests, and packages the web-only app on every push. The zip this produces is the app itself:
+# a folder of static files that can be dropped on any web host, which is what "no backend" means here.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, test and package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build
+        run: dotnet build GraphDBViewerWeb.slnx -c Release
+
+      # The live-server integration tests dial a real Gremlin endpoint, which no runner has.
+      - name: C# tests
+        run: dotnet test GraphDBViewerWeb.slnx -c Release --no-build
+        env:
+          SKIP_GREMLIN_TESTS: 'true'
+
+      - name: JS tests
+        run: npm ci && npm test
+
+      # WasmBuildNative=false skips the Emscripten native relink, so the runner needs no wasm-tools
+      # workload. The payload is slightly larger; install the workload and drop the flag to shrink it.
+      - name: Publish the web-only app
+        run: dotnet publish GraphDBViewerWeb/GraphDBViewerWeb.csproj -c Release -p:WasmBuildNative=false -o publish
+
+      - name: Package
+        run: |
+          cd publish/wwwroot
+          zip -qr "$GITHUB_WORKSPACE/graph-db-viewer-web.zip" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: graph-db-viewer-web-${{ github.sha }}
+          path: graph-db-viewer-web.zip
+          if-no-files-found: error
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      # Playwright starts the app itself (see playwright.config.js). Two workers rather than the default:
+      # each one boots a WebAssembly runtime and 250+ resources, and the suite drops specs under load.
+      - name: Playwright
+        run: npx playwright test --workers=2
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: test-results/
+          if-no-files-found: ignore

@@ -16,7 +16,7 @@ test('a per-label icon shows on that label\'s nodes in 2D and 3D', async ({ page
     await loadSampleGraph(page);
 
     //Set an icon URL for the person label in the Style dialog (offline data: URL image).
-    await page.getByRole('button', { name: /Style — set each vertex label/ }).click();
+    await page.getByRole('button', { name: /Style: set each vertex label/ }).click();
     const dialog = page.locator('.modal-content');
     //The Style-All dialog lists each label in two tables (appearance + shape/media), so the
     //label name renders twice; assert the first is visible to confirm the dialog opened.

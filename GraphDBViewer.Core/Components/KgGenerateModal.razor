@@ -1,0 +1,745 @@
+﻿@using System
+@using System.IO
+@using System.Text.Json
+@using GraphDBViewerWeb.Code
+@using Microsoft.AspNetCore.Components.Forms
+@inject HttpClient Http
+@inject IAppStorage Storage
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+
+@* "✨ Generate with AI": turns pasted text into a knowledge graph via the shared AI models, previews the
+   result — counts, label breakdown, every repair warning, and the exact Gremlin — and hands the caller
+   the script plus the chosen Merge/Replace mode. It never renders, stages or commits anything itself
+   (AC 10): the caller owns what "use" means. Shares NlQueryModal's FloatingDialog shell. *@
+
+<FloatingDialog Visible="Visible"
+                OnClose="OnClose"
+                Title="✨ Generate a knowledge graph"
+                StorageKey="kg-generate-2"
+                Width="min(1100px, 95vw)"
+                Height="min(880px, 92vh)">
+
+    <ChildContent>
+        @* Three ways in, side by side. None of them is labeled, because each already says what it is in
+           the box you would reach for: the placeholder, the words on the drop panel, the placeholder
+           again. They all end up in the same place — the text on the left is both the first option and
+           where the other two land, so what was fetched can be read and edited before it is used. *@
+        <div class="border rounded p-2 mb-2 gdbv-source-box">
+            <div class="row g-2">
+                <div class="col-12 col-lg-5">
+                    <textarea class="form-control gdbv-source-text" placeholder="Paste notes, an article, a document… to extract a graph from" @bind="sourceText" @bind:event="oninput"></textarea>
+                </div>
+
+                <div class="col-12 col-lg-3">
+                    @* The file input is stretched invisibly over the whole panel rather than sitting in it.
+                       That is what makes a plain box a drop target: a native file input already accepts a
+                       dropped file, so covering the panel with one gets drag-and-drop and click-to-browse
+                       from the same element, with nothing to keep in step. *@
+                    <div class="gdbv-dropzone @(draggingFile ? "gdbv-dropzone-over" : "")"
+                         @ondragenter="() => draggingFile = true"
+                         @ondragleave="() => draggingFile = false"
+                         @ondrop="() => draggingFile = false">
+                        <InputFile OnChange="LoadSourceFileAsync" class="gdbv-dropzone-input" title="Drop a file here, or click to choose one. PDF, .docx, .xlsx, .csv, .txt / .md, or any other text-based format — the text is pulled out automatically." />
+
+                        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true" class="mb-1 opacity-75">
+                            <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5" />
+                            <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708z" />
+                        </svg>
+
+                        <div class="small">Drop a file here or click to choose</div>
+
+                        @* What it takes, on the thing that takes it. The panel is unlabeled, so this is
+                           where somebody finds out what will work before they try something. *@
+                        <div class="text-body-secondary mt-1" style="font-size: 0.72em; line-height: 1.3;">
+                            PDF, .docx, .xlsx, .csv, .txt / .md and any other text-based format. The text is pulled out automatically.
+                        </div>
+
+                        @if (loadedFileName != null)
+                        {
+                            <div class="small text-body-secondary mt-1 text-truncate w-100" title="@loadedFileName">@loadedFileName</div>
+                        }
+                    </div>
+                </div>
+
+                <div class="col-12 col-lg-4">
+                    <div class="input-group input-group-sm">
+                        <input class="form-control" placeholder="…or a Wikipedia article title or link" @bind="wikipediaTitle" title="Fetch the article's plain text and load it into the box. A title, or a link to the article — a link to another language's Wikipedia fetches from that one." />
+                        <button class="btn btn-outline-secondary" @onclick="FetchWikipediaAsync" disabled="@(string.IsNullOrWhiteSpace(wikipediaTitle) || fetchingWiki)">@(fetchingWiki ? "Fetching…" : "Fetch")</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <hr class="my-3" />
+
+        @* Stacked rather than strung along a line: they are independent switches, and a column can be
+           read down in one pass instead of hunted along a row that rewraps with the window. *@
+        <div class="d-flex flex-column mb-2">
+            @if (Schema != null)
+            {
+                <div class="form-check mb-1" title="Ask the model to reuse the connected database's vertex/edge labels and property keys instead of inventing its own.">
+                    <input class="form-check-input" type="checkbox" id="kgGroundSchema" @bind="groundInSchema" />
+                    <label class="form-check-label" for="kgGroundSchema">Ground labels in the connected schema</label>
+                </div>
+            }
+
+            @* ── Extraction-quality options ───────────────────── *@
+            <div class="form-check mb-1" title="Ask the model for the sentence each entity and relationship came from, kept as a 'source' property, so you can see why it claimed something.">
+                <input class="form-check-input" type="checkbox" id="kgProvenance" @bind="includeProvenance" />
+                <label class="form-check-label" for="kgProvenance">Record the source sentence</label>
+            </div>
+            <div class="form-check mb-1" title="Ask the model how sure it is of each entity and relationship. Anything under 50% is drawn in gray, so a guess looks like a guess.">
+                <input class="form-check-input" type="checkbox" id="kgConfidence" @bind="includeConfidence" />
+                <label class="form-check-label" for="kgConfidence">Rate confidence</label>
+            </div>
+            @if (LongEnoughToSplit)
+            {
+                @* Only offered when it would do something: a text the model can take in one
+                   request is better extracted in one, since relationships spanning a break are
+                   lost either way. *@
+                <div class="form-check mb-1" title="Extract the text in pieces and merge the results. A long document otherwise runs past the model's output limit and comes back cut off mid-graph.">
+                    <input class="form-check-input" type="checkbox" id="kgChunk" @bind="chunkLongText" />
+                    <label class="form-check-label" for="kgChunk">Split into @ChunkCount pieces (@(sourceText.Length.ToString("N0")) characters)</label>
+                </div>
+            }
+            <div class="form-check mb-1" title="After extracting, ask the model once more what it missed and merge the answer in. Costs a second request.">
+                <input class="form-check-input" type="checkbox" id="kgGlean" @bind="gleanSecondPass" />
+                <label class="form-check-label" for="kgGlean">Ask once more for anything missed</label>
+            </div>
+            <div class="form-check mb-1" title="Drop entities that ended up with no relationships at all, usually mentioned once in passing.">
+                <input class="form-check-input" type="checkbox" id="kgOrphans" @bind="dropOrphans" @bind:after="RecomputePreview" />
+                <label class="form-check-label" for="kgOrphans">Drop unconnected entities</label>
+            </div>
+        </div>
+
+        @* ── Merge / Replace (AC 9) — remembered across sessions ─── *@
+        @* What each does is on the button that does it, rather than in a line of prose beside them that
+           explains both to somebody who is only about to press one. *@
+        <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+            <div class="btn-group btn-group-sm" role="group" aria-label="Merge or replace">
+                <button type="button" class="btn @(mergeMode ? "btn-outline-danger" : "btn-danger")" @onclick="() => SetModeAsync(false)" title="Replace wipes the current drawing and puts this in its place. It asks first when you have staged changes.">Replace drawing</button>
+                <button type="button" class="btn @(mergeMode ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetModeAsync(true)" title="Merge adds onto the current drawing, folding in entities that are already there.">Merge into drawing</button>
+            </div>
+        </div>
+
+        @* ── Generate ────────────────────────────────────────────── *@
+        <hr class="my-3" />
+
+        @* Above the button it feeds rather than beside it: it is a sentence, and a sentence wants a line.
+           Half the panel, so there is room to write one without it running the width of the window. *@
+        <textarea class="form-control mb-2 gdbv-kg-actions" rows="1" style="resize: none;" placeholder="Optional instruction, e.g. focus on people and organizations" title="Optional instruction: an extra steer for the extraction. Shift+Enter starts a new line." @ref="instructionBox" @bind="instruction" @bind:event="oninput"></textarea>
+
+        @* The same width as the box above, from the same rule, so what sits at the right of this row ends
+           exactly where that box ends and the two cannot drift apart. *@
+        <div class="d-flex gap-2 align-items-center mb-2 flex-wrap gdbv-kg-actions">
+            @* One button, which is whatever there is to do: start it, or stop it. The label used to grow
+               into "Extracting piece 11 of 12…" while it ran, which widened the button by half again and
+               pushed the dropdowns beside it onto a second row halfway through a generation. *@
+            @if (generating)
+            {
+                <button class="btn btn-primary" @onclick="Cancel" title="Stop the generation">Cancel</button>
+            }
+            else
+            {
+                <button class="btn btn-primary" @onclick="GenerateAsync" disabled="@(selected == null || string.IsNullOrWhiteSpace(sourceText))">Generate graph</button>
+            }
+
+            @* Who answers, rather than what is being asked of them — so it sits at the far end, past the
+               button, exactly where the Ask AI composer keeps the same two controls. *@
+            <div class="d-flex gap-2 align-items-center ms-auto">
+                @if (LlmConnection.SupportsEffort(selected))
+                {
+                    @* Only the models that think take an effort level - OpenAI's reasoning families and
+                       Gemini 2.5 and up. The rest reject it rather than ignoring it. *@
+                    <select class="form-select form-select-sm" style="width: auto;" @bind="effort" title="How hard the model should think before answering. Reasoning models only.">
+                        <option value="">Effort: default</option>
+                        <option value="low">Effort: low</option>
+                        <option value="medium">Effort: medium</option>
+                        <option value="high">Effort: high</option>
+                    </select>
+                }
+
+                <LlmConnectionPicker PickOnly="true" SelectedChanged="c => selected = c" />
+            </div>
+        </div>
+
+        @if (generating)
+        {
+            <div class="d-flex align-items-center gap-2 mb-2 small text-body-secondary">
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <span>@(chunkProgress ?? "Generating…")</span>
+            </div>
+        }
+
+
+        <br />
+
+        @if (error != null)
+        {
+            <div class="alert alert-danger py-2 small mb-2">@error</div>
+
+            @if (rawModelOutput != null)
+            {
+                <label class="form-label mb-1">Raw model output</label>
+                <pre class="border rounded p-2 mb-2" style="white-space: pre-wrap; max-height: 30vh; overflow: auto;">@rawModelOutput</pre>
+            }
+        }
+
+        @* ── Preview — true for the chosen mode (AC 8) ───────────── *@
+        @if (previewGremlin != null)
+        {
+            <div class="d-flex gap-3 align-items-baseline flex-wrap bg-body-tertiary border rounded px-3 py-2">
+                <span class="fw-semibold">@countsLine</span>
+                @if (!string.IsNullOrEmpty(labelBreakdown))
+                {
+                    <span class="text-muted small">@labelBreakdown</span>
+                }
+            </div>
+
+            @if (previewWarnings.Count > 0)
+            {
+                <div class="alert alert-warning py-2 small mb-2 mt-2">
+                    @foreach (var warning in previewWarnings)
+                    {
+                        <div>@warning</div>
+                    }
+                </div>
+            }
+
+            @if (previewGremlin.Length == 0)
+            {
+                <div class="text-muted small mt-1">Nothing new: everything in this generation is already on the canvas.</div>
+            }
+            else
+            {
+                @* A rule where what the model said ends and what it produced begins. The script below is
+                   often hundreds of lines; a three-line window onto it reported that it existed and
+                   nothing more, so it gets height worth reading in. *@
+                <hr class="my-3" />
+
+                <label class="form-label mb-1">Generated queries</label>
+                <pre class="border rounded p-2 mb-1" style="white-space: pre-wrap; flex: 1 1 auto; min-height: 15em; max-height: 55vh; overflow: auto;">@previewGremlin</pre>
+            }
+
+            @* Under what it acts on, rather than pinned to the bottom of the window a screen away from it. *@
+            <div class="d-flex justify-content-end mt-2">
+                <button class="btn btn-success" @onclick="UseGraphAsync" disabled="@(string.IsNullOrEmpty(previewGremlin))">Use this graph →</button>
+            </div>
+        }
+    </ChildContent>
+
+</FloatingDialog>
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    ///<summary>The connected schema's vocabulary, or null when grounding isn't available (nothing
+    ///connected, or the schema is unknown). Null hides the grounding toggle entirely.</summary>
+    [Parameter] public SchemaVocabulary Schema { get; set; }
+
+    ///<summary>The canvas as its render JSON (EffectiveData()) — what Merge folds against. Undefined
+    ///reads as an empty canvas.</summary>
+    [Parameter] public JsonElement CurrentGraph { get; set; }
+
+    ///<summary>The connected database's query language, so the staged script commits against it. Null means Gremlin.</summary>
+    [Parameter] public IGraphQueryBuilder QueryBuilder { get; set; }
+
+    ///<summary>Raised on accept with the script to stage and the chosen mode. Replace routes through the
+    ///guarded import path; Merge appends the precomputed delta. The modal never commits (AC 10).</summary>
+    [Parameter] public EventCallback<(string Gremlin, bool Merge)> OnUseGraph { get; set; }
+
+    //The Merge/Replace toggle's persisted last value (AC 9): absent ⇒ false ⇒ Replace, so first use
+    //defaults to Replace with no special-casing. Owned here — the toggle has exactly one consumer.
+    private const string MergeModeKey = "graphdbviewer:kgMergeMode";
+
+    //The connection the picker currently has selected; null when no models exist yet.
+    private LlmConnection selected;
+
+    //Inputs.
+    private string sourceText;
+    ///<summary>The chosen reasoning effort, empty for "say nothing and let the model default".</summary>
+    private string effort = "";
+
+    private string instruction;
+    private bool groundInSchema;
+    private bool mergeMode;
+    private bool modeLoaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Visible && !modeLoaded)
+        {
+            modeLoaded = true;
+            mergeMode = await Storage.GetAsync<bool>(MergeModeKey);
+        }
+    }
+
+    //Extraction-quality options. All off by default: each costs tokens, a second request, or removes
+    //something the model produced, and none should happen without being asked for.
+    private bool includeProvenance;
+    private bool includeConfidence;
+
+    ///<summary>
+    ///Characters per piece when a long text is split. Chosen so a full-size answer for one piece fits the
+    ///8192-token default the connections ship with, the same reasoning behind the node and edge caps.
+    ///</summary>
+    public const int ChunkChars = 6000;
+
+    private bool chunkLongText;
+
+    //Which piece is being extracted, while several are.
+    private string chunkProgress;
+
+    //Only worth offering when the text is long enough that one request would likely come back truncated.
+    private bool LongEnoughToSplit => !string.IsNullOrEmpty(sourceText) && sourceText.Length > ChunkChars;
+
+    private int ChunkCount => KgGraphParser.SplitIntoChunks(sourceText, ChunkChars).Count;
+
+    //The pieces to extract: one, unless the text is long and the user said to split it.
+    private List<string> Chunks()
+    {
+        if (chunkLongText && LongEnoughToSplit)
+            return KgGraphParser.SplitIntoChunks(sourceText, ChunkChars);
+
+        return new List<string> { sourceText.Trim() };
+    }
+    private bool gleanSecondPass;
+    private bool dropOrphans;
+
+    //Generation state.
+    private bool generating;
+    private CancellationTokenSource cts;
+    private string error;
+    private string rawModelOutput;
+
+    //The parsed generation (in-run folded — mode-independent), and the mode-true preview built from it.
+    private GraphImport.Graph parsedGraph;
+    private List<string> parseWarnings = new();
+    private string previewGremlin;
+    private string countsLine;
+    private string labelBreakdown;
+    private List<string> previewWarnings = new();
+    //Upload cap: this is a paste-sized feature, and a graph extracted from more text than this would
+    //blow the node/edge caps anyway.
+    private const long MaxSourceFileBytes = 1024 * 1024;
+
+    ///<summary>
+    ///Pulls in the PDF reader if this host loads it on demand, and says so when that fails. A host that
+    ///registers no loader already has the assemblies, so a null service is success, not a problem.
+    ///</summary>
+    private async Task<string> EnsurePdfReaderAsync()
+    {
+        var loader = Services.GetService(typeof(IPdfReaderLoader)) as IPdfReaderLoader;
+
+        if (loader == null)
+            return null;
+
+        return await loader.EnsureLoadedAsync();
+    }
+
+    ///<summary>Whether a file is being dragged over the drop panel, so it can say it is ready to catch it.</summary>
+    private bool draggingFile;
+
+    ///<summary>The name of the file whose text is in the box, or null. The input that loaded it is invisible,
+    ///so without this there is nothing on screen to say which file was read.</summary>
+    private string loadedFileName;
+
+    private ElementReference instructionBox;
+    private bool instructionAttached;
+    private bool instructionSized;
+
+    ///<summary>
+    ///Keeps the instruction box the height of what is in it. Enter is left alone here — unlike the Ask AI
+    ///composer there is nothing for it to send — so it breaks the line as a Return normally would.
+    ///</summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!instructionAttached)
+        {
+            instructionAttached = true;
+
+            try
+            {
+                await JS.InvokeVoidAsync("floatingDialog.attachGrowing", instructionBox);
+            }
+            catch { }
+        }
+
+        //A hidden window gives its children no height, so the first measurement waits for one.
+        if (Visible && !instructionSized)
+        {
+            instructionSized = true;
+
+            try
+            {
+                await JS.InvokeVoidAsync("floatingDialog.growComposer", instructionBox);
+            }
+            catch { }
+        }
+        else if (!Visible)
+            instructionSized = false;
+    }
+
+    private async Task LoadSourceFileAsync(InputFileChangeEventArgs e)
+    {
+        error = null;
+        draggingFile = false;
+
+        var file = e.File;
+
+        if (file == null)
+            return;
+
+        //The PDF reader is fetched on first use rather than at boot — it is the largest thing the app
+        //ships and earns none of that until a PDF actually arrives. Only for a PDF, and only once.
+        if (Path.GetExtension(file.Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            var loadError = await EnsurePdfReaderAsync();
+
+            if (loadError != null)
+            {
+                error = loadError;
+                loadedFileName = null;
+
+                return;
+            }
+        }
+
+        if (file.Size > MaxSourceFileBytes)
+        {
+            error = $"\"{file.Name}\" is {file.Size / 1024} KB; the cap is {MaxSourceFileBytes / 1024} KB. Paste an excerpt instead.";
+            return;
+        }
+
+        //Buffer first: the extractor needs a seekable stream (ZIP-based formats), and InputFile's
+        //stream is async-only.
+        using var buffer = new System.IO.MemoryStream();
+        await file.OpenReadStream(MaxSourceFileBytes).CopyToAsync(buffer);
+        buffer.Position = 0;
+
+        var (text, extractError) = SourceTextExtractor.Extract(file.Name, buffer);
+
+        if (extractError != null)
+        {
+            error = extractError;
+            loadedFileName = null;
+        }
+        else
+        {
+            sourceText = text;
+            loadedFileName = file.Name;
+        }
+    }
+
+    //Wikipedia fetch state.
+    private string wikipediaTitle;
+    private bool fetchingWiki;
+
+    private async Task FetchWikipediaAsync()
+    {
+        if (string.IsNullOrWhiteSpace(wikipediaTitle) || fetchingWiki)
+            return;
+
+        error = null;
+        fetchingWiki = true;
+
+        try
+        {
+            var (text, fetchError) = await WikipediaSource.FetchExtractAsync(Http, wikipediaTitle, CancellationToken.None);
+
+            if (fetchError != null)
+                error = fetchError;
+            else
+                sourceText = text;
+        }
+        finally
+        {
+            fetchingWiki = false;
+        }
+    }
+
+    private async Task SetModeAsync(bool merge)
+    {
+        if (mergeMode == merge)
+            return;
+
+        mergeMode = merge;
+
+        //The preview must stay true for the chosen mode (AC 8), so switching recomputes it.
+        RecomputePreview();
+
+        await Storage.SetAsync(MergeModeKey, merge);
+    }
+
+    private async Task GenerateAsync()
+    {
+        if (selected == null || string.IsNullOrWhiteSpace(sourceText))
+            return;
+
+        error = null;
+        rawModelOutput = null;
+        parsedGraph = null;
+        parseWarnings = new List<string>();
+        chunkProgress = null;
+        previewGremlin = null;
+        generating = true;
+        cts?.Dispose();
+        cts = new CancellationTokenSource();
+
+        try
+        {
+            var forThisRun = new LlmConnection(selected) { Effort = effort };
+            var provider = LlmProviderFactory.Create(Http, forThisRun);
+
+            SchemaVocabulary schemaArg = null;
+
+            if (groundInSchema)
+                schemaArg = Schema;
+
+            var system = KgPrompt.BuildSystemPrompt(schemaArg, includeProvenance, includeConfidence);
+
+            //A long document is extracted a piece at a time and merged. Each piece is its own request with
+            //the same prompt, so nothing about the extraction changes — only how much text it sees at once.
+            var chunks = Chunks();
+            string lastOutput = null;
+
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var user = chunks[i];
+
+                if (!string.IsNullOrWhiteSpace(instruction))
+                    user = $"{user}\n\nAdditional instruction: {instruction.Trim()}";
+
+                if (chunks.Count > 1)
+                {
+                    chunkProgress = $"Extracting piece {i + 1} of {chunks.Count}…";
+                    StateHasChanged();
+                }
+
+                //Single-shot on purpose — no tool loop (design § Why generation gets no tools) — and the
+                //output cap is the connection's own MaxTokens, inherited through the factory (AC 7).
+                var result = await provider.CompleteAsync(system, user, cts.Token);
+
+                if (result.IsError)
+                {
+                    //One piece failing is not the whole document failing, as long as something was read.
+                    if (parsedGraph == null)
+                    {
+                        error = result.Error;
+
+                        return;
+                    }
+
+                    parseWarnings.Add($"Piece {i + 1} of {chunks.Count} failed ({result.Error}); the rest stands.");
+
+                    continue;
+                }
+
+                lastOutput = result.Text;
+                var parsed = KgGraphParser.Parse(result.Text);
+
+                if (parsed.IsError)
+                {
+                    if (parsedGraph == null)
+                    {
+                        //Fail loudly with the raw output shown (AC 6). Truncation presents as invalid JSON,
+                        //so name the likely cause (AC 7).
+                        error = parsed.Error;
+
+                        if (parsed.Error.Contains("not valid JSON"))
+                        {
+                            error += " If the output was cut off mid-graph, raise the connection's Max tokens";
+
+                            if (chunks.Count == 1 && LongEnoughToSplit)
+                                error += ", or switch on \"Split into pieces\"";
+
+                            error += ".";
+                        }
+
+                        rawModelOutput = result.Text;
+
+                        return;
+                    }
+
+                    parseWarnings.Add($"Piece {i + 1} of {chunks.Count} could not be read ({parsed.Error}); the rest stands.");
+
+                    continue;
+                }
+
+                if (parsedGraph == null)
+                {
+                    parsedGraph = parsed.Graph;
+                    parseWarnings.AddRange(parsed.Warnings);
+
+                    continue;
+                }
+
+                //Pieces are folded together the same way a gleaning pass is: entities already found keep
+                //their identity, so one named across two pieces stays one node.
+                var (addedNodes, addedEdges) = KgGraphParser.MergeGeneration(parsedGraph, parsed.Graph);
+                parseWarnings.AddRange(parsed.Warnings);
+                parseWarnings.Add($"Piece {i + 1} of {chunks.Count} added {addedNodes} entity(s) and {addedEdges} relationship(s).");
+            }
+
+            chunkProgress = null;
+
+            if (parsedGraph == null)
+            {
+                error ??= "Nothing could be extracted.";
+
+                return;
+            }
+
+            //The gleaning pass: ask once more for what was missed, and merge only what is genuinely new.
+            //A failure here is not fatal — the first extraction stands, and the reason is reported as a
+            //warning rather than throwing away a good result. Over several pieces it asks about the last
+            //one, since that is the only text still in front of the model.
+            if (gleanSecondPass && lastOutput != null)
+            {
+                var gleaned = await provider.CompleteAsync(system, KgPrompt.BuildGleaningPrompt(lastOutput), cts.Token);
+
+                if (gleaned.IsError)
+                {
+                    parseWarnings.Add($"The second pass failed ({gleaned.Error}); the first extraction stands.");
+                }
+                else
+                {
+                    var second = KgGraphParser.Parse(gleaned.Text);
+
+                    if (second.IsError)
+                    {
+                        parseWarnings.Add($"The second pass could not be read ({second.Error}); the first extraction stands.");
+                    }
+                    else
+                    {
+                        var (addedNodes, addedEdges) = KgGraphParser.MergeGeneration(parsedGraph, second.Graph);
+
+                        if (addedNodes > 0 || addedEdges > 0)
+                            parseWarnings.Add($"A second pass added {addedNodes} entity(s) and {addedEdges} relationship(s).");
+                        else
+                            parseWarnings.Add("A second pass found nothing further.");
+                    }
+                }
+            }
+
+            //Relationship types are made consistent last, once every pass has contributed — and against the
+            //connected schema when there is one, so grounding is snapped to rather than overwritten.
+            var normalized = KgGraphParser.NormalizeRelationshipTypes(parsedGraph, Schema?.EdgeLabels);
+
+            if (normalized > 0)
+                parseWarnings.Add($"Made {normalized} relationship type(s) consistent.");
+
+            //Where each quoted sentence sits in the text, found rather than asked for — which also says
+            //whether it is really there. A quote that is not is worth naming: the model made it up.
+            if (includeProvenance)
+            {
+                var located = KgGraphParser.LocateProvenance(parsedGraph, sourceText);
+
+                if (located.NotFound > 0)
+                    parseWarnings.Add($"{located.NotFound} quoted sentence(s) are not in the source text. Check those claims.");
+            }
+
+            RecomputePreview();
+        }
+        catch (OperationCanceledException)
+        {
+            error = "Generation canceled.";
+        }
+        catch (Exception ex)
+        {
+            //A CORS preflight rejection surfaces as a bare fetch failure — the likeliest real error for
+            //a custom/local endpoint. Name the cause, with the connection card's wording.
+            error = ex.Message;
+
+            if (ex is HttpRequestException || error.Contains("Failed to fetch"))
+                error += " (If this is a CORS error, the endpoint must allow this origin.)";
+        }
+        finally
+        {
+            generating = false;
+            chunkProgress = null;
+            cts?.Dispose();
+            cts = null;
+        }
+    }
+
+    //Builds the preview for the chosen mode from the parsed generation: Replace previews the whole
+    //graph; Merge folds against the canvas first, so the counts describe the post-merge result and a
+    //folding entity is not counted as new (AC 8). The fold runs here, in the modal, because whatever
+    //decides what folds must run before the user accepts.
+    private void RecomputePreview()
+    {
+        previewGremlin = null;
+        countsLine = null;
+        labelBreakdown = null;
+        previewWarnings = new List<string>(parseWarnings);
+
+        if (parsedGraph == null)
+            return;
+
+        //Dropping unconnected entities is previewed on a copy, so the toggle stays reversible — the
+        //parsed generation itself is never edited by a display choice.
+        var graph = parsedGraph;
+
+        if (dropOrphans)
+        {
+            graph = parsedGraph.Clone();
+            var dropped = KgGraphParser.DropOrphans(graph);
+
+            if (dropped > 0)
+                previewWarnings.Add($"Dropped {dropped} unconnected entity(s).");
+        }
+
+        //An engine can refuse to compose these at all — Dgraph cannot correlate a generated graph's ids
+        //across mutations — and the preview says so rather than the modal dying on the exception.
+        try
+        {
+            if (mergeMode)
+            {
+                var canvas = KgGraphParser.FromRenderJson(CurrentGraph);
+                var merge = KgGraphParser.FoldAgainstCanvas(graph, canvas, QueryBuilder);
+
+                previewGremlin = merge.DeltaGremlin;
+                previewWarnings.AddRange(merge.Warnings);
+                countsLine = $"{merge.NewNodes} new node(s) · {merge.NewEdges} new edge(s) · {merge.FoldedNodes} merged into existing · {merge.PropertyUpdates} property update(s)";
+                labelBreakdown = BreakdownOf(merge.AddedNodes);
+            }
+            else
+            {
+                previewGremlin = GraphImport.ToQueries(graph, QueryBuilder);
+                countsLine = $"{graph.Nodes.Count} node(s) · {graph.Edges.Count} edge(s)";
+                labelBreakdown = BreakdownOf(graph.Nodes);
+            }
+        }
+        catch (NotSupportedException ex)
+        {
+            previewGremlin = null;
+            error = ex.Message;
+        }
+    }
+
+    private static string BreakdownOf(List<GraphImport.Node> nodes)
+    {
+        if (nodes.Count == 0)
+            return null;
+
+        return string.Join(" · ", nodes.GroupBy(n => n.Label)
+            .OrderByDescending(g => g.Count())
+            .Select(g => $"{g.Key} ×{g.Count()}"));
+    }
+
+    private void Cancel()
+    {
+        cts?.Cancel();
+    }
+
+    private async Task UseGraphAsync()
+    {
+        if (string.IsNullOrEmpty(previewGremlin))
+            return;
+
+        await OnUseGraph.InvokeAsync((previewGremlin, mergeMode));
+        await OnClose.InvokeAsync();
+    }
+}

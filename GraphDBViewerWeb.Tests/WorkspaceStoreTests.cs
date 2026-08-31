@@ -10,6 +10,8 @@ public class WorkspaceStoreTests
     {
         private readonly Dictionary<string, string> _data = new();
 
+        public event Action StorageQuotaExceeded { add { } remove { } }
+
         public Task<T> GetAsync<T>(string key)
         {
             if (!_data.TryGetValue(key, out var json))
@@ -190,10 +192,10 @@ public class WorkspaceStoreTests
     [Theory]
     [InlineData("gremlin", "gremlin")]
     [InlineData("sparql", "sparql")]
-    [InlineData("cypher", "gremlin")]
+    [InlineData("cypher", "cypher")]
     [InlineData("", "gremlin")]
     [InlineData(null, "gremlin")]
-    public void NormalizeEditorLanguage_FallsBackToGremlin(string input, string expected)
+    public void NormalizeEditorLanguage_KeepsKnownLanguagesElseFallsBackToGremlin(string input, string expected)
     {
         Assert.Equal(expected, WorkspaceStore.NormalizeEditorLanguage(input));
     }

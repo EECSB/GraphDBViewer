@@ -1,0 +1,42 @@
+@using GraphDBViewerWeb.Code
+
+<div class="border rounded p-2" style="height: 15em; overflow-y: auto;">
+    <div class="text-muted mb-2" style="font-size: 0.75em;">Click an example to load it into the Query tab.</div>
+
+    @foreach (var group in Groups)
+    {
+        <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.62em; letter-spacing: 0.05em;">@group.Category</div>
+        <div class="d-flex flex-wrap gap-1 mb-2">
+            @foreach (var ex in group.Examples)
+            {
+                <button type="button"
+                        class="btn btn-sm @(ex.Destructive ? "btn-outline-danger" : "btn-outline-secondary")"
+                        style="font-size: 0.75em;"
+                        title="@ex.Query"
+                        @onclick="() => OnSelect.InvokeAsync(ex.Query)">
+                    @ex.Name
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+
+    ///<summary>The editor's language, so the examples match it — Cypher for openCypher, Gremlin otherwise.</summary>
+    [Parameter] public string Language { get; set; }
+
+    //Swaps the whole example list to match the editor language. SPARQL has no set of its own yet, so it
+    //shares the Gremlin default (its own examples can slot in here the same way Cypher's do).
+    private IReadOnlyList<QueryExampleGroup> Groups
+    {
+        get
+        {
+            if (Language == "cypher")
+                return CypherExamples.Groups;
+
+            return GremlinExamples.Groups;
+        }
+    }
+}
