@@ -1,10 +1,17 @@
 using Bunit;
+using GraphDBViewerWeb.Code;
+using Microsoft.Extensions.DependencyInjection;
 using GraphDBViewerWeb.Components;
 
 namespace GraphDBViewerWeb.Tests;
 
 public class ShowcaseModalTests : BunitContext
 {
+    public ShowcaseModalTests()
+    {
+        Services.AddSingleton(WebOnlyHost.Options());
+    }
+
     [Fact]
     public void NotVisible_RendersNothing()
     {
@@ -39,6 +46,11 @@ public class ShowcaseModalTests : BunitContext
 
 public class AboutModalTests : BunitContext
 {
+    public AboutModalTests()
+    {
+        Services.AddSingleton(WebOnlyHost.Options());
+    }
+
     [Fact]
     public void ShowcaseButton_RaisesOnOpenShowcase()
     {

@@ -1,0 +1,121 @@
+@using System.Linq
+@using System.Text.Json
+@using GraphDBViewerWeb.Code
+
+@if (table != null)
+{
+    @if (table.Nodes.Count > 0 || table.Edges.Count > 0)
+    {
+        <details class="mt-2 flex-shrink-0">
+            <summary class="text-muted" style="font-size: 0.85em; cursor: pointer;">
+                <span class="fw-bold">@table.Nodes.Count</span> vertices · <span class="fw-bold">@table.Edges.Count</span> edges
+                @if (QueryMs.HasValue)
+                {
+                    <text> · <span class="fw-bold" title="Time to run the last query">@FormatMs(QueryMs.Value)</span> query</text>
+                }
+            </summary>
+
+            @*Vertex labels and edge labels sit as two side-by-side columns; each scrolls in both axes so a
+              long or crowded label list stays inside its column instead of pushing the panel around.*@
+            <div class="d-flex gap-3 mt-2" style="font-size: 0.8em;">
+                @if (table.Nodes.Count > 0)
+                {
+                    <div style="flex: 1 1 0; min-width: 0;">
+                        <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.7em;">Vertex labels</div>
+                        @*Cap the rendered badges and scroll the rest — a graph whose vertices each carry a
+                          unique label would otherwise emit thousands of chips that overflow the panel.*@
+                        <div class="pe-1" style="max-height: 180px; overflow: auto;">
+                            @foreach (var grp in nodeGroups.Take(MaxLabelBadges))
+                            {
+                                <span class="badge bg-secondary me-1 mb-1">@grp.Key: @grp.Count()</span>
+                            }
+                            @if (nodeGroups.Count > MaxLabelBadges)
+                            {
+                                <span class="badge bg-dark text-secondary me-1 mb-1" title="@nodeGroups.Count distinct vertex labels in total">+@(nodeGroups.Count - MaxLabelBadges) more</span>
+                            }
+                        </div>
+                    </div>
+                }
+                @if (table.Edges.Count > 0)
+                {
+                    <div style="flex: 1 1 0; min-width: 0;">
+                        <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.7em;">Edge labels</div>
+                        <div class="pe-1" style="max-height: 180px; overflow: auto;">
+                            @foreach (var grp in edgeGroups.Take(MaxLabelBadges))
+                            {
+                                <span class="badge bg-secondary me-1 mb-1">@grp.Key: @grp.Count()</span>
+                            }
+                            @if (edgeGroups.Count > MaxLabelBadges)
+                            {
+                                <span class="badge bg-dark text-secondary me-1 mb-1" title="@edgeGroups.Count distinct edge labels in total">+@(edgeGroups.Count - MaxLabelBadges) more</span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </details>
+    }
+}
+
+@code {
+    [Parameter] public JsonElement GraphData { get; set; }
+    [Parameter] public JsonElement FallbackData { get; set; }
+    [Parameter] public double? QueryMs { get; set; }
+
+    //Most distinct labels to render as badges; the rest collapse into a "+N more" chip. Keeps a graph
+    //with thousands of unique labels from emitting a badge per label (slow) and overflowing the panel.
+    private const int MaxLabelBadges = 50;
+
+    //Formats an elapsed query time: whole milliseconds, switching to seconds past 1000 ms.
+    private static string FormatMs(double ms)
+    {
+        if (ms >= 1000)
+            return $"{ms / 1000:0.##} s";
+        else
+            return $"{ms:0} ms";
+    }
+
+    private JsonElement Data
+    {
+        get
+        {
+            if (GraphData.ValueKind != JsonValueKind.Undefined)
+                return GraphData;
+            else
+                return FallbackData;
+        }
+    }
+
+    //Walking the graph is the expensive part, and this component renders whenever Home does — which is on
+    //every selection, tab switch and staged edit, not only when the graph changed. So it is done here,
+    //where a JsonElement that is the same document at the same index means the same graph and can be
+    //skipped, rather than in the markup where it ran every time.
+    private GraphDataConverter.GraphTable table;
+    private List<IGrouping<string, GraphDataConverter.GraphRow>> nodeGroups = new();
+    private List<IGrouping<string, GraphDataConverter.GraphRow>> edgeGroups = new();
+
+    private JsonElement lastData;
+    private bool read;
+
+    protected override void OnParametersSet()
+    {
+        var data = Data;
+
+        if (read && data.Equals(lastData))
+            return;
+
+        read = true;
+        lastData = data;
+
+        if (data.ValueKind == JsonValueKind.Undefined)
+        {
+            table = null;
+
+            return;
+        }
+
+        table = GraphDataConverter.ToTable(data);
+        nodeGroups = table.Nodes.GroupBy(n => n.Label).OrderByDescending(g => g.Count()).ToList();
+        edgeGroups = table.Edges.GroupBy(e => e.Label).OrderByDescending(g => g.Count()).ToList();
+    }
+}

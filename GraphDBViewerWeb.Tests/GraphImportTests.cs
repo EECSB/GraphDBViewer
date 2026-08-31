@@ -147,7 +147,7 @@ public class GraphImportTests
     {
         var g = GraphImport.Parse("digraph { alice [type=person, label=\"Alice\"] ; alice -> bob [label=knows] }");
 
-        var gremlin = GraphImport.ToGremlin(g);
+        var gremlin = GraphImport.ToQueries(g);
 
         Assert.Contains("g.addV('person').property(T.id, 'alice')", gremlin);
         Assert.Contains(".property('name', 'Alice')", gremlin);
@@ -168,7 +168,7 @@ public class GraphImportTests
         ]
         """);
 
-        var gremlin = GraphImport.GremlinFromJson(data);
+        var gremlin = GraphImport.QueriesFromJson(data);
 
         Assert.Contains("g.addV('person').property(T.id, 'a')", gremlin);
         Assert.Contains(".property('name', 'Alice')", gremlin);
@@ -190,7 +190,7 @@ public class GraphImportTests
         ]
         """);
 
-        var gremlin = GraphImport.GremlinFromJson(data);
+        var gremlin = GraphImport.QueriesFromJson(data);
 
         Assert.Contains("g.addV('person').property(T.id, 1)", gremlin);
         Assert.Contains(".property('name', 'Alice')", gremlin);

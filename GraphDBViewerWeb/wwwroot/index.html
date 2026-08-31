@@ -15,15 +15,54 @@
             base.setAttribute('href', window.location.pathname);
         }
     </script>
+    <script>
+        //localStorage writes are best-effort in this app: a full quota (or storage disabled in private
+        //browsing) must never throw into Blazor's interop layer, which pops the framework's fatal-error bar
+        //even when the app has handled the failure. Wrapping setItem here — before Blazor boots, so its
+        //storage layer captures the wrapped version — swallows the error and flags it; LocalAppStorage polls
+        //that flag after each write and raises a friendly "storage is full" warning instead of crashing.
+        (function () {
+            try {
+                const proto = window.Storage && window.Storage.prototype;
+
+                if (!proto || proto.__gdbvSafeSetItem)
+                    return;
+
+                const original = proto.setItem;
+                let failed = false;
+
+                proto.setItem = function (key, value) {
+                    try {
+                        return original.call(this, key, value);
+                    }
+                    catch (e) {
+                        failed = true;
+                    }
+                };
+
+                proto.__gdbvSafeSetItem = true;
+
+                window.gdbvStorage = {
+                    //Returns whether a write has failed since the last call, then clears the flag.
+                    takeWriteFailed: function () {
+                        const f = failed;
+                        failed = false;
+                        return f;
+                    }
+                };
+            }
+            catch (e) { }
+        })();
+    </script>
     <link rel="preload" id="webassembly" />
-    <link rel="stylesheet" href="lib/bootstrap/dist/css/bootstrap.min.css" />
-    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="_content/GraphDBViewer.Core/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="_content/GraphDBViewer.Core/css/app.css" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link href="GraphDBViewerWeb.styles.css" rel="stylesheet" />
     <link href="manifest.webmanifest" rel="manifest" />
     <link rel="apple-touch-icon" href="favicon.svg" />
     <script type="importmap">
-        { "imports": { "three": "./lib/js/three.module.min.js" } }
+        { "imports": { "three": "./_content/GraphDBViewer.Core/lib/js/three.module.min.js" } }
     </script>
 </head>
 
@@ -41,24 +80,26 @@
         <a href="." class="reload">Reload</a>
         <span class="dismiss">🗙</span>
     </div>
-    <script src="lib/js/cytoscape.min.js"></script>
-    <script src="lib/js/cytoscape-svg.js"></script>
-    <script src="lib/js/3d-force-graph.min.js"></script>
+    <script src="_content/GraphDBViewer.Core/lib/js/cytoscape.min.js"></script>
+    <script src="_content/GraphDBViewer.Core/lib/js/cytoscape-svg.js"></script>
+    <script src="_content/GraphDBViewer.Core/lib/js/3d-force-graph.min.js"></script>
     <!-- three.js as an ES module (the UMD build is deprecated / warns) — exposed as a global so the
          classic interop scripts can use it without themselves becoming modules. -->
     <script type="module">import * as THREE from 'three'; window.THREE = THREE;</script>
-    <script src="js/graphGeometry.js"></script>
-    <script src="js/CytoscapeInterop.js"></script>
-    <script src="js/3dForceGraphInterop.js"></script>
-    <script src="js/ModelPreviewInterop.js"></script>
-    <script src="js/XrViewerInterop.js"></script>
-    <script src="js/KeyboardInterop.js"></script>
-    <script src="js/ExportInterop.js"></script>
-    <script src="cloudConfig.js"></script>
-    <script src="js/CloudPickerInterop.js"></script>
-    <script src="js/MonacoInterop.js"></script>
-    <script src="js/SplitterInterop.js"></script>
-    <script src="js/UrlCheckInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/graphGeometry.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/CytoscapeInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/3dForceGraphInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/ModelPreviewInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/XrViewerInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/KeyboardInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/ExportInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/MonacoInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/SplitterInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/FloatingDialogInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/UrlCheckInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/IndexedDbInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/Neo4jInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/GunInterop.js"></script>
     <script src="_framework/blazor.webassembly.js"></script>
     <script>navigator.serviceWorker.register('service-worker.js', { updateViaCache: 'none' });</script>
 </body>

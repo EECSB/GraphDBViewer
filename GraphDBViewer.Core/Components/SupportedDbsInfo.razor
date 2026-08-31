@@ -1,0 +1,54 @@
+@* Explainer for the "Which databases can I connect to?" toggle: how a connection reaches a database, and
+   what that means per engine. What it says depends on the deployment — a build with no host behind it has
+   only the browser route, and saying otherwise would offer a choice that is not on screen. *@
+
+@inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+
+<div class="mb-2">
+    @if (HostOptions.HasServerRoute)
+    {
+        <div class="small mb-2">Connections run either <strong>directly from your browser</strong> or <strong>through the host</strong>, which is the "Make requests from" choice. Browser-direct needs the database reachable over <strong>HTTP(S) with CORS</strong>, <strong>WebSocket</strong> or <strong>Bolt over WebSocket</strong>; routing through the host also reaches endpoints that send no CORS headers, speak a raw-socket protocol, or sit on a private network.</div>
+    }
+    else
+    {
+        <div class="small mb-2">Connections run <strong>directly from your browser</strong>, which needs the database reachable over <strong>HTTP(S) with CORS</strong>, <strong>WebSocket</strong> or <strong>Bolt over WebSocket</strong>. The <strong>server edition</strong> adds a second route where the host makes the connection instead. That route also reaches endpoints that send no CORS headers, speak a raw-socket protocol, or sit on a private network.</div>
+    }
+
+    <table class="table table-sm mb-0" style="font-size: 0.8em;">
+        <thead>
+            <tr><th>Database</th><th>Language</th><th>Browser transport</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>TinkerPop: JanusGraph, TinkerGraph, Cosmos DB…</td><td>Gremlin</td><td>WebSocket / HTTP</td><td><span class="badge bg-success">Supported</span></td></tr>
+            <tr><td>RDF stores: Fuseki, Blazegraph, GraphDB, Virtuoso; Wikidata / DBpedia</td><td>SPARQL</td><td>HTTP + CORS</td><td><span class="badge bg-success">Supported</span></td></tr>
+            <tr><td>Neo4j, Memgraph</td><td>Cypher</td><td>Bolt over WebSocket</td><td><span class="badge bg-success">Supported</span></td></tr>
+            <tr><td>ArangoDB</td><td>AQL</td><td>HTTP + CORS</td><td><span class="badge bg-success">Supported</span></td></tr>
+            <tr><td>Dgraph</td><td>DQL</td><td>HTTP + CORS</td><td><span class="badge bg-success">Supported</span></td></tr>
+            <tr><td>GUN</td><td>path (no query language)</td><td>WebSocket, browser only</td><td><span class="badge bg-success">Supported</span></td></tr>
+            @* Neptune speaks Gremlin, which this app already has a driver for — what stops the browser is
+               the network, and a host inside the VPC is exactly what removes that. NebulaGraph is a
+               different problem: no driver exists here for its protocol, so no route helps. *@
+            <tr>
+                <td>Amazon Neptune</td>
+                <td>Gremlin</td>
+                <td>VPC, no CORS</td>
+                <td>
+                    @if (HostOptions.HasServerRoute)
+                    {
+                        <span class="badge bg-success">Supported through the host</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-secondary">Needs the server edition</span>
+                    }
+                </td>
+            </tr>
+            <tr><td>NebulaGraph</td><td>—</td><td>binary protocol</td><td><span class="badge bg-secondary">No driver</span></td></tr>
+        </tbody>
+    </table>
+
+    @if (HostOptions.HasServerRoute)
+    {
+        <div class="small text-muted mt-2">Neptune needs the host to sit inside its VPC, and to have IAM database authentication off, because requests are not SigV4-signed.</div>
+    }
+</div>

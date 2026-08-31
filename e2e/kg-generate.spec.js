@@ -1,4 +1,4 @@
-//Knowledge-graph generation, end to end. The AI provider is faked by intercepting the browser's own
+﻿//Knowledge-graph generation, end to end. The AI provider is faked by intercepting the browser's own
 //call to api.anthropic.com with page.route — the whole app-side pipeline (prompt, HTTP, parse, fold,
 //preview, stage, render) runs for real, and no tokens are spent. The merge round-trip against a live
 //Gremlin server is opt-in via GREMLIN_E2E_HOST, matching expansion-live.spec.js; it commits three
@@ -66,18 +66,31 @@ async function routeFakeProvider(page, replies, delayMs) {
     });
 }
 
-//Opens the ✨ modal from the Import panel (open at boot) and saves a throwaway Anthropic model so the
-//Generate button enables. The API key never leaves the browser — the provider call is intercepted.
+//Saves a throwaway Anthropic model so the Generate button enables, then opens the ✨ modal and picks it.
+//Models are kept under Settings now — this panel only chooses one — so that is where it is added. The
+//API key never leaves the browser: the provider call is intercepted.
 async function openModalWithModel(page) {
+    const panel = '.gdbv-dialog:not(.d-none)';
+
+    await page.getByRole('button', { name: /Settings/ }).click();
+    await page.getByRole('button', { name: 'AI settings', exact: true }).click();
+    await expect(page.locator(panel)).toBeVisible();
+
+    await page.locator(panel).getByTitle('Add an AI model').click();
+    await page.locator(panel).getByPlaceholder('e.g. Claude Opus').fill('Fake');
+    await page.locator(panel).locator('input[type="password"]').fill('not-a-real-key');
+    await page.locator(panel).getByRole('button', { name: 'Add', exact: true }).click();
+
+    await page.locator(panel + ' .btn-close').click();
+    await expect(page.locator(panel)).toHaveCount(0);
+
     await page.getByRole('button', { name: /Generate with AI/ }).click();
 
-    const modal = page.locator('.modal-content');
-    await expect(modal.getByText('Generate a graph from text')).toBeVisible();
+    const modal = page.locator(panel);
+    await expect(modal.getByText('Generate a knowledge graph')).toBeVisible();
 
-    await modal.getByTitle('Add an AI model').click();
-    await modal.getByPlaceholder('e.g. Claude Opus').fill('Fake');
-    await modal.locator('input[type="password"]').fill('not-a-real-key');
-    await modal.getByRole('button', { name: 'Add', exact: true }).click();
+    //Not necessarily the only model on offer: a Development build seeds whatever dev-secrets.json holds.
+    await modal.locator("select[title^='Which saved AI model']").selectOption('Fake');
 
     return modal;
 }
@@ -107,17 +120,20 @@ test('generate → replace renders the graph offline and stages it', async ({ pa
     expect(await cyPositions(page)).toHaveLength(2);
 });
 
-//The spec's worry — an in-flight generation destroyed by the panel closing underneath it — is designed
-//out by the modal: its backdrop blocks every user path that could close the panel while a generation
-//runs (this test proves the backdrop does its job), and the programmatic force-close paths only touch
-//showImportExport, never the modal. The direct panel-closes-under-the-modal assertion lives in
-//HomeMarkupTests, where bUnit can dispatch the click the backdrop occludes here.
-test('a slow generation completes in the modal, which the panel beneath cannot disturb', async ({ page }) => {
+//The spec's worry — an in-flight generation destroyed by the panel closing underneath it — used to be
+//answered by the backdrop, which simply blocked the click. The window does not block anything now, so
+//the guarantee has to come from where it is rendered: the dialog is a sibling of the import panel in
+//Home, not a child of it, and closing the panel therefore cannot unmount it. This closes the panel
+//mid-generation and proves the answer arrives anyway.
+test('a slow generation survives the panel beneath it closing', async ({ page }) => {
     await gotoApp(page);
     await routeFakeProvider(page, [REPLY_ONE], 1200);
 
     const modal = await openModalWithModel(page);
     await generate(modal, 'Alice works at Acme.');
+
+    //Reachable now, and pressed while the request is still out.
+    await page.getByRole('button', { name: /Import \/ Export/ }).click();
 
     await expect(modal.getByText('2 node(s) · 1 edge(s)')).toBeVisible({ timeout: 15000 });
 });
@@ -139,7 +155,7 @@ test('merge folds the shared entity to one node and commits without an id collis
 
     //Second document names the same company. Merge previews the post-fold result…
     await page.getByRole('button', { name: /Import \/ Export/ }).click();
-    modal = page.locator('.modal-content');
+    modal = page.locator('.gdbv-dialog:not(.d-none)');
     await page.getByRole('button', { name: /Generate with AI/ }).click();
     await generate(modal, 'Bob also works at Acme Inc.');
     await modal.getByRole('button', { name: 'Merge into drawing', exact: true }).click();
@@ -172,4 +188,73 @@ test('merge folds the shared entity to one node and commits without an id collis
     //committed." status renders only in the element-properties sidebar, which this flow never opens.)
     await expect(commit).toBeDisabled({ timeout: 20000 });
     await expect(page.getByText(/Queries generated from property changes will appear here/)).toBeVisible();
+});
+
+//The three ways into the source box stand side by side, and the middle one takes a dropped file. The
+//panel is only what you see: a native file input stretched invisibly over it is what catches the file,
+//which is why dropping and clicking both work without either being wired up separately.
+test('a file dropped on the panel loads its text', async ({ page }) => {
+    await gotoApp(page);
+    await page.getByRole('button', { name: /Generate with AI/ }).click();
+
+    const modal = page.locator('.gdbv-dialog:not(.d-none)');
+    await expect(modal).toBeVisible();
+
+    const laidOut = await modal.evaluate(p => {
+        const box = el => el.getBoundingClientRect();
+        const text = box(p.querySelector('.gdbv-source-text'));
+        const zone = box(p.querySelector('.gdbv-dropzone'));
+        const input = box(p.querySelector('.gdbv-dropzone-input'));
+        const wiki = box(p.querySelector("input[placeholder*='Wikipedia']"));
+
+        return {
+            inOrder: text.x < zone.x && zone.x < wiki.x,
+            onOneRow: Math.abs(text.y - zone.y) < 4,
+            //If the input stops covering the panel, dropping silently stops working while clicking still does.
+            inputCoversPanel: Math.abs(input.width - zone.width) < 3 && Math.abs(input.height - zone.height) < 3
+        };
+    });
+
+    expect(laidOut.inOrder).toBe(true);
+    expect(laidOut.onOneRow).toBe(true);
+    expect(laidOut.inputCoversPanel).toBe(true);
+
+    //A dropped file arrives at that same input, so setting it exercises the path a drop takes.
+    await modal.locator('.gdbv-dropzone-input').setInputFiles({
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('Alice works at Acme. Bob knows Alice.')
+    });
+
+    await expect(modal.locator('.gdbv-source-text')).toHaveValue(/Alice works at Acme/, { timeout: 10000 });
+
+    //And it says which file it read, since the input that read it cannot be seen.
+    await expect(modal).toContainText('notes.txt');
+});
+
+//A real PDF, dropped on the panel. This is the only test that proves the lazy-loaded reader works: the
+//PdfPig assemblies are kept out of the boot manifest (BlazorWebAssemblyLazyLoad in the host's project
+//file), so nothing touches them until this path runs and LazyPdfReaderLoader fetches them. A bUnit test
+//cannot show that — it runs on a CLR where every assembly is already present.
+test('a dropped PDF loads its text, fetching the reader on demand', async ({ page }) => {
+    const framework = [];
+    page.on('request', r => { if (r.url().includes('_framework/')) framework.push(r.url()); });
+
+    await gotoApp(page);
+    await page.getByRole('button', { name: /Generate with AI/ }).click();
+
+    const modal = page.locator('.gdbv-dialog:not(.d-none)');
+    await expect(modal).toBeVisible();
+
+    //Nothing has asked for a PDF yet, so the reader must not have been downloaded.
+    expect(framework.filter(u => u.includes('PdfPig'))).toHaveLength(0);
+
+    await modal.locator('.gdbv-dropzone-input').setInputFiles(require('path').join(__dirname, 'assets', 'sample.pdf'));
+
+    await expect(modal.locator('.gdbv-source-text')).toHaveValue(/Acme Robotics/, { timeout: 30000 });
+    await expect(modal.locator('.gdbv-source-text')).toHaveValue(/Vision team/);
+    await expect(modal).toContainText('sample.pdf');
+
+    //And it was fetched, rather than having been in the boot payload all along.
+    expect(framework.filter(u => u.includes('PdfPig')).length).toBeGreaterThan(0);
 });

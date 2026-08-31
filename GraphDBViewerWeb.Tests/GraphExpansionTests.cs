@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using GraphDBViewerWeb.Code;
@@ -39,6 +40,71 @@ public class GraphExpansionTests
         //Vertex "2" appears in both inputs but should be merged once.
         Assert.Equal(3, table.Nodes.Count);
         Assert.Single(table.Edges);
+    }
+
+    [Fact]
+    public void MergeGraphResults_ALaterAnswerReplacesRatherThanBeingWeighed()
+    {
+        //A live update is not another view of the same moment: a property the peer removed has to go, even
+        //though that makes the newer version the barer one.
+        var drawn = JsonSerializer.Deserialize<JsonElement>("""
+        [ { "id": "alice", "label": "Person", "properties": { "name": "Alice", "age": "30" } } ]
+        """);
+
+        var pushed = JsonSerializer.Deserialize<JsonElement>("""
+        [ { "id": "alice", "label": "Person", "properties": { "name": "Alice" } } ]
+        """);
+
+        var node = Assert.Single(GraphDataConverter.ToTable(GraphDataConverter.MergeGraphResults(drawn, pushed, true)).Nodes);
+
+        Assert.False(node.Properties.ContainsKey("age"));
+    }
+
+    [Fact]
+    public void WithoutEdgesFrom_ClearsANodesEdgesSoAReplacementDoesNotLinger()
+    {
+        //GUN keeps a node's links as keys, and a key holds one link — so re-pointing "knows" replaces the
+        //edge rather than adding one. The pushed edges merge straight back in; only what really went stays gone.
+        var drawn = JsonSerializer.Deserialize<JsonElement>("""
+        [
+          { "id": "alice", "label": "Person" },
+          { "id": "bob", "label": "Person" },
+          { "id": "e1", "label": "knows", "outV": "alice", "inV": "bob" },
+          { "id": "e2", "label": "worksAt", "outV": "bob", "inV": "acme" }
+        ]
+        """);
+
+        var table = GraphDataConverter.ToTable(GraphDataConverter.WithoutEdgesFrom(drawn, new HashSet<string> { "alice" }));
+
+        //Alice's edge went; an edge that merely points at her would not have.
+        Assert.Single(table.Edges);
+        Assert.Equal("worksAt", table.Edges[0].Label);
+        Assert.Equal(2, table.Nodes.Count);
+    }
+
+    [Fact]
+    public void MergeGraphResults_TheFullerVersionOfANodeWins()
+    {
+        //An expand answers with the clicked node as a bare edge endpoint on some engines and as the whole
+        //node on others, so neither side can simply be preferred. GUN is the second case: it stands in an
+        //empty node for a link target it never walked, and the walk that finally reads it must win.
+        var placeholder = JsonSerializer.Deserialize<JsonElement>("""
+        [ { "id": "bob", "label": "node", "properties": {} } ]
+        """);
+
+        var walked = JsonSerializer.Deserialize<JsonElement>("""
+        [ { "id": "bob", "label": "Person", "properties": { "name": "Bob", "age": "41" } } ]
+        """);
+
+        var node = Assert.Single(GraphDataConverter.ToTable(GraphDataConverter.MergeGraphResults(placeholder, walked)).Nodes);
+
+        Assert.Equal("Person", node.Label);
+        Assert.Equal("Bob", node.Properties["name"]);
+
+        //And the other way round: what is already loaded is not thrown away by a barer answer.
+        var kept = Assert.Single(GraphDataConverter.ToTable(GraphDataConverter.MergeGraphResults(walked, placeholder)).Nodes);
+
+        Assert.Equal("Person", kept.Label);
     }
 
     [Fact]

@@ -1,0 +1,288 @@
+@using GraphDBViewerWeb.Code
+@inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+
+<div class="card gdbv-tint d-flex flex-row flex-wrap align-items-center gap-2 mb-2 p-2">
+
+    <img src="favicon.svg" alt="@HostOptions.AppName logo" class="ms-1" style="width: 2.2rem; height: 1.8rem; flex-shrink: 0;" />
+
+    @* A deployment that names its edition gets the label under the title; one that does not keeps the
+       plain heading, and its own right margin with it. *@
+    @if (!string.IsNullOrEmpty(HostOptions.EditionLabel))
+    {
+        <div class="d-flex flex-column me-5" style="line-height: 1;">
+            <h1 class="mb-0" style="font-size: 1.25rem; line-height: 1;">@HostOptions.AppName</h1>
+            <span style="font-size: 0.62rem; color: #d4af37; align-self: flex-end;">@HostOptions.EditionLabel</span>
+        </div>
+    }
+    else
+    {
+        <h1 class="mb-0 me-5" style="font-size: 1.25rem; line-height: 1;">@HostOptions.AppName</h1>
+    }
+
+    <button class="btn @ConnectionButtonClass btn-sm @(Pulse ? "gdbv-pulse" : "")" @onclick="OnToggleConnectionCard" title="@(Offline && !IsConnected ? "Offline drawing mode: open the connection card to exit it or connect" : null)">
+        @ConnectionButtonText
+        <span class="ms-1">@(ConnectionCardExpanded ? "▲" : "▼")</span>
+    </button>
+
+    <button class="btn btn-outline-secondary btn-sm ms-2 text-body-emphasis" @onclick="OnToggleImportExport">
+        Import / Export
+        <span class="ms-1">@(ImportExportExpanded ? "▲" : "▼")</span>
+    </button>
+
+    @* Feature showcase — opens the full-screen showcase overlay, for a deployment that bundles one.
+       Starts the right-aligned button group when it is here; the full-width toggle does when it is not. *@
+    @if (!string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
+    {
+        <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis ms-auto" @onclick="OnShowShowcase" title="Open the feature showcase">
+            Feature showcase ✨
+        </button>
+    }
+
+    @* Full-width toggle: drops the side margins so the layout fills the viewport. *@
+    <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis @(string.IsNullOrEmpty(HostOptions.ShowcaseUrl) ? "ms-auto" : "ms-2") @(FullScreen ? "active" : null)" @onclick="OnToggleFullScreen" aria-pressed="@(FullScreen ? "true" : "false")" title="@(FullScreen ? "Exit full-width: restore the side margins" : "Full-width: remove the side margins")">
+        @if (FullScreen)
+        {
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
+                <path d="M5.5 0a.5.5 0 0 1 .5.5v4A1.5 1.5 0 0 1 4.5 6h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5m5 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 10 4.5v-4a.5.5 0 0 1 .5-.5M0 10.5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 6 11.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5m10 1a1.5 1.5 0 0 1 1.5-1.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0z"/>
+            </svg>
+        }
+        else
+        {
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
+                <path d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5M.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5m15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5"/>
+            </svg>
+        }
+    </button>
+
+    @* Settings dropdown (right side) — holds the theme switch, About, and future options. *@
+    <div class="position-relative ms-2">
+        <button class="btn btn-outline-secondary btn-sm text-body-emphasis" @onclick="() => showSettings = !showSettings" title="Settings">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
+                <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492M5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0"/>
+                <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 0 0 1.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 0 0 3.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.115z"/>
+            </svg>
+            Settings <span class="ms-1">@(showSettings ? "▲" : "▼")</span>
+        </button>
+
+        @if (showSettings)
+        {
+            @* Transparent full-viewport backdrop: a click anywhere outside the menu closes it. *@
+            <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="() => showSettings = false"></div>
+
+            <div class="card position-absolute end-0 mt-1 py-1 shadow" style="z-index: 1080; min-width: 225px;">
+                @* Theme picker. The choices fly out beside the row rather than pushing everything
+                   below them down the menu, so the card keeps its height whatever is open. Hovering
+                   the row opens it and leaving the row or the flyout closes it; both sit inside the
+                   same element, so crossing from one to the other never leaves it. The click is kept
+                   for touch, where there is no hover to have. *@
+                <div class="position-relative border-bottom" @onmouseenter="() => showThemes = true" @onmouseleave="() => showThemes = false">
+                    <button class="dropdown-item d-flex align-items-center gap-2 px-3 py-2" @onclick="() => showThemes = !showThemes">
+                        @* The arrow leads the label and points the way the flyout opens. *@
+                        <span>◀</span>
+                        <span>Theme</span>
+                    </button>
+
+                    @if (showThemes)
+                    {
+                        <div class="card position-absolute top-0 end-100 py-1 shadow" style="z-index: 1090; min-width: 150px;">
+                            @foreach (var choice in ThemeChoices)
+                            {
+                                <button class="dropdown-item d-flex align-items-center gap-2 px-3 py-2" @onclick="() => PickThemeAsync(choice.Key)">
+                                    @* A fixed-width slot so the labels line up whether or not one is ticked. *@
+                                    <span style="width: 1em;">@(Theme == choice.Key ? "✓" : "")</span>
+                                    <span>@choice.Label</span>
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+
+                @* Query settings, the same shape as Theme above it: the limits open beside the row on
+                   hover instead of lengthening the menu, with the arrow leading the label. *@
+                <div class="position-relative border-bottom" @onmouseenter="() => showQuerySettings = true" @onmouseleave="() => showQuerySettings = false">
+                    <button class="dropdown-item d-flex align-items-center gap-2 px-3 py-2" @onclick="() => showQuerySettings = !showQuerySettings">
+                        <span>◀</span>
+                        <span>Query settings</span>
+                    </button>
+
+                    @if (showQuerySettings)
+                    {
+                        <div class="card position-absolute top-0 end-100 py-1 shadow" style="z-index: 1090; min-width: 230px;">
+                            <label class="d-flex align-items-center justify-content-between px-3 py-2 mb-0" title="Max vertices a query or Load DB pulls from the database (same as the query-limit box by the editor)">
+                                <span>Query limit</span>
+                                <input class="form-control form-control-sm m-0" type="number" min="1" style="width: 5rem;" value="@QueryLimit" @onchange="OnQueryLimitInput" />
+                            </label>
+                            <label class="d-flex align-items-center justify-content-between px-3 py-2 mb-0" title="The most neighbors pulled in when you double-click a node to expand it">
+                                <span>Expand limit</span>
+                                <input class="form-control form-control-sm m-0" type="number" min="1" max="5000" style="width: 5rem;" value="@ExpansionLimit" @onchange="OnExpansionLimitInput" />
+                            </label>
+                        </div>
+                    }
+                </div>
+
+                <button class="dropdown-item px-3 py-2 border-bottom" @onclick="ShowLlmSettingsFromMenu">AI settings</button>
+                <button class="dropdown-item px-3 py-2" @onclick="ShowAboutFromMenu">About</button>
+            </div>
+        }
+    </div>
+
+    @* Account menu. Absent entirely when the deployment runs without sign-in — there is one built-in user
+       everybody is, so there would be nothing behind this to manage. *@
+    @if (Account != null && Account.HasAccounts)
+    {
+        <div class="position-relative ms-2">
+            <button class="btn btn-outline-secondary btn-sm d-flex align-items-center gap-2 text-body-emphasis"
+                    @onclick="() => showAccount = !showAccount"
+                    title="@($"Signed in as {Account.DisplayName}")"
+                    aria-haspopup="true" aria-expanded="@(showAccount ? "true" : "false")">
+                <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary text-white"
+                      style="width: 1.35rem; height: 1.35rem; font-size: .7rem; font-weight: 600;" aria-hidden="true">@Account.Initial</span>
+                <span class="ms-1">@(showAccount ? "▲" : "▼")</span>
+            </button>
+
+            @if (showAccount)
+            {
+                @* Same transparent backdrop the Settings menu uses: a click anywhere else closes this. *@
+                <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="() => showAccount = false"></div>
+
+                <div class="card position-absolute end-0 mt-1 py-1 shadow" style="z-index: 1080; min-width: 240px;">
+                    <div class="px-3 py-2 border-bottom">
+                        <div class="text-body-secondary" style="font-size: .75rem;">Signed in as</div>
+                        <div class="text-truncate" title="@Account.DisplayName">@Account.DisplayName</div>
+                    </div>
+
+                    @* Real links and a real form, not click handlers: these leave the WebAssembly app for
+                       server-rendered pages, and signing out has to be a POST the server can verify. *@
+                    <a class="dropdown-item px-3 py-2 text-decoration-none" href="/account">Account settings</a>
+
+                    <form method="post" action="/logout" class="m-0">
+                        <input type="hidden" name="__RequestVerificationToken" value="@Account.AntiforgeryToken" />
+                        <button type="submit" class="dropdown-item px-3 py-2 text-danger">Sign out</button>
+                    </form>
+                </div>
+            }
+        </div>
+    }
+
+</div>
+
+@code {
+    [Parameter] public bool IsConnected { get; set; }
+    [Parameter] public bool Offline { get; set; }
+    [Parameter] public bool Pulse { get; set; }
+    [Parameter] public string Hostname { get; set; }
+    [Parameter] public int Port { get; set; }
+    [Parameter] public bool ConnectionCardExpanded { get; set; }
+    [Parameter] public bool ImportExportExpanded { get; set; }
+    ///<summary>Which theme is on: "dark", "light" (Light 1) or "light-tinted" (Light 2).</summary>
+    [Parameter] public string Theme { get; set; }
+    [Parameter] public bool FullScreen { get; set; }
+    [Parameter] public int ExpansionLimit { get; set; }
+    [Parameter] public EventCallback<int> OnExpansionLimitChanged { get; set; }
+    [Parameter] public int QueryLimit { get; set; }
+    [Parameter] public EventCallback<int> OnQueryLimitChanged { get; set; }
+    [Parameter] public EventCallback OnToggleConnectionCard { get; set; }
+    [Parameter] public EventCallback OnToggleImportExport { get; set; }
+    [Parameter] public EventCallback<string> OnThemeChanged { get; set; }
+    [Parameter] public EventCallback OnToggleFullScreen { get; set; }
+    [Parameter] public EventCallback OnShowAbout { get; set; }
+    [Parameter] public EventCallback OnShowLlmSettings { get; set; }
+    [Parameter] public EventCallback OnShowShowcase { get; set; }
+
+    ///<summary>Who is signed in, or null while that is still being asked / when the host has no accounts.</summary>
+    [Parameter] public AccountInfo Account { get; set; }
+
+    //The connection button doubles as the app's mode indicator: green when connected, blue while drawing
+    //offline, gray otherwise. Offline mode used to be invisible here — the bar kept saying "Disconnected"
+    //while the card holding the "Exit offline mode" toggle had closed, leaving no visible way back out.
+    private string ConnectionButtonClass
+    {
+        get
+        {
+            if (IsConnected)
+                return "btn-outline-success";
+
+            if (Offline)
+                return "btn-outline-primary";
+
+            return "btn-outline-secondary";
+        }
+    }
+
+    private string ConnectionButtonText
+    {
+        get
+        {
+            if (IsConnected)
+                return $"Connected: {HostLabel}";
+
+            if (Offline)
+                return "Offline mode";
+
+            return $"Disconnected: {HostLabel}";
+        }
+    }
+
+    private string HostLabel
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(Hostname))
+                return $"No host:{Port}";
+
+            return $"{Hostname}:{Port}";
+        }
+    }
+
+    //Whether the Settings dropdown is open. The theme switch keeps it open (a live toggle);
+    //About closes it since it opens a modal.
+    private bool showSettings;
+
+    //Whether the "Query settings" flyout (query limit + expand limit) is open. Closed until the row
+    //is hovered, like the theme choices above it.
+    private bool showQuerySettings = false;
+
+    //Whether the account menu is open. Both of its items leave the page, so nothing closes it by hand.
+    private bool showAccount;
+
+    private bool showThemes;
+
+    ///<summary>The three themes, in the order the menu lists them.</summary>
+    private static readonly (string Key, string Label)[] ThemeChoices =
+    [
+        ("dark", "Dark"),
+        ("light", "Light 1"),
+        ("light-tinted", "Light 2")
+    ];
+
+    private async Task ShowLlmSettingsFromMenu()
+    {
+        showSettings = false;
+        await OnShowLlmSettings.InvokeAsync();
+    }
+
+    private async Task PickThemeAsync(string key)
+    {
+        showSettings = false;
+        showThemes = false;
+        await OnThemeChanged.InvokeAsync(key);
+    }
+
+    private async Task ShowAboutFromMenu()
+    {
+        showSettings = false;
+        await OnShowAbout.InvokeAsync();
+    }
+
+    private async Task OnExpansionLimitInput(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+            await OnExpansionLimitChanged.InvokeAsync(value);
+    }
+
+    private async Task OnQueryLimitInput(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+            await OnQueryLimitChanged.InvokeAsync(value);
+    }
+}

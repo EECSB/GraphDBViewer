@@ -1,0 +1,51 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!--The platform's shared core, extracted as a Razor class library so the same code and assets serve the
+      full-stack app and the web-only build. A referencing app gets everything under wwwroot/ at
+      _content/GraphDBViewer.Core/ without copying or configuring anything.
+
+      It carries the viewer whole: the database engines behind IGraphDb, the graph/import/export code, the
+      LLM providers, the storage layer, every component and the Home page — plus the vendored Monaco editor
+      and the rest of the JS interop. What stays behind in a host project is only what a host is: its
+      composition root (Program.cs), its router, and its PWA shell.
+
+      Monaco came across first and alone, deliberately: it is the asset most likely to break the
+      extraction, because it resolves its own module ids and web-worker script at runtime from a configured
+      base path, and a wrong one leaves the editor rendering while the services behind it never start.
+      Proving it settled open decision O1 — Cytoscape, three.js and the exporters followed as plain asset
+      URLs with no worker between them.
+
+      Named GraphDBViewer.Core rather than Treeality.Core on purpose (open decision O11): the core is
+      shared with the web-only app, which keeps that name.-->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!--Pinned for the same reason Treeality.Client pins it: Razor component namespaces derive from
+        RootNamespace, and the components moved here were authored as GraphDBViewerWeb.*. Keeping the root
+        namespace makes this extraction a pure file move — no component namespace changes, no @using churn
+        in the hosts, and the bUnit tests keep resolving the same type names.-->
+    <RootNamespace>GraphDBViewerWeb</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+
+    <!--The storage layer reads through Blazored directly for the one-time localStorage migration.-->
+    <PackageReference Include="Blazored.LocalStorage" Version="4.5.0" />
+
+    <!--The XR view offers the headset a QR code to open the session on.-->
+    <PackageReference Include="Net.Codecrete.QrCodeGenerator" Version="3.1.0" />
+
+    <!--Reads text out of a PDF for knowledge-graph generation. Pure managed code, so it runs in the
+        browser like the rest of this: the panel used to refuse a PDF on the grounds that there was no
+        extractor here, which was a statement about this project rather than about WebAssembly.-->
+    <PackageReference Include="PdfPig" Version="0.1.15" />
+  </ItemGroup>
+
+</Project>

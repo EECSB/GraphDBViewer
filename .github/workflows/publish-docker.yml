@@ -1,0 +1,187 @@
+# Publishes the backend edition to Docker Hub: the same WebAssembly app, served by a host that adds the
+# query proxy for databases a browser cannot reach. The web-only build needs none of this — see README.
+#
+# Set up once, on the repository:
+#   Settings > Secrets and variables > Actions > Variables:  DOCKERHUB_USERNAME
+#   Settings > Secrets and variables > Actions > Secrets:    DOCKERHUB_TOKEN  (a Docker Hub access token,
+#                                                            Read & Write, not the account password)
+#
+# Without those the job is skipped rather than failed, so a fork does not get a red tick for credentials
+# it was never meant to have.
+name: Publish Docker image
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Extra tag to publish under (optional)'
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: graphdbviewer-server
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+
+    # A fork has no credentials of its own and is not publishing this image, so it skips rather than
+    # fails. The canonical repository gets no such courtesy: there, absent credentials are a
+    # misconfiguration worth being told about. This used to skip on the username being unset, which made
+    # a misconfigured repository and an untriggered workflow look identical -- both simply "skipped".
+    if: github.event.repository.fork == false
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Fail here, naming what to set, rather than eight steps later inside docker/login-action's own
+      # "unauthorized: incorrect username or password" -- which is what an *unset* username looks like
+      # from in there, and sends you looking for a bad token.
+      - name: Check the Docker Hub credentials are set
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "::error::Set DOCKERHUB_USERNAME as a repository *variable* (Settings > Secrets and variables > Actions > Variables). A secret of that name will not do: this value is half the image name and gets printed, and a secret is masked to *** which would corrupt the tag."
+            exit 1
+          fi
+
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::Set DOCKERHUB_TOKEN as a repository *secret* to a Docker Hub access token with Read & Write permission (not the account password)."
+            exit 1
+          fi
+
+          echo "Publishing to $DOCKERHUB_USERNAME/${{ env.IMAGE_NAME }}"
+
+      # arm64 is emulated on an amd64 runner; the setup below is what makes that possible.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,format=short
+            type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
+          flavor: |
+            latest=auto
+
+      # Built for this runner's architecture first and kept locally, so the image can be run before
+      # anything is published. A container that starts but serves nothing is exactly the failure a
+      # registry push would otherwise hide until someone pulled it.
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:smoke-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          docker run -d --name smoke -p 8080:8080 "$IMAGE_NAME:smoke-test"
+
+          # The app is WebAssembly, so a runner cannot execute it — but the host serving it answers for
+          # itself, and these two answers are what the edition exists to provide.
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/api/graph/capabilities | grep -q '"serverRoute":true'; then
+              echo "the host answers as a proxying host"
+              curl -fsS http://localhost:8080/ | grep -qi '<html' && echo "the app is served"
+              docker rm -f smoke
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "the container never answered"
+          docker logs smoke
+          docker rm -f smoke
+          exit 1
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Docker Hub shows a repository's own description, not the GitHub README, and an empty one is how a
+      # published image reads as abandoned. DOCKERHUB.md is written for that page specifically.
+      #
+      # This is expected to fail, and is kept anyway. Read what it answers:
+      #
+      #     403 {"message":"access denied: insufficient scope"}
+      #
+      # The token authenticates fine -- it is good enough to push a multi-architecture image seconds
+      # earlier. It is refused here because a Read & Write personal access token cannot edit repository
+      # metadata, which is a Docker Hub scope boundary rather than a bug on this side. There is no
+      # documented operation to appeal to either: the published OpenAPI spec covers tags, immutable tags,
+      # groups and access tokens, and has nothing at all for a description.
+      #
+      # So the page is maintained by hand -- paste DOCKERHUB.md into "Repository overview" -- and this
+      # stays as a warning that names the reason, and as the thing that starts working by itself if Docker
+      # ever scopes a token for it.
+      #
+      # Never fatal, and never silent either: it reports its own failure as a warning and exits 0. No
+      # continue-on-error, which would rewrite the step's conclusion to "success" and hide precisely this.
+      - name: Update the Docker Hub description
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          # /v2/auth/token rather than the deprecated /v2/users/login, and jq builds the body, so nothing
+          # in the token needs escaping and nothing echoes it.
+          body=$(jq -n --arg i "$DOCKERHUB_USERNAME" --arg s "$DOCKERHUB_TOKEN" '{identifier: $i, secret: $s}')
+          code=$(printf '%s' "$body" | curl -sS -o auth.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/auth/token)
+
+          if [ "$code" != "200" ]; then
+            rm -f auth.json
+            echo "::warning::Docker Hub auth returned $code - description NOT updated. Paste DOCKERHUB.md into the Repository overview page by hand."
+            exit 0
+          fi
+
+          bearer=$(jq -r '.access_token // empty' auth.json)
+          rm -f auth.json
+
+          if [ -z "$bearer" ]; then
+            echo "::warning::Docker Hub auth returned 200 with no access_token - description NOT updated."
+            exit 0
+          fi
+
+          jq -Rs --arg short 'Graph database viewer with a server-side query proxy for databases a browser cannot reach' '{full_description: ., description: $short}' DOCKERHUB.md > body.json
+
+          code=$(curl -sS -o patch.json -w '%{http_code}' -X PATCH -H 'Content-Type: application/json' -H "Authorization: Bearer $bearer" -d @body.json "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/${{ env.IMAGE_NAME }}/")
+
+          if [ "$code" != "200" ]; then
+            echo "::warning::Docker Hub description PATCH returned $code - page left unchanged. Paste DOCKERHUB.md into Repository overview by hand."
+            head -c 400 patch.json 2>/dev/null || true
+            echo
+          else
+            echo "Docker Hub description updated."
+          fi
+
+          rm -f body.json patch.json

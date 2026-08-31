@@ -115,7 +115,33 @@ async function switchTo3d(page, expectedNodes) {
     }).toBe(expectedNodes);
 }
 
+//Collects everything the page logs as an error, for a test that asserts it logged none.
+//
+//One 404 is expected and filtered: a Development build asks for the git-ignored dev-secrets.json, which
+//is absent on any machine whose owner never wrote one, including CI. The app handles the absence; the
+//browser still logs the failed request, and that is not the kind of error these tests are looking for.
+function collectConsoleErrors(page) {
+    const errors = [];
+
+    page.on('console', m => {
+        if (m.type() !== 'error')
+            return;
+
+        //Chrome says only "Failed to load resource: ... 404" here; which resource is in location(),
+        //so the text alone cannot tell this one apart from any other failed request.
+        const from = (m.location() && m.location().url) || '';
+
+        if (!from.includes('dev-secrets.json') && !m.text().includes('dev-secrets.json'))
+            errors.push(m.text());
+    });
+
+    page.on('pageerror', e => errors.push(String((e && e.message) || e)));
+
+    return errors;
+}
+
 module.exports = {
+    collectConsoleErrors,
     SAMPLE_DOT,
     SAMPLE_NODE_COUNT,
     SAMPLE_PERSON_COUNT,

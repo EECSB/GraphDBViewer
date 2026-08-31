@@ -1,0 +1,253 @@
+﻿@* How the app reaches the database: who opens the connection — the host or the browser — and, for the
+   host/port databases, the transport and SSL that connection uses. Mutates the passed connection object
+   directly (it's a reference), so no change callback is needed — the caller reads the values back off
+   the same object. *@
+@using GraphDBViewerWeb.Code
+@inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+
+<div class="d-flex align-items-center gap-3 flex-wrap">
+    @if (ShowRoute && RouteChoiceOffered)
+    {
+        <div class="btn-group btn-group-sm" role="group" aria-label="Who opens the connection">
+            <button type="button"
+                    class="btn @(RouteIsServer ? "btn-primary" : "btn-outline-primary")"
+                    disabled="@Disabled"
+                    @onclick="ChooseServer">
+                Server
+            </button>
+            <button type="button"
+                    class="btn @(!RouteIsServer ? "btn-primary" : "btn-outline-primary")"
+                    disabled="@Disabled"
+                    @onclick="ChooseBrowser">
+                Browser
+            </button>
+        </div>
+    }
+
+    @if (ShowTransport)
+    {
+        <div class="btn-group btn-group-sm" role="group" aria-label="Transport protocol">
+            <button type="button"
+                    class="btn @(Connection.Transport == "HTTP" ? "btn-primary" : "btn-outline-primary")"
+                    disabled="@Disabled"
+                    @onclick='() => Connection.Transport = "HTTP"'>
+                HTTP
+            </button>
+            <button type="button"
+                    class="btn @(Connection.Transport == "WebSocket" ? "btn-primary" : "btn-outline-primary")"
+                    disabled="@Disabled"
+                    @onclick='() => Connection.Transport = "WebSocket"'>
+                WebSocket
+            </button>
+        </div>
+    }
+
+    @if (ShowSsl)
+    {
+        <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="@sslToggleId" @bind="Connection.UseSSL" disabled="@Disabled" />
+            <label class="form-check-label" for="@sslToggleId">SSL</label>
+        </div>
+
+        @*Shows the address that will actually be dialed, which is what the old "toggle SSL off or it will
+          fail" warning was really trying to say — except this one tracks the choice instead of nagging.*@
+        @* The address that will actually be dialed. It was text-secondary, the most muted colour the theme
+           has, which on a dark background made the one line worth reading the hardest one to read. *@
+        <code class="small gdbv-url-preview">@Scheme://@DisplayHost:@Connection.Port</code>
+    }
+</div>
+
+@if (showServerEditionNote)
+{
+    @* Reached by pressing Server on a build with no host. Rather than hide the choice, the button says
+       what the choice would be and where to get it. Nothing on the connection is changed. *@
+    <div class="alert alert-warning mt-2 mb-0 py-2 px-3 gdbv-route-note" style="font-size: 0.8em;">
+        @* One wrapper, so the box can center what is in it without the text inside becoming rows of its
+           own: a flex container turns every child into an item, and the warning sign, the bold lead and
+           the sentence after it are three children. *@
+        <div>
+            ⚠ <strong>This is the web-only edition.</strong> Everything runs in your browser, so there is no host to route a connection through.
+            <div class="mt-2">The <strong>server edition</strong> is the same app but with a backend. The whole thing is containerized in Docker. This way you can reach databases that don't support connections from the browser. <a href="@HostOptions.ServerEditionUrl" target="_blank" rel="noopener noreferrer">Get it on GitHub →</a></div>
+        </div>
+    </div>
+}
+
+@if (ShowRouteNote)
+{
+<div class="alert alert-warning mt-2 mb-0 py-2 px-3 gdbv-route-note" style="font-size: 0.8em;">
+    <div>
+    @if (!ShowRoute)
+    {
+        @*The route isn't a choice for this engine, so the note explains why rather than describing one.*@
+        <span>⚠ This database runs in the browser. The page itself is a peer, so there is no host-side option. It must be reachable from this machine, and on an https page its peers must use https too.</span>
+    }
+    else
+    {
+        @*Only the browser route is left to describe: the host route says nothing (see ShowRouteNote), and
+          it is the only other thing this can be.*@
+        <span>⚠ Your browser opens the connection, so the database has to be reachable from this machine and must return CORS headers for this origin (or sit behind a proxy that does). On an https page it must use SSL too.</span>
+    }
+    </div>
+</div>
+}
+
+@code {
+    [Parameter] public GremlinDB.GremlinConnection Connection { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    ///<summary>The HTTP / WebSocket buttons — Gremlin's choice. Off for the endpoint-URL databases (the URL
+    ///carries the scheme) and for Bolt (which is always WebSocket in the browser, TCP on the host).</summary>
+    [Parameter] public bool ShowTransport { get; set; } = true;
+
+    ///<summary>The SSL switch and the dialed-address preview. Off for the endpoint-URL databases, whose URL
+    ///already carries scheme and port.</summary>
+    [Parameter] public bool ShowSsl { get; set; } = true;
+
+    ///<summary>Preview the address as a Bolt URL (bolt / bolt+s) rather than a Gremlin one — Neo4j / Memgraph.</summary>
+    [Parameter] public bool Bolt { get; set; }
+
+    ///<summary>The Server / Browser choice. Off for an engine that can only run in the page (GUN), where
+    ///offering the choice would only offer a way to fail.</summary>
+    [Parameter] public bool ShowRoute { get; set; } = true;
+
+    ///<summary>
+    ///Raised with true while the Server route is chosen on a build that has none, so the page can
+    ///stop offering to connect. This row cannot express that itself: the Connect button is not in it.
+    ///</summary>
+    [Parameter] public EventCallback<bool> OnRouteUnavailable { get; set; }
+
+    private bool showServerEditionNote;
+
+    ///<summary>
+    ///A connection defaults to the server route, which is right where there is a server and wrong where
+    ///there is not. Settling it as the parameter arrives means the buttons show the route that will
+    ///actually be taken from the first render. It used to be settled at connect time instead, so the card
+    ///spent its whole life claiming a route it was never going to use, and the explanation behind the
+    ///Server button only appeared once you had pressed Browser and come back.
+    ///</summary>
+    protected override void OnParametersSet()
+    {
+        if (!HostOptions.HasServerRoute && Connection != null && Connection.ViaServer)
+            Connection.ViaServer = false;
+    }
+
+    ///<summary>
+    ///Whether the pair of buttons is worth drawing. True when the host really offers both routes, and also
+    ///on a build with no host that can at least say where to find one — there the Server button explains
+    ///itself instead of connecting. False only when neither holds, which would leave a dead button.
+    ///</summary>
+    ///<summary>
+    ///Which of the two buttons is lit. Where a host exists that is simply the connection's own route.
+    ///Where one does not, the connection is pinned to the browser and cannot say — so the press itself
+    ///does: choosing Server lights it and opens the explanation, and choosing Browser puts it back.
+    ///Nothing about the connection changes, because there is still no server to route it to.
+    ///</summary>
+    private bool RouteIsServer
+    {
+        get
+        {
+            if (!HostOptions.HasServerRoute)
+                return showServerEditionNote;
+
+            return Connection.ViaServer;
+        }
+    }
+
+    ///<summary>
+    ///Whether the note under the row is worth drawing.
+    ///
+    ///Everything it says about the host route is simply how the server edition works — routing through the
+    ///host is what that edition is for, and it is the default there — so a standing warning about the
+    ///normal case is just furniture. The other two are still worth saying: on the web-only edition the
+    ///host route is the thing you do not have, and the browser route has real conditions attached wherever
+    ///it is chosen.
+    ///
+    ///This does mean the row below moves when you switch route on the server edition. Accepted knowingly:
+    ///that edition is meant to be left on the server route, so the movement is rare and the standing
+    ///warning was not.
+    ///</summary>
+    private bool ShowRouteNote
+    {
+        get
+        {
+            //The web-only edition's own explanation is a separate block, and only one of them shows.
+            if (showServerEditionNote)
+                return false;
+
+            if (HostOptions.HasServerRoute && ShowRoute && Connection.ViaServer)
+                return false;
+
+            return true;
+        }
+    }
+
+    private bool RouteChoiceOffered
+    {
+        get
+        {
+            return HostOptions.HasServerRoute || !string.IsNullOrEmpty(HostOptions.ServerEditionUrl);
+        }
+    }
+
+    private async Task ChooseServer()
+    {
+        //With no host there is nothing to switch to, so the press opens the explanation and leaves the
+        //connection on the route that works.
+        if (!HostOptions.HasServerRoute)
+        {
+            showServerEditionNote = true;
+            await OnRouteUnavailable.InvokeAsync(true);
+            return;
+        }
+
+        Connection.ViaServer = true;
+    }
+
+    private async Task ChooseBrowser()
+    {
+        showServerEditionNote = false;
+        Connection.ViaServer = false;
+        await OnRouteUnavailable.InvokeAsync(false);
+    }
+
+    //Unique per instance so the checkbox/label pairing works when more than one renders at once.
+    private readonly string sslToggleId = "ssl-" + Guid.NewGuid().ToString("N");
+
+    private string DisplayHost
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Connection.Hostname))
+                return "…";
+
+            return Connection.Hostname;
+        }
+    }
+
+    private string Scheme
+    {
+        get
+        {
+            if (Bolt)
+            {
+                if (Connection.UseSSL)
+                    return "bolt+s";
+
+                return "bolt";
+            }
+
+            if (Connection.Transport == "WebSocket")
+            {
+                if (Connection.UseSSL)
+                    return "wss";
+
+                return "ws";
+            }
+
+            if (Connection.UseSSL)
+                return "https";
+
+            return "http";
+        }
+    }
+}
