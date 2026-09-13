@@ -255,7 +255,7 @@
                 else
                 {
                     <div class="row g-3">
-                        <div class="col-md-6">
+                        <div class="@(UsesGremlinLogin ? "col-md-5" : "col-md-6")">
                             <label class="form-label">Hostname <span class="text-danger">*</span></label>
                             @*oninput rather than onchange so the address preview below tracks what is typed.*@
                             <input class="form-control" @bind="connection.Hostname" @bind:event="oninput" disabled="@isConnected" />
@@ -264,10 +264,24 @@
                             <label class="form-label">Port <span class="text-danger">*</span></label>
                             <input class="form-control" type="number" @bind="connection.Port" disabled="@isConnected" />
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Auth Key / Password</label>
-                            <input class="form-control" @bind="connection.AuthKey" type="password" disabled="@isConnected" />
-                        </div>
+                        @if (UsesGremlinLogin)
+                        {
+                            <div class="col-md-2">
+                                <label class="form-label">Username</label>
+                                <input class="form-control" @bind="connection.Username" disabled="@isConnected" autocomplete="off" />
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Password</label>
+                                <input class="form-control" type="password" @bind="connection.AuthKey" disabled="@isConnected" />
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="col-md-4">
+                                <label class="form-label">Auth Key / Password</label>
+                                <input class="form-control" @bind="connection.AuthKey" type="password" disabled="@isConnected" />
+                            </div>
+                        }
                     </div>
 
                     @if (RequiresDatabaseCollection)

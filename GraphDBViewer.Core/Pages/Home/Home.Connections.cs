@@ -72,6 +72,10 @@ public partial class Home
     //one form, differing only in the hints below.
     private bool UsesUserDatabaseLogin => IsNeo4j || IsArango;
 
+    //A stock Gremlin server with authentication on (JanusGraph, or TinkerPop's own) logs in with a username
+    //and a password, so its form asks for both. Cosmos DB and Dgraph take a single key instead.
+    private bool UsesGremlinLogin => connection.DatabaseType == GraphDbProviders.TinkerPop;
+
     private string DefaultUsernameHint
     {
         get

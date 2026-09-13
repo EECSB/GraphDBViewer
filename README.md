@@ -373,9 +373,9 @@ A SPARQL example (endpoint-only is inferred as SPARQL):
 | | `host`, `port` | Gremlin host and port. A non-TLS port (e.g. `8182`) implies `ssl=false`. |
 | | `ssl` | `true` / `false` — defaults from the port when omitted |
 | | `database`, `collection` | Azure Cosmos DB only |
-| | `authKey` | Cosmos key / password, or SPARQL basic-auth password |
+| | `authKey` | Password for a Gremlin server with authentication on, Cosmos key, or SPARQL basic-auth password |
 | | `endpoint` | SPARQL endpoint URL |
-| | `username` | SPARQL basic-auth username |
+| | `username` | Username for a Gremlin server with authentication on, or SPARQL basic auth |
 | Query | `query` (or `q`) | Initial query text |
 | | `lang` | `gremlin` · `cypher` · `sparql` (editor highlighting) |
 | | `run` | `true` (default) / `false` — auto-run the query once connected |

@@ -82,10 +82,27 @@
                 <label class="form-check mt-4"><input class="form-check-input" type="checkbox" @bind="connection.UseSSL" /> SSL</label>
             </div>
 
-            <div class="mb-2">
-                <label class="form-label" for="ig-auth">Auth key / password <span class="text-body-secondary">(optional)</span></label>
-                <input id="ig-auth" class="form-control" type="password" @bind="connection.AuthKey" />
-            </div>
+            @if (connection.DatabaseType == GraphDbProviders.TinkerPop)
+            {
+                @*A TinkerPop server with authentication on, JanusGraph's included, logs in with both halves.*@
+                <div class="d-flex gap-2 mb-2">
+                    <div class="flex-grow-1">
+                        <label class="form-label" for="ig-user">Username <span class="text-body-secondary">(optional)</span></label>
+                        <input id="ig-user" class="form-control" autocomplete="off" @bind="connection.Username" />
+                    </div>
+                    <div class="flex-grow-1">
+                        <label class="form-label" for="ig-auth">Password <span class="text-body-secondary">(optional)</span></label>
+                        <input id="ig-auth" class="form-control" type="password" @bind="connection.AuthKey" />
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="mb-2">
+                    <label class="form-label" for="ig-auth">Auth key / password <span class="text-body-secondary">(optional)</span></label>
+                    <input id="ig-auth" class="form-control" type="password" @bind="connection.AuthKey" />
+                </div>
+            }
 
             @if (connection.DatabaseType == GraphDbProviders.CosmosDb)
             {

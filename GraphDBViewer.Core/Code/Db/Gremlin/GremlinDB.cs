@@ -1,4 +1,6 @@
-﻿using System.Net.WebSockets;
+﻿using System.Net;
+using System.Net.Http.Headers;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
@@ -48,8 +50,8 @@ public class GremlinDB : IGraphDb
         //stock server, and each difference fails a different way:
         //  - requests must be mime-typed BINARY frames; a bare text frame is closed with 1011,
         //  - only GraphSON 2.0 is accepted (v3 returns a GraphMalformedException),
-        //  - auth is in-protocol SASL PLAIN answering a 407 challenge, with a username that names the
-        //    database and collection — not the HTTP Basic header a stock server takes.
+        //  - it logs in by answering the same 407 challenge a stock server with authentication on sends,
+        //    but always, and with a username that names the database and collection rather than a user.
         //So Cosmos gets its own branch through the WebSocket path; everything else is unchanged.
         _isCosmos = connection.DatabaseType == GraphDbProviders.CosmosDb;
 
@@ -79,6 +81,25 @@ public class GremlinDB : IGraphDb
     private readonly string _cosmosUsername;
     //Cosmos accepts only GraphSON 2.0; this is the mime type that prefixes each binary request frame.
     private const string CosmosMimeType = "application/vnd.gremlin-v2.0+json";
+
+    //Who logs in when the server asks: Cosmos's /dbs/{database}/colls/{collection}, or for a stock server
+    //(JanusGraph, or TinkerPop's own with authentication on) the username from the connection form.
+    private string LoginUsername
+    {
+        get
+        {
+            if (_isCosmos)
+                return _cosmosUsername;
+
+            return _connection.Username;
+        }
+    }
+
+    //Whether the connection carries a login at all. A stock server without authentication never asks for
+    //one, so an empty login is the ordinary case; it only matters once a server does ask.
+    private bool HasLogin => !string.IsNullOrEmpty(_connection.Username) || !string.IsNullOrEmpty(_connection.AuthKey);
+
+    private const string LoginRequired = "this server requires a login. Enter its username and password in the connection form.";
 
     //WebSocket is kept open between queries for the lifetime of the connection
     private ClientWebSocket _ws;
@@ -196,8 +217,8 @@ public class GremlinDB : IGraphDb
 
             //Collect all response frames (206 = partial, 200 = done, 204 = done/empty)
             var allValues = new List<JsonElement>();
-            //Cosmos answers the first request with a 407 auth challenge; guards against looping if the
-            //credentials are wrong and it challenges again.
+            //A server that requires a login answers the first request on a socket with a 407 challenge;
+            //guards against looping if the login is wrong and it challenges again.
             bool authAttempted = false;
             while (true)
             {
@@ -215,23 +236,43 @@ public class GremlinDB : IGraphDb
 
                 int statusCode = root.GetProperty("status").GetProperty("code").GetInt32();
 
-                //407 (AUTHENTICATE) is Cosmos asking for SASL PLAIN. Answer once with the same requestId
-                //it echoed (so the loop's frame-skip still matches the final response), then keep reading.
-                //A stock server's 407 falls through to the error path below, unchanged.
-                if (statusCode == 407 && _isCosmos)
+                //407 (AUTHENTICATE) is the server asking for a login: Cosmos always, and a stock server
+                //(JanusGraph, or TinkerPop's own) whenever authentication is on. The answer is SASL PLAIN,
+                //sent once with the same requestId the challenge echoed (so the loop's frame-skip still
+                //matches the final response), then keep reading. A stock server that refuses the login
+                //says so with a 401, which the error path below reports in the server's own words.
+                //
+                //Every way out of here without a login leaves a socket the server will not answer again, so
+                //each one abandons it (see AbandonSocket).
+                if (statusCode == 407)
                 {
                     if (authAttempted)
-                        return GraphDbResult.Failure("Authentication was rejected: check the key, database and collection.");
+                    {
+                        AbandonSocket();
+
+                        if (_isCosmos)
+                            return GraphDbResult.Failure("Authentication was rejected: check the key, database and collection.");
+                        else
+                            return GraphDbResult.Failure("Gremlin status 407: the server did not accept the username and password.");
+                    }
+
+                    //Nothing to answer with. An empty login would only earn a 401 calling the credentials
+                    //wrong, when the truth is that none were entered.
+                    if (!_isCosmos && !HasLogin)
+                    {
+                        AbandonSocket();
+
+                        return GraphDbResult.Failure($"Gremlin status 407: {LoginRequired}");
+                    }
 
                     authAttempted = true;
-                    var sasl = Convert.ToBase64String(Encoding.UTF8.GetBytes($"\0{_cosmosUsername}\0{_connection.AuthKey}"));
 
                     await SendFrameAsync(new
                     {
                         requestId,
                         op = "authentication",
                         processor = "",
-                        args = new { sasl }
+                        args = new { sasl = SaslPlain(LoginUsername, _connection.AuthKey) }
                     }, cancellationToken);
 
                     continue;
@@ -245,6 +286,10 @@ public class GremlinDB : IGraphDb
                         msg = m.GetString();
                     else
                         msg = "Unknown error";
+
+                    //The refused login (see the 407 above).
+                    if (statusCode == 401 && authAttempted)
+                        AbandonSocket();
 
                     return GraphDbResult.Failure($"Gremlin status {statusCode}: {msg}");
                 }
@@ -297,6 +342,21 @@ public class GremlinDB : IGraphDb
         return values;
     }
 
+    ///<summary>
+    ///The answer to a 407 challenge: SASL PLAIN (RFC 4616) with no separate authorization identity, which
+    ///is a NUL, the username, a NUL and the password, base64-encoded.
+    ///</summary>
+    public static string SaslPlain(string username, string password)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes($"\0{username}\0{password}"));
+    }
+
+    ///<summary>The credentials half of an HTTP Basic Authorization header: username:password, base64-encoded.</summary>
+    public static string BasicCredentials(string username, string password)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+    }
+
     private async Task EnsureWebSocketConnectedAsync(CancellationToken cancellationToken)
     {
         if (_ws?.State == WebSocketState.Open)
@@ -306,15 +366,32 @@ public class GremlinDB : IGraphDb
         _ws = new ClientWebSocket();
         //_ws.Options.AddSubProtocol("graphson-v3.0");
 
-        //Basic auth for TinkerPop servers that require it. Cosmos ignores this header — it authenticates
-        //in-protocol via the SASL challenge instead — so it is set only for a stock server.
-        if (!_isCosmos && !string.IsNullOrEmpty(_connection.AuthKey))
-        {
-            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($":{_connection.AuthKey}"));
-            _ws.Options.SetRequestHeader("Authorization", $"Basic {credentials}");
-        }
+        //The login as a Basic header on the upgrade request too, for a reverse proxy in front of a server
+        //that checks it there. It is never the login itself: Gremlin Server logs a WebSocket in through
+        //the 407 challenge (see ExecuteWebSocketAsync), and Cosmos only that way. A browser cannot send it
+        //at all, because its WebSocket has no request headers to set: trying throws before the socket
+        //opens, which used to fail every connection with a password on the Browser route.
+        if (!_isCosmos && HasLogin && !OperatingSystem.IsBrowser())
+            _ws.Options.SetRequestHeader("Authorization", $"Basic {BasicCredentials(_connection.Username, _connection.AuthKey)}");
 
         await _ws.ConnectAsync(_wsEndpoint, cancellationToken);
+    }
+
+    ///<summary>
+    ///Drops the socket without a closing handshake after a login did not happen. The server answers nothing
+    ///more on a socket whose login it refused, or whose challenge went unanswered: JanusGraph leaves it open
+    ///and silent, so the next query sent on it would wait forever. On the host that next query is a pressed
+    ///Connect, because the pool keeps the driver. Without the socket, it dials a fresh one and is challenged
+    ///afresh.
+    ///</summary>
+    private void AbandonSocket()
+    {
+        if (_ws == null)
+            return;
+
+        _ws.Abort();
+        _ws.Dispose();
+        _ws = null;
     }
 
     ///<summary>
@@ -374,10 +451,39 @@ public class GremlinDB : IGraphDb
     {
         var endpoint = new Uri(_baseHttpUri, "/gremlin");
         var body = JsonSerializer.Serialize(new { gremlin = query });
-        var content = new StringContent(body, Encoding.UTF8, JsonContentType);
+        var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = new StringContent(body, Encoding.UTF8, JsonContentType)
+        };
 
-        var response = await _http.PostAsync(endpoint, content, cancellationToken);
+        //Gremlin Server's HTTP endpoint takes the login as Basic auth on every request. It goes on the
+        //request, never on the client, because the host's pool shares one HttpClient between connections.
+        if (!_isCosmos && HasLogin)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", BasicCredentials(_connection.Username, _connection.AuthKey));
+
+        HttpResponseMessage response;
+
+        try
+        {
+            response = await _http.SendAsync(request, cancellationToken);
+        }
+        catch (HttpRequestException ex) when (OperatingSystem.IsBrowser() && HasLogin)
+        {
+            //A browser asks the server's permission before it sends a login (a CORS preflight), and Gremlin
+            //Server with authentication on refuses that question with a 401, so the query never leaves the
+            //page. Nothing on this route can change that; both of the others avoid it.
+            return GraphDbResult.Failure($"HTTP error: {ex.Message} (over HTTP, a server that requires a login refuses the browser's CORS check before it sees the login: connect over WebSocket, or make requests from the Server)");
+        }
+
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            if (HasLogin)
+                return GraphDbResult.Failure("HTTP 401: the server did not accept the username and password.");
+            else
+                return GraphDbResult.Failure($"HTTP 401: {LoginRequired}");
+        }
 
         if (!response.IsSuccessStatusCode)
             return GraphDbResult.Failure($"HTTP {(int)response.StatusCode}: {json}");
@@ -492,7 +598,10 @@ public class GremlinDB : IGraphDb
         ///<summary>SPARQL endpoint URL (e.g. https://query.wikidata.org/sparql). Used only when DatabaseType == "Sparql".</summary>
         public string Endpoint { get; set; }
 
-        ///<summary>Optional HTTP basic-auth username (SPARQL); the password goes in AuthKey.</summary>
+        ///<summary>
+        ///The login's username, for the databases that have one: a Gremlin server with authentication on,
+        ///a SPARQL endpoint behind basic auth, Neo4j and ArangoDB. The password goes in AuthKey.
+        ///</summary>
         public string Username { get; set; }
 
         ///<summary>
