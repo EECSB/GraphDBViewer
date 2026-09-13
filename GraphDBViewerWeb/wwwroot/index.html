@@ -82,10 +82,22 @@
     </div>
     <script src="_content/GraphDBViewer.Core/lib/js/cytoscape.min.js"></script>
     <script src="_content/GraphDBViewer.Core/lib/js/cytoscape-svg.js"></script>
-    <script src="_content/GraphDBViewer.Core/lib/js/3d-force-graph.min.js"></script>
-    <!-- three.js as an ES module (the UMD build is deprecated / warns) — exposed as a global so the
-         classic interop scripts can use it without themselves becoming modules. -->
-    <script type="module">import * as THREE from 'three'; window.THREE = THREE;</script>
+    <!-- One three.js for the whole page: the import map above resolves "three" to the vendored module,
+         and 3d-force-graph is bundled (tools/vendor-three.mjs in the Treeality repo) to import that same
+         "three" rather than carry a copy of its own — two copies on one page cannot share textures, which
+         is what the Globe needs. Both are exposed as globals so the classic interop scripts can use them
+         without themselves becoming modules; a module script runs after the document is parsed, and
+         nothing below needs either until Blazor has booted and asked for a draw.
+
+         THE UMD BUNDLE IS GONE, not merely unused: the 2026-09-13 core sync deleted
+         3d-force-graph.min.js, and this page went on asking for it for one test run — a 404, no
+         ForceGraph3D, and a 3D view that rendered no canvas at all while everything else passed. -->
+    <script type="module">
+        import * as THREE from 'three';
+        import ForceGraph3D from './_content/GraphDBViewer.Core/lib/js/3d-force-graph.esm.min.js';
+        window.THREE = THREE;
+        window.ForceGraph3D = ForceGraph3D;
+    </script>
     <script src="_content/GraphDBViewer.Core/js/graphGeometry.js"></script>
     <script src="_content/GraphDBViewer.Core/js/CytoscapeInterop.js"></script>
     <script src="_content/GraphDBViewer.Core/js/3dForceGraphInterop.js"></script>
