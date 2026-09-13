@@ -107,6 +107,40 @@ RETURN *";
        (gear)-[r2:`edge label`]->(mount)
 RETURN *";
 
+    ///<summary>
+    ///Eighteen cities — Europe, the United States, East Asia, Sydney — with their coordinates under the
+    ///plain <c>lat</c> / <c>lon</c> names the Map and Globe read by convention, joined by routes and
+    ///returned as a graph — the Cypher twin of the Gremlin loader.
+    ///</summary>
+    public const string GeoMapLoader = @"CREATE (vie:City {name:'Vienna', country:'Austria', lat:48.2082, lon:16.3738, exampleType:'geo_example_1'}),
+       (lhr:City {name:'London', country:'United Kingdom', lat:51.5074, lon:-0.1278, exampleType:'geo_example_1'}),
+       (par:City {name:'Paris', country:'France', lat:48.8566, lon:2.3522, exampleType:'geo_example_1'}),
+       (ber:City {name:'Berlin', country:'Germany', lat:52.5200, lon:13.4050, exampleType:'geo_example_1'}),
+       (ams:City {name:'Amsterdam', country:'Netherlands', lat:52.3676, lon:4.9041, exampleType:'geo_example_1'}),
+       (mad:City {name:'Madrid', country:'Spain', lat:40.4168, lon:-3.7038, exampleType:'geo_example_1'}),
+       (rom:City {name:'Rome', country:'Italy', lat:41.9028, lon:12.4964, exampleType:'geo_example_1'}),
+       (rkv:City {name:'Reykjavik', country:'Iceland', lat:64.1466, lon:-21.9426, exampleType:'geo_example_1'}),
+       (nyc:City {name:'New York', country:'United States', lat:40.7128, lon:-74.0060, exampleType:'geo_example_1'}),
+       (chi:City {name:'Chicago', country:'United States', lat:41.8781, lon:-87.6298, exampleType:'geo_example_1'}),
+       (dfw:City {name:'Dallas', country:'United States', lat:32.7767, lon:-96.7970, exampleType:'geo_example_1'}),
+       (mia:City {name:'Miami', country:'United States', lat:25.7617, lon:-80.1918, exampleType:'geo_example_1'}),
+       (sea:City {name:'Seattle', country:'United States', lat:47.6062, lon:-122.3321, exampleType:'geo_example_1'}),
+       (sfo:City {name:'San Francisco', country:'United States', lat:37.7749, lon:-122.4194, exampleType:'geo_example_1'}),
+       (lax:City {name:'Los Angeles', country:'United States', lat:34.0522, lon:-118.2437, exampleType:'geo_example_1'}),
+       (tyo:City {name:'Tokyo', country:'Japan', lat:35.6762, lon:139.6503, exampleType:'geo_example_1'}),
+       (sel:City {name:'Seoul', country:'South Korea', lat:37.5665, lon:126.9780, exampleType:'geo_example_1'}),
+       (syd:City {name:'Sydney', country:'Australia', lat:-33.8688, lon:151.2093, exampleType:'geo_example_1'}),
+       (vie)-[:route]->(lhr), (vie)-[:route]->(par), (vie)-[:route]->(ber), (vie)-[:route]->(rom),
+       (lhr)-[:route]->(par), (lhr)-[:route]->(ams), (lhr)-[:route]->(rkv), (par)-[:route]->(mad),
+       (ber)-[:route]->(ams), (mad)-[:route]->(rom),
+       (lhr)-[:route]->(nyc), (rkv)-[:route]->(nyc), (par)-[:route]->(nyc), (mad)-[:route]->(mia), (ams)-[:route]->(chi),
+       (nyc)-[:route]->(chi), (nyc)-[:route]->(mia), (nyc)-[:route]->(dfw), (nyc)-[:route]->(sfo),
+       (chi)-[:route]->(dfw), (chi)-[:route]->(sea), (dfw)-[:route]->(lax), (dfw)-[:route]->(mia),
+       (sea)-[:route]->(sfo), (sfo)-[:route]->(lax),
+       (sfo)-[:route]->(tyo), (sea)-[:route]->(tyo), (lax)-[:route]->(sel), (tyo)-[:route]->(sel),
+       (tyo)-[:route]->(syd), (syd)-[:route]->(lax)
+RETURN *";
+
     ///<summary>All example groups, in display order — mirrors <see cref="GremlinExamples.Groups"/>.</summary>
     public static IReadOnlyList<QueryExampleGroup> Groups { get; } = new List<QueryExampleGroup>
     {
@@ -138,6 +172,7 @@ RETURN *";
             new("Social network", ModernGraphLoader),
             new("Flight routes",  FlightRoutesLoader),
             new("3D Objects",     ThreeDObjectsLoader),
+            new("Geospatial map", GeoMapLoader),
         }),
     };
 }

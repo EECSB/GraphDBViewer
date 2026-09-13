@@ -32,7 +32,12 @@ public static class GdbvKeys
     public const string Display = "gdbvDisplay";
     //Comma-separated list of property keys shown beneath the node on the 2D / 3D canvas.
     public const string Show = "gdbvShow";
+    //Where the vertex is on the earth, in decimal degrees, for the Map and Globe layouts. The viewer's
+    //own pair, taking precedence over the conventional names (lat/latitude, lon/lng/longitude) that
+    //GeoCoordinates also reads — so a place assigned in the viewer wins over one imported with the data.
+    public const string Lat = "gdbvLat";
+    public const string Lon = "gdbvLon";
 
     ///<summary>Every viewer-reserved key, for bulk operations such as the database cleanup.</summary>
-    public static readonly string[] All = { Image, Model, X, Y, Z, X3d, Y3d, Z3d, Color, Size, Shape, Shape3d, Display, Show };
+    public static readonly string[] All = { Image, Model, X, Y, Z, X3d, Y3d, Z3d, Color, Size, Shape, Shape3d, Display, Show, Lat, Lon };
 }

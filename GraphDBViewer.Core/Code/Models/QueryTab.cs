@@ -59,6 +59,8 @@ public class QueryTab
     public bool ReflectDbState { get; set; } = true;
     public string Cy2dLayout { get; set; } = "cose";
     public string G3dLayout { get; set; } = "force";
+    //Which earth the Map and the Globe draw: "satellite" (the image) or "outline" (coastlines).
+    public string MapStyle { get; set; } = "satellite";
     //Hand-pinned node arrangements captured by "Save positions", stored in the browser (JSON
     //[{id,x,y(,z)}]). Kept separately per viewer so a 2D arrangement never disturbs a 3D one; drives the
     //"user saved positions" layout even before the changes are committed.

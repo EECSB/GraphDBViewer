@@ -473,8 +473,287 @@
         return JSON.stringify(gltf);
     }
 
+    //── Geography ─────────────────────────────────────────────────────────────────────────────
+    //The Map and Globe layouts place a vertex by its latitude and longitude (GeoCoordinates.cs says
+    //where those are read from). Pure, so the projection and the arc math are pinned under Node.
+
+    //Equirectangular projection onto a width×height plane, which is how the bundled world image is
+    //drawn: longitude runs left to right across the width, latitude top to bottom down the height.
+    function geoProject(lat, lng, width, height) {
+        return { x: (lng + 180) / 360 * width, y: (90 - lat) / 180 * height };
+    }
+
+    //A point on a sphere of radius r, in the frame an unrotated three.js SphereGeometry drapes an
+    //equirectangular texture in: longitude 0 faces +x, longitude 90 east faces -z, the north pole is
+    //+y. Derived from the geometry's own UV mapping, so a node lands on its country.
+    function geoToCartesian(lat, lng, r) {
+        const latR = lat * Math.PI / 180;
+        const lngR = lng * Math.PI / 180;
+
+        return {
+            x: r * Math.cos(latR) * Math.cos(lngR),
+            y: r * Math.sin(latR),
+            z: -r * Math.cos(latR) * Math.sin(lngR)
+        };
+    }
+
+    function vSub(a, b) {
+        return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+    }
+
+    function vAdd(a, b) {
+        return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+    }
+
+    function vScale(a, s) {
+        return { x: a.x * s, y: a.y * s, z: a.z * s };
+    }
+
+    function vDot(a, b) {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+
+    function vCross(a, b) {
+        return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x };
+    }
+
+    function vLength(a) {
+        return Math.sqrt(vDot(a, a));
+    }
+
+    //The bow of a link between two points on a sphere of radius r, in the terms 3d-force-graph draws
+    //a curved link with: a curvature (the control point's distance as a fraction of the chord) and a
+    //rotation of that control point around the chord. Chosen so the arc bows outward from the sphere's
+    //center — over the surface rather than through it — with an altitude that grows with the distance,
+    //so neighbors stay low and antipodes arc high.
+    //
+    //The rotation is solved against the library's own construction: the control point starts as
+    //(chord · curvature) × axis, where the axis is +z unless the chord runs purely along z, and is then
+    //turned about the chord by the rotation. This finds the turn that points it outward at the midpoint.
+    function geoArc(start, end, r) {
+        const chord = vSub(end, start);
+        const length = vLength(chord);
+
+        if (length === 0)
+            return { curvature: 0, curveRotation: 0 };
+
+        //Central angle between the two points, from the chord of a sphere of radius r.
+        const theta = 2 * Math.asin(Math.min(1, length / (2 * r)));
+        const half = theta / 2;
+
+        let axis;
+
+        if (chord.x !== 0 || chord.y !== 0)
+            axis = { x: 0, y: 0, z: 1 };
+        else
+            axis = { x: 0, y: 1, z: 0 };
+
+        //Apex altitude above the surface, as a fraction of r: a quarter of the radius at the antipode.
+        //A quadratic Bezier's apex sits halfway from the chord's midpoint to the control point, so the
+        //control point has to reach twice that height: |mid| + offset / 2 = r · (1 + altitude). The
+        //offset the library builds is |chord × axis| · c — shorter than the chord by the sine of the
+        //angle between them — so c is solved against that, not against the chord.
+        const altitude = 0.25 * theta / Math.PI;
+        const reach = vLength(vCross(chord, axis));
+        let curvature = 2 * r * (1 + altitude - Math.cos(half)) / Math.max(1e-9, reach);
+
+        //A chord nearly parallel to the axis has almost no reach; rather than a wild curvature, the
+        //arc is allowed to dip for that rare pair.
+        curvature = Math.min(2.5, Math.max(0.05, curvature));
+
+        const mid = vScale(vAdd(start, end), 0.5);
+
+        //Antipodes: the midpoint is the center, and every direction is equally outward.
+        if (vLength(mid) < 1e-9)
+            return { curvature: curvature, curveRotation: 0 };
+
+        const base = vCross(vScale(chord, curvature), axis);
+        const unitChord = vScale(chord, 1 / length);
+
+        //The signed angle from where the library starts the control point to the outward direction,
+        //measured about the chord — both are perpendicular to it, mid because |start| = |end|.
+        const curveRotation = Math.atan2(vDot(vCross(base, mid), unitChord), vDot(base, mid));
+
+        return { curvature: curvature, curveRotation: curveRotation };
+    }
+
+    //The graticule's spacing in degrees: the coarsest step from a sensible ladder whose lines still sit
+    //at least minSpacingPx apart on screen, so zooming in refines the grid rather than crowding it.
+    function geoGraticuleStep(pixelsPerDegree, minSpacingPx) {
+        const ladder = [90, 45, 30, 15, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05];
+        let chosen = ladder[0];
+
+        for (let i = 0; i < ladder.length; i++) {
+            if (ladder[i] * pixelsPerDegree >= minSpacingPx)
+                chosen = ladder[i];
+            else
+                break;
+        }
+
+        return chosen;
+    }
+
+    //"30°E", "48.5°S", "0°" — how a graticule line is labeled. Trailing zeros go; the equator and the
+    //prime meridian are just "0°"; the antimeridian is "180°" rather than east or west.
+    function geoDegreeLabel(degrees, axis) {
+        const magnitude = Math.abs(degrees);
+        let text = String(Math.round(magnitude * 100) / 100);
+
+        if (magnitude === 0)
+            return '0°';
+
+        if (axis === 'lon' && magnitude === 180)
+            return '180°';
+
+        let hemisphere;
+
+        if (axis === 'lat')
+            hemisphere = degrees > 0 ? 'N' : 'S';
+        else
+            hemisphere = degrees > 0 ? 'E' : 'W';
+
+        return text + '°' + hemisphere;
+    }
+
+    //Points along the shorter great-circle arc from one place to another — n segments, n + 1 points of
+    //[lat, lng] — by spherical interpolation of the two unit vectors in geoToCartesian's frame.
+    function geoGreatCircle(lat1, lng1, lat2, lng2, n) {
+        const a = geoToCartesian(lat1, lng1, 1);
+        const b = geoToCartesian(lat2, lng2, 1);
+        const dot = Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y + a.z * b.z));
+        const omega = Math.acos(dot);
+
+        if (omega < 1e-9 || n < 1)
+            return [[lat1, lng1], [lat2, lng2]];
+
+        const points = [];
+
+        for (let i = 0; i <= n; i++) {
+            const f = i / n;
+            const s1 = Math.sin((1 - f) * omega) / Math.sin(omega);
+            const s2 = Math.sin(f * omega) / Math.sin(omega);
+            const x = s1 * a.x + s2 * b.x;
+            const y = s1 * a.y + s2 * b.y;
+            const z = s1 * a.z + s2 * b.z;
+            const lat = Math.asin(Math.max(-1, Math.min(1, y))) * 180 / Math.PI;
+            const lng = Math.atan2(-z, x) * 180 / Math.PI;
+
+            points.push([lat, lng]);
+        }
+
+        return points;
+    }
+
+    //Whether the shorter arc between two longitudes crosses the antimeridian — where a flat map, which
+    //ends there, cannot follow it.
+    function geoCrossesAntimeridian(lng1, lng2) {
+        return Math.abs(lng1 - lng2) > 180;
+    }
+
+    //How a 2D map edge bends to follow the great circle: Cytoscape's `segments` curve, whose points are
+    //given relative to the straight line from source to target — a weight along it (0 at the source,
+    //1 at the target) and a signed distance across it. Cytoscape places a point at
+    //start + weight·(end − start) + distance·(−dy, dx)/|d|, so with y down a positive distance is on the
+    //right of the direction of travel. Null when the route is too short to bend visibly, or when its
+    //arc crosses the antimeridian and the straight line is the honest fallback on a map that ends there.
+    function geoEdgeBend(lat1, lng1, lat2, lng2, w, h) {
+        if (geoCrossesAntimeridian(lng1, lng2))
+            return null;
+
+        const a = geoToCartesian(lat1, lng1, 1);
+        const b = geoToCartesian(lat2, lng2, 1);
+        const dot = Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y + a.z * b.z));
+        const omegaDeg = Math.acos(dot) * 180 / Math.PI;
+
+        if (omegaDeg < 3)
+            return null;
+
+        const n = Math.max(2, Math.min(24, Math.round(omegaDeg / 5)));
+        const points = geoGreatCircle(lat1, lng1, lat2, lng2, n);
+        const s = geoProject(lat1, lng1, w, h);
+        const t = geoProject(lat2, lng2, w, h);
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const len2 = dx * dx + dy * dy;
+        const len = Math.sqrt(len2);
+
+        if (len < 1)
+            return null;
+
+        const weights = [];
+        const distances = [];
+
+        for (let i = 1; i < points.length - 1; i++) {
+            const p = geoProject(points[i][0], points[i][1], w, h);
+            const px = p.x - s.x;
+            const py = p.y - s.y;
+
+            weights.push(Math.round((px * dx + py * dy) / len2 * 1000) / 1000);
+            distances.push(Math.round((py * dx - px * dy) / len * 10) / 10);
+        }
+
+        return { weights: weights, distances: distances };
+    }
+
+    //Whether a sphere of the given radius at the origin stands between a camera and a point: the
+    //segment from the camera to the point enters the sphere before it gets there. A globe label on
+    //the far side is hidden by this; a node on the near surface, just outside the drawn sphere, is not.
+    function sphereOccludes(camera, point, radius) {
+        const dx = point.x - camera.x;
+        const dy = point.y - camera.y;
+        const dz = point.z - camera.z;
+        const a = dx * dx + dy * dy + dz * dz;
+
+        if (a === 0)
+            return false;
+
+        const b = 2 * (camera.x * dx + camera.y * dy + camera.z * dz);
+        const c = camera.x * camera.x + camera.y * camera.y + camera.z * camera.z - radius * radius;
+        const discriminant = b * b - 4 * a * c;
+
+        if (discriminant < 0)
+            return false;
+
+        const t = (-b - Math.sqrt(discriminant)) / (2 * a);
+
+        return t > 0 && t < 1;
+    }
+
+    //Where 3d-force-graph puts the control point for a given curvature and rotation — the library's
+    //construction, restated, so a test can check that geoArc's answer really lands outward.
+    function curveControlPoint(start, end, curvature, curveRotation) {
+        const chord = vSub(end, start);
+        const length = vLength(chord);
+        let axis;
+
+        if (chord.x !== 0 || chord.y !== 0)
+            axis = { x: 0, y: 0, z: 1 };
+        else
+            axis = { x: 0, y: 1, z: 0 };
+
+        const base = vCross(vScale(chord, curvature), axis);
+        const unit = vScale(chord, 1 / length);
+
+        //Rodrigues' rotation of base about the unit chord by curveRotation.
+        const cos = Math.cos(curveRotation);
+        const sin = Math.sin(curveRotation);
+        const rotated = vAdd(vAdd(vScale(base, cos), vScale(vCross(unit, base), sin)), vScale(unit, vDot(unit, base) * (1 - cos)));
+
+        return vAdd(rotated, vScale(vAdd(start, end), 0.5));
+    }
+
     return {
         normalizeModelUrl: normalizeModelUrl,
+        geoProject: geoProject,
+        geoToCartesian: geoToCartesian,
+        geoArc: geoArc,
+        geoGraticuleStep: geoGraticuleStep,
+        geoDegreeLabel: geoDegreeLabel,
+        geoGreatCircle: geoGreatCircle,
+        geoCrossesAntimeridian: geoCrossesAntimeridian,
+        geoEdgeBend: geoEdgeBend,
+        sphereOccludes: sphereOccludes,
+        curveControlPoint: curveControlPoint,
         parseObj: parseObj,
         parseObjData: parseObjData,
         isZip: isZip,

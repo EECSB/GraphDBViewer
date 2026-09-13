@@ -10,7 +10,7 @@ namespace GraphDBViewerWeb.Code;
 ///<list type="bullet">
 ///<item>Connection: dbType, transport, host, port, ssl, database, collection, authKey, endpoint, username, viaServer</item>
 ///<item>Query: query (q), lang, run</item>
-///<item>View: view — json | 2d | 3d | table</item>
+///<item>View: view — json | 2d | 3d | table | map | globe</item>
 ///<item>Control: connect</item>
 ///</list>
 ///</remarks>
@@ -203,6 +203,13 @@ public class EmbedSettings
 
         if (v == "table" || v == "4")
             return 4;
+
+        //The two geographic modes: the 2D view on a world map, the 3D view on a globe.
+        if (v == "map" || v == "5")
+            return 5;
+
+        if (v == "globe" || v == "6")
+            return 6;
 
         return null;
     }

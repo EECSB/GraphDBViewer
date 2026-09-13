@@ -54,11 +54,362 @@ window.graph3DInterop = {
             nodes.forEach(n => { n.fx = undefined; n.fy = undefined; n.fz = undefined; });
         }
 
+        //The Globe is a layout too — nodes pinned to a sphere by their coordinates, the earth drawn
+        //beneath — and every other layout takes the sphere and the arcs away again.
+        if (dagMode === 'globe') {
+            this.applyGlobe(graph);
+            return graph;
+        }
+
+        this.clearGlobe(graph);
+
         graph.dagMode(mode)
              .dagLevelDistance(60)
              .onDagError(() => { });
 
         return graph;
+    },
+
+    //── The Globe: the 3D view under a geographic layout ─────────────────────────────────────────
+    //Located nodes (geoLat / geoLng, read from their properties by GeoCoordinates.cs) are pinned to
+    //their place on a sphere, the earth is a sphere just beneath them, links between located nodes
+    //bow outward over the surface, and nodes with no place are hidden with their links. The math is
+    //graphGeometry.geoToCartesian / geoArc, pure and tested under Node.
+    //
+    //The satellite earth is the world image as a texture on the sphere; the outline earth is the
+    //coastlines as line segments over a plain one. Both assets load on first use and are kept. The
+    //texture works because the page has one three.js: 3d-force-graph is bundled against the same
+    //module the interop builds these objects with (tools/vendor-three.mjs). It once had a private
+    //copy, and a texture made by one three.js uploaded by another samples black — the globe was
+    //black until the two became one.
+    GLOBE_RADIUS: 220,
+    GLOBE_FRAMING: 3.4,//the camera's distance from the center, in radii, when the globe is framed whole
+    globeNodeFactor: 1,//how far the nodes are scaled down as the camera closes in (applyGlobeNodeScale)
+    GLOBE_TEXTURE_WIDTH: 4096,//the image is 8192 wide, for the 2D map's zoom; the globe never shows
+    //more than half of it at once, and a texture that size is a fair share of a GPU
+    EARTH_IMAGE_URL: '_content/GraphDBViewer.Core/img/earth.jpg',
+    EARTH_OUTLINE_URL: '_content/GraphDBViewer.Core/img/earth-outline.json',
+    globeOn: false,
+    globeStyle: 'satellite',//'satellite' or 'outline' — setGlobeStyle
+    globeMesh: null,
+    earthTexture: null,//the world image as a texture, once it has loaded
+    earthOutline: null,//the coastline rings [[[lon, lat], ...], ...], once fetched
+    earthLoading: {},
+
+    isLocated: function (node) {
+        return !!node && typeof node.geoLat === 'number' && typeof node.geoLng === 'number';
+    },
+
+    applyGlobe: function (graph) {
+        const geo = window.graphGeometry;
+        const R = this.GLOBE_RADIUS;
+        const data = graph.graphData();
+        const self = this;
+
+        const byId = {};
+        (data.nodes || []).forEach(n => { byId[n.id] = n; });
+
+        //A link's ends are ids until the simulation resolves them into the node objects.
+        const nodeOf = function (end) {
+            if (end && typeof end === 'object')
+                return end;
+
+            return byId[end];
+        };
+
+        const place = n => geo.geoToCartesian(n.geoLat, n.geoLng, R);
+
+        //Before the pins, not after: the library's dagMode setter clears every node's fx/fy/fz when
+        //the mode goes to null (its own tidy-up when leaving a DAG layout), which is exactly what the
+        //first cut of this did one line too late — the globe drew, and every node floated off it.
+        graph.dagMode(null)
+             .dagLevelDistance(60)
+             .onDagError(() => { });
+
+        (data.nodes || []).forEach(n => {
+            if (!self.isLocated(n))
+                return;
+
+            const p = place(n);
+            n.fx = p.x;
+            n.fy = p.y;
+            n.fz = p.z;
+            n.x = p.x;
+            n.y = p.y;
+            n.z = p.z;
+        });
+
+        //The flat curvature (a fan's spread, a self-loop's size — assignLinkCurves) is kept aside and
+        //restored by clearGlobe. A fanned pair keeps its spread: the fan's own rotation is added to the
+        //outward one, so the arcs stay apart over the surface.
+        (data.links || []).forEach(l => {
+            const s = nodeOf(l.source);
+            const t = nodeOf(l.target);
+
+            if (!self.isLocated(s) || !self.isLocated(t))
+                return;
+
+            if (!l.__flatCurve)
+                l.__flatCurve = { curvature: l.curvature || 0, curveRotation: l.curveRotation || 0 };
+
+            const arc = geo.geoArc(place(s), place(t), R);
+            l.curvature = Math.max(l.__flatCurve.curvature, arc.curvature);
+            l.curveRotation = arc.curveRotation + l.__flatCurve.curveRotation;
+        });
+
+        this.globeOn = true;
+        this.refreshVisibility(graph);
+        this.ensureGlobeMesh(graph);
+
+        //Re-set so the renderer rebuilds the links with their new curves; the node objects are the same
+        //ones the simulation holds, so the pins are already in force.
+        graph.graphData(data);
+
+        //A camera the whole earth fits in, straight on. The library frames a fresh graph for a cloud of
+        //nodes on its next tick, so this is said again after that tick has had its say.
+        const frame = function () {
+            graph.cameraPosition({ x: 0, y: 0, z: R * 3.4 }, { x: 0, y: 0, z: 0 }, 0);
+        };
+
+        frame();
+        setTimeout(frame, 0);
+    },
+
+    //Every other layout: the flat curves back, the sphere gone, every node visible again (the label
+    //filter still applies). The pins were already cleared by applyLayout.
+    clearGlobe: function (graph) {
+        if (!this.globeOn)
+            return;
+
+        this.globeOn = false;
+
+        const data = graph.graphData();
+
+        (data.links || []).forEach(l => {
+            if (!l.__flatCurve)
+                return;
+
+            l.curvature = l.__flatCurve.curvature;
+            l.curveRotation = l.__flatCurve.curveRotation;
+            delete l.__flatCurve;
+        });
+
+        this.removeGlobeMesh();
+        this.refreshVisibility(graph);
+        this.resetGlobeNodeScale(graph);
+        graph.graphData(data);
+    },
+
+    //One visibility policy for both accessors, since the library holds one of each: the label filter
+    //and, on the globe, whether the node has a place. Both hide a link with a hidden end.
+    refreshVisibility: function (graph) {
+        const g = graph || this.instance;
+
+        if (!g)
+            return;
+
+        const self = this;
+        const hidden = this.hiddenLabelSet;
+
+        const shown = function (node) {
+            if (hidden && hidden.has(node.glabel))
+                return false;
+
+            if (self.globeOn && !self.isLocated(node))
+                return false;
+
+            return true;
+        };
+
+        g.nodeVisibility(n => shown(n));
+        g.linkVisibility(l => {
+            const s = l.source;
+            const t = l.target;
+
+            if (s && typeof s === 'object' && !shown(s))
+                return false;
+
+            if (t && typeof t === 'object' && !shown(t))
+                return false;
+
+            return true;
+        });
+    },
+
+    //Which earth the globe draws; rebuilt in place when one is showing.
+    setGlobeStyle: function (style) {
+        if (style === 'outline')
+            this.globeStyle = 'outline';
+        else
+            this.globeStyle = 'satellite';
+
+        if (this.globeOn && this.instance)
+            this.ensureGlobeMesh(this.instance);
+    },
+
+    ensureGlobeMesh: function (graph) {
+        const THREE = window.THREE;
+
+        if (!THREE)
+            return;
+
+        this.removeGlobeMesh();
+
+        const dark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+        //Just under the node radius, so nodes sit on the surface rather than half inside it.
+        const radius = this.GLOBE_RADIUS * 0.985;
+        let ocean;
+        let coast;
+        let tint;
+
+        if (dark) {
+            ocean = 0x121a2a;
+            coast = 0xb4c0d0;
+            tint = 0x8c96a3;
+        } else {
+            ocean = 0xe4ebf3;
+            coast = 0x3a4658;
+            tint = 0xffffff;
+        }
+
+        let mesh;
+
+        //Unlit on purpose: a data view has no night side.
+        if (this.globeStyle === 'outline') {
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 96, 48), new THREE.MeshBasicMaterial({ color: ocean }));
+
+            if (this.earthOutline)
+                mesh.add(this.buildGlobeLines(THREE, this.earthOutline, coast));
+            else
+                this.loadEarthOutline();
+        } else {
+            const geometry = new THREE.SphereGeometry(radius, 128, 64);
+            const material = new THREE.MeshBasicMaterial({ color: ocean });
+
+            if (this.earthTexture) {
+                material.map = this.earthTexture;
+                material.color.setHex(tint);
+            } else {
+                this.loadEarthTexture();
+            }
+
+            mesh = new THREE.Mesh(geometry, material);
+        }
+
+        //Not a thing to click or hover: the picker walks the whole scene, and a hit here would swallow
+        //the deselect a click on empty space means.
+        mesh.raycast = function () { };
+        mesh.userData.style = this.globeStyle;
+
+        this.globeMesh = mesh;
+        graph.scene().add(mesh);
+    },
+
+    removeGlobeMesh: function () {
+        if (!this.globeMesh)
+            return;
+
+        const mesh = this.globeMesh;
+
+        if (mesh.parent)
+            mesh.parent.remove(mesh);
+
+        mesh.children.slice().forEach(child => {
+            mesh.remove(child);
+            child.geometry.dispose();
+            child.material.dispose();
+        });
+
+        mesh.geometry.dispose();
+        mesh.material.dispose();
+        this.globeMesh = null;
+    },
+
+    //The image is the same equirectangular one the 2D map draws, halved for the GPU. Loaded once; when
+    //it arrives the globe that asked for it is rebuilt with the earth on. A new renderer uploads the
+    //kept texture again on its own.
+    loadEarthTexture: function () {
+        if (this.earthLoading[this.EARTH_IMAGE_URL])
+            return;
+
+        const self = this;
+        this.earthLoading[this.EARTH_IMAGE_URL] = true;
+
+        const image = new Image();
+        image.onload = function () {
+            const THREE = window.THREE;
+            const width = self.GLOBE_TEXTURE_WIDTH;
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = width / 2;
+
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(image, 0, 0, width, width / 2);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+
+            //Sharper where the sphere turns away from the camera; the renderer says how far it can go.
+            if (self.instance)
+                texture.anisotropy = self.instance.renderer().capabilities.getMaxAnisotropy();
+
+            self.earthTexture = texture;
+            self.earthLoading[self.EARTH_IMAGE_URL] = false;
+
+            if (self.globeOn && self.instance && self.globeStyle === 'satellite')
+                self.ensureGlobeMesh(self.instance);
+        };
+        image.onerror = function () {
+            self.earthLoading[self.EARTH_IMAGE_URL] = false;
+        };
+        image.src = this.EARTH_IMAGE_URL;
+    },
+
+    loadEarthOutline: function () {
+        if (this.earthLoading[this.EARTH_OUTLINE_URL])
+            return;
+
+        const self = this;
+        this.earthLoading[this.EARTH_OUTLINE_URL] = true;
+
+        fetch(this.EARTH_OUTLINE_URL)
+            .then(r => r.json())
+            .then(rings => {
+                self.earthOutline = rings;
+                self.earthLoading[self.EARTH_OUTLINE_URL] = false;
+
+                if (self.globeOn && self.instance && self.globeStyle === 'outline')
+                    self.ensureGlobeMesh(self.instance);
+            })
+            .catch(() => {
+                self.earthLoading[self.EARTH_OUTLINE_URL] = false;
+            });
+    },
+
+    //Coastlines and borders as line segments just above the plain sphere, so they neither z-fight
+    //with it nor show through from the far side.
+    buildGlobeLines: function (THREE, rings, color) {
+        const geo = window.graphGeometry;
+        const r = this.GLOBE_RADIUS * 0.992;
+        const positions = [];
+
+        rings.forEach(ring => {
+            for (let i = 1; i < ring.length; i++) {
+                const a = geo.geoToCartesian(ring[i - 1][1], ring[i - 1][0], r);
+                const b = geo.geoToCartesian(ring[i][1], ring[i][0], r);
+                positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+            }
+        });
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+
+        const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: color }));
+        lines.raycast = function () { };
+
+        return lines;
     },
 
     //Switches the layout on the already-drawn 3D graph and re-heats the simulation.
@@ -200,6 +551,10 @@ window.graph3DInterop = {
 
         const graphData = JSON.parse(graphDataJson);
         this.assignLinkCurves(graphData.links);
+
+        //A fresh draw is a fresh scene: the previous globe, if any, goes with the previous instance.
+        this.removeGlobeMesh();
+        this.globeOn = false;
 
         if (this.instance) {
             this.instance._destructor && this.instance._destructor();
@@ -781,6 +1136,50 @@ window.graph3DInterop = {
             val = Math.pow(node.nodeSize / 40, 3);
 
         return Math.cbrt(val) * baseR;
+    },
+
+    //On the globe a node keeps its apparent size as the camera closes in — the user's call,
+    //2026-09-02: zoomed in on a country, the plain view's spheres are balls the size of the country.
+    //Every frame (the label loop) the node objects are scaled in place by the camera's distance over
+    //the framing distance, never above 1, so at the framing the globe shows the plain view's sizes and
+    //nothing is rebuilt. An object's own scale (a fitted model) is kept as the base.
+    applyGlobeNodeScale: function () {
+        if (!this.globeOn || !this.instance)
+            return;
+
+        const cam = this.instance.camera();
+
+        if (!cam)
+            return;
+
+        const p = cam.position;
+        const distance = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+        const factor = Math.max(0.05, Math.min(1, distance / (this.GLOBE_RADIUS * this.GLOBE_FRAMING)));
+
+        this.globeNodeFactor = factor;
+        this.scaleNodeObjects(this.instance.graphData().nodes, factor);
+    },
+
+    resetGlobeNodeScale: function (graph) {
+        this.globeNodeFactor = 1;
+        this.scaleNodeObjects(graph.graphData().nodes, 1);
+    },
+
+    scaleNodeObjects: function (nodes, factor) {
+        (nodes || []).forEach(n => {
+            const obj = n.__threeObj;
+
+            if (!obj)
+                return;
+
+            if (obj.userData.gdbvBaseScale === undefined)
+                obj.userData.gdbvBaseScale = obj.scale.x;
+
+            const target = obj.userData.gdbvBaseScale * factor;
+
+            if (obj.scale.x !== target)
+                obj.scale.setScalar(target);
+        });
     },
 
     //Builds a flat-shaded three.js Mesh for a primitive node shape, scaled to the node radius and
@@ -1437,6 +1836,44 @@ window.graph3DInterop = {
                 camPos = cam.position;
         }
 
+        //On the globe, the overlay must not show what the earth hides: a label whose point is behind
+        //the drawn sphere goes invisible (visibility, so the display toggles above stay in charge).
+        let globeCamera = null;
+        const drawnRadius = this.GLOBE_RADIUS * 0.985;
+
+        if (this.globeOn) {
+            const cam = this.instance.camera();
+            if (cam)
+                globeCamera = cam.position;
+
+            this.applyGlobeNodeScale();
+        }
+
+        const behindGlobe = function (x, y, z) {
+            if (!globeCamera)
+                return false;
+
+            return window.graphGeometry.sphereOccludes(globeCamera, { x: x, y: y, z: z }, drawnRadius);
+        };
+
+        //And what the globe does not draw at all — a node with no place, a link with such an end — has
+        //no label either; the geometry's visibility policy (refreshVisibility) says the same.
+        const offGlobe = function (node) {
+            return !!globeCamera && !self.isLocated(node);
+        };
+
+        const setBehind = function (el, behind) {
+            let visibility;
+
+            if (behind)
+                visibility = 'hidden';
+            else
+                visibility = '';
+
+            if (el.style.visibility !== visibility)
+                el.style.visibility = visibility;
+        };
+
         this.nodeLabels.forEach(item => {
             if (item.el.style.display === 'none')
                 return;
@@ -1448,6 +1885,7 @@ window.graph3DInterop = {
             const c = self.instance.graph2ScreenCoords(nx, ny, nz);
             item.el.style.left = c.x + 'px';
             item.el.style.top = c.y + 'px';
+            setBehind(item.el, offGlobe(item.node) || behindGlobe(nx, ny, nz));
 
             if (cull && camPos)
                 item.el.style.opacity = self.labelOpacityForDistance(self.dist3(camPos, nx, ny, nz), threshold, 1);
@@ -1462,13 +1900,27 @@ window.graph3DInterop = {
             if (typeof s !== 'object' || typeof t !== 'object')
                 return;
 
-            const mx = ((s.x || 0) + (t.x || 0)) / 2;
-            const my = ((s.y || 0) + (t.y || 0)) / 2;
-            const mz = ((s.z || 0) + (t.z || 0)) / 2;
+            let mx = ((s.x || 0) + (t.x || 0)) / 2;
+            let my = ((s.y || 0) + (t.y || 0)) / 2;
+            let mz = ((s.z || 0) + (t.z || 0)) / 2;
+
+            //A globe link bows over the surface, and its chord's middle lies under it: lift the label to
+            //just above the surface, where the arc is, so it sits on the earth and hides with it.
+            if (globeCamera) {
+                const chord = Math.sqrt(mx * mx + my * my + mz * mz);
+
+                if (chord > 0) {
+                    const lift = self.GLOBE_RADIUS * 1.02 / chord;
+                    mx *= lift;
+                    my *= lift;
+                    mz *= lift;
+                }
+            }
 
             const c = self.instance.graph2ScreenCoords(mx, my, mz);
             item.el.style.left = c.x + 'px';
             item.el.style.top = c.y + 'px';
+            setBehind(item.el, offGlobe(s) || offGlobe(t) || behindGlobe(mx, my, mz));
 
             if (cull && camPos)
                 item.el.style.opacity = self.labelOpacityForDistance(self.dist3(camPos, mx, my, mz), threshold, 0.85);
@@ -1478,6 +1930,7 @@ window.graph3DInterop = {
             const c = self.instance.graph2ScreenCoords(item.node.x || 0, item.node.y || 0, item.node.z || 0);
             item.el.style.left = c.x + 'px';
             item.el.style.top = c.y + 'px';
+            setBehind(item.el, offGlobe(item.node) || behindGlobe(item.node.x || 0, item.node.y || 0, item.node.z || 0));
         });
 
         let baseR = 4;
@@ -1493,7 +1946,11 @@ window.graph3DInterop = {
 
             //Project a point one node-radius away to measure the node's apparent (screen) size, so the
             //text scales with the camera and sits just below the node instead of a fixed pixel offset.
-            const r = self.nodeRadius(n, baseR);
+            //On the globe the node itself is scaled down as the camera closes in; so is this.
+            let r = self.nodeRadius(n, baseR);
+
+            if (globeCamera)
+                r *= self.globeNodeFactor;
             const edge = self.instance.graph2ScreenCoords((n.x || 0) + r, n.y || 0, n.z || 0);
             const apparent = Math.hypot(edge.x - c.x, edge.y - c.y);
             const scale = Math.max(0.25, Math.min(3, apparent / 8));
@@ -1501,6 +1958,7 @@ window.graph3DInterop = {
             item.el.style.left = c.x + 'px';
             item.el.style.top = (c.y + apparent + 14) + 'px';
             item.el.style.transform = 'translate(-50%, 0) scale(' + scale + ')';
+            setBehind(item.el, offGlobe(n) || behindGlobe(n.x || 0, n.y || 0, n.z || 0));
         });
 
         this.updateAxisIndicator();
@@ -1616,25 +2074,10 @@ window.graph3DInterop = {
             return;
 
         const hidden = JSON.parse(hiddenJson);
-        //Kept so node distance culling can respect the same filter (see isLabelHidden).
+        //Kept so node distance culling can respect the same filter (see isLabelHidden) — and so the
+        //globe's own hiding composes with it rather than replacing it (refreshVisibility).
         this.hiddenLabelSet = new Set(hidden);
-        const isHidden = function (glabel) {
-            return hidden.indexOf(glabel) !== -1;
-        };
-
-        this.instance.nodeVisibility(n => !isHidden(n.glabel));
-        this.instance.linkVisibility(l => {
-            const s = l.source;
-            const t = l.target;
-
-            if (s && typeof s === 'object' && isHidden(s.glabel))
-                return false;
-
-            if (t && typeof t === 'object' && isHidden(t.glabel))
-                return false;
-
-            return true;
-        });
+        this.refreshVisibility(this.instance);
     },
 
     //Applies per-label color/size live by writing each node's bgColor/nodeSize and re-poking the
@@ -1672,6 +2115,8 @@ window.graph3DInterop = {
     destroyGraph: function () {
         this.unobserveResize();
         this.teardownLabels();
+        this.removeGlobeMesh();
+        this.globeOn = false;
 
         if (this.instance) {
             this.instance._destructor && this.instance._destructor();

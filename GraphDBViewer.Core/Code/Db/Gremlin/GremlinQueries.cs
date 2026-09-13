@@ -1223,6 +1223,63 @@ public static class GremlinExamples
         "g.addE('edge label').from(gear).to(mount).iterate(); " +
         "g.V().count()";
 
+    ///<summary>
+    ///Eighteen cities — Europe, the United States, East Asia, Sydney — with their coordinates under the
+    ///plain <c>lat</c> / <c>lon</c> names the Map and Globe read by convention, joined by routes — and
+    ///returned as a graph, so one click on Map or Globe after running it shows the routes arcing over the
+    ///earth. One statement per line: the Gremlin server runs the script whole.
+    ///</summary>
+    public const string GeoMapLoader = @"def vie=g.addV('City').property('name','Vienna').property('country','Austria').property('lat',48.2082).property('lon',16.3738).property('exampleType','geo_example_1').next()
+def lhr=g.addV('City').property('name','London').property('country','United Kingdom').property('lat',51.5074).property('lon',-0.1278).property('exampleType','geo_example_1').next()
+def par=g.addV('City').property('name','Paris').property('country','France').property('lat',48.8566).property('lon',2.3522).property('exampleType','geo_example_1').next()
+def ber=g.addV('City').property('name','Berlin').property('country','Germany').property('lat',52.5200).property('lon',13.4050).property('exampleType','geo_example_1').next()
+def ams=g.addV('City').property('name','Amsterdam').property('country','Netherlands').property('lat',52.3676).property('lon',4.9041).property('exampleType','geo_example_1').next()
+def mad=g.addV('City').property('name','Madrid').property('country','Spain').property('lat',40.4168).property('lon',-3.7038).property('exampleType','geo_example_1').next()
+def rom=g.addV('City').property('name','Rome').property('country','Italy').property('lat',41.9028).property('lon',12.4964).property('exampleType','geo_example_1').next()
+def rkv=g.addV('City').property('name','Reykjavik').property('country','Iceland').property('lat',64.1466).property('lon',-21.9426).property('exampleType','geo_example_1').next()
+def nyc=g.addV('City').property('name','New York').property('country','United States').property('lat',40.7128).property('lon',-74.0060).property('exampleType','geo_example_1').next()
+def chi=g.addV('City').property('name','Chicago').property('country','United States').property('lat',41.8781).property('lon',-87.6298).property('exampleType','geo_example_1').next()
+def dfw=g.addV('City').property('name','Dallas').property('country','United States').property('lat',32.7767).property('lon',-96.7970).property('exampleType','geo_example_1').next()
+def mia=g.addV('City').property('name','Miami').property('country','United States').property('lat',25.7617).property('lon',-80.1918).property('exampleType','geo_example_1').next()
+def sea=g.addV('City').property('name','Seattle').property('country','United States').property('lat',47.6062).property('lon',-122.3321).property('exampleType','geo_example_1').next()
+def sfo=g.addV('City').property('name','San Francisco').property('country','United States').property('lat',37.7749).property('lon',-122.4194).property('exampleType','geo_example_1').next()
+def lax=g.addV('City').property('name','Los Angeles').property('country','United States').property('lat',34.0522).property('lon',-118.2437).property('exampleType','geo_example_1').next()
+def tyo=g.addV('City').property('name','Tokyo').property('country','Japan').property('lat',35.6762).property('lon',139.6503).property('exampleType','geo_example_1').next()
+def sel=g.addV('City').property('name','Seoul').property('country','South Korea').property('lat',37.5665).property('lon',126.9780).property('exampleType','geo_example_1').next()
+def syd=g.addV('City').property('name','Sydney').property('country','Australia').property('lat',-33.8688).property('lon',151.2093).property('exampleType','geo_example_1').next()
+g.addE('route').from(vie).to(lhr).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(vie).to(par).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(vie).to(ber).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(vie).to(rom).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(lhr).to(par).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(lhr).to(ams).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(lhr).to(rkv).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(par).to(mad).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(ber).to(ams).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(mad).to(rom).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(lhr).to(nyc).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(rkv).to(nyc).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(par).to(nyc).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(mad).to(mia).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(ams).to(chi).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(nyc).to(chi).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(nyc).to(mia).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(nyc).to(dfw).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(nyc).to(sfo).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(chi).to(dfw).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(chi).to(sea).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(dfw).to(lax).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(dfw).to(mia).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(sea).to(sfo).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(sfo).to(lax).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(sfo).to(tyo).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(sea).to(tyo).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(lax).to(sel).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(tyo).to(sel).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(tyo).to(syd).property('exampleType','geo_example_1').iterate()
+g.addE('route').from(syd).to(lax).property('exampleType','geo_example_1').iterate()
+g.V().has('exampleType','geo_example_1').as('v').outE('route').as('e').inV().as('o').select('v','e','o')";
+
     ///<summary>All example groups, in display order.</summary>
     public static IReadOnlyList<QueryExampleGroup> Groups { get; } = new List<QueryExampleGroup>
     {
@@ -1254,6 +1311,7 @@ public static class GremlinExamples
             new("Social network",     ModernGraphLoader),
             new("Flight routes",      FlightRoutesLoader),
             new("3D Objects",         ThreeDObjectsLoader),
+            new("Geospatial map",     GeoMapLoader),
         }),
     };
 }

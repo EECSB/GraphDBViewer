@@ -142,6 +142,7 @@ public partial class Home
             return;
         }
 
+        RefreshGeoCoverage();
         await GraphView.SetLayout2dAsync(cy2dLayout);
     }
 
@@ -159,7 +160,23 @@ public partial class Home
             return;
         }
 
+        RefreshGeoCoverage();
         await GraphView.SetLayout3dAsync(g3dLayout);
+    }
+
+    //The geographic layouts say what they could place. Refreshed wherever one is chosen — the mode
+    //buttons redraw and so pass through RenderGraphAsync; the layout pickers switch live and do not.
+    private void RefreshGeoCoverage()
+    {
+        if (!IsMap && !IsGlobe)
+            return;
+
+        var data = EffectiveData();
+
+        if (data.ValueKind == JsonValueKind.Undefined)
+            return;
+
+        geoCoverage = GraphDataConverter.GeoCoverage(data);
     }
 
     //Whether the 3D "Label options" dropdown is open. Transient view state, so it is a plain field rather
@@ -212,13 +229,148 @@ public partial class Home
         await GraphView.Set3dNodeDrawDistanceAsync(draw3dNodeDistance);
     }
 
+    //The Map and the Globe are the 2D and 3D views under a geographic layout, not views of their own:
+    //everything the canvas can do — select, style, edit, export, filter — comes along unchanged, and
+    //only where a node is placed differs (by its latitude and longitude, read by GeoCoordinates). They
+    //are offered as two more modes because that is what they are to the person choosing them.
+    public const string GeoLayout = "geo";
+    public const string GlobeLayout = "globe";
+    private const int MapMode = 5;
+    private const int GlobeMode = 6;
+
+    private bool IsMap => visualizationMode == 2 && cy2dLayout == GeoLayout;
+    private bool IsGlobe => visualizationMode == 3 && g3dLayout == GlobeLayout;
+
+    //Whether the toggles beneath the 2D and 3D buttons — plain view or the Map / the Globe — are open.
+    //Hover and focus open one, leaving closes it; transient view state, so plain fields rather than
+    //persisted tab settings.
+    private bool show2dOptions;
+    private bool show3dOptions;
+    private int closeTicket2d;
+    private int closeTicket3d;
+
+    //The toggles beneath 2D and 3D open on hover or focus and close when either leaves. Focus moving
+    //from one of the popover's buttons to another fires focusout before focusin, and closing on the
+    //first would remove the second's target before its click lands — clicking Map and then Outline
+    //lost the click. So a focusout closes only if nothing inside has taken focus back a moment later.
+    private void Show2dOptions()
+    {
+        closeTicket2d++;
+        show2dOptions = true;
+    }
+
+    private void Hide2dOptions()
+    {
+        closeTicket2d++;
+        show2dOptions = false;
+    }
+
+    private async Task Hide2dOptionsOnFocusOut()
+    {
+        var ticket = ++closeTicket2d;
+        await Task.Delay(150);
+
+        if (ticket == closeTicket2d)
+        {
+            show2dOptions = false;
+            StateHasChanged();
+        }
+    }
+
+    private void Show3dOptions()
+    {
+        closeTicket3d++;
+        show3dOptions = true;
+    }
+
+    private void Hide3dOptions()
+    {
+        closeTicket3d++;
+        show3dOptions = false;
+    }
+
+    private async Task Hide3dOptionsOnFocusOut()
+    {
+        var ticket = ++closeTicket3d;
+        await Task.Delay(150);
+
+        if (ticket == closeTicket3d)
+        {
+            show3dOptions = false;
+            StateHasChanged();
+        }
+    }
+
+    //Which earth the Map and the Globe draw: the satellite image, or coastlines on the theme's background.
+    public const string SatelliteStyle = "satellite";
+    public const string OutlineStyle = "outline";
+
+    private async Task SetMapStyle(string style)
+    {
+        if (mapStyle == style)
+            return;
+
+        mapStyle = style;
+        await SaveTabsAsync();
+        await GraphView.SetMapStyleAsync(style);
+    }
+
+    //What the geographic layout found in the loaded graph: how many vertices it could place, out of how
+    //many there are. Refreshed by the render, for the sentence beside the layout picker.
+    private (int Located, int Total) geoCoverage;
+
+    private string GeoStatus
+    {
+        get
+        {
+            if (geoCoverage.Located == 0)
+                return "No vertex carries a latitude and longitude — under lat/latitude and lon/lng/longitude, or a single location, coordinates or point property.";
+
+            if (geoCoverage.Located < geoCoverage.Total)
+                return $"{geoCoverage.Located} of {geoCoverage.Total} vertices carry coordinates; the rest are hidden here.";
+
+            return $"All {geoCoverage.Total} vertices placed by their coordinates.";
+        }
+    }
+
     private async Task SetVisualizationMode(int mode)
     {
-        visualizationMode = mode;
-        if ((mode == 2 || mode == 3) && HasGraphData)
+        ApplyVisualizationMode(mode);
+
+        if ((visualizationMode == 2 || visualizationMode == 3) && HasGraphData)
             await RenderGraphAsync();
         else
             await SaveTabsAsync();
+    }
+
+    //Map and Globe resolve to the 2D and 3D views under their geographic layouts; choosing plain 2D or
+    //3D while on one of them puts the ordinary layout back, so "2D" always means the graph as a graph.
+    //Also where an embed URL's view lands (Home.razor.cs), which is why it is separate from the render.
+    private void ApplyVisualizationMode(int mode)
+    {
+        if (mode == MapMode)
+        {
+            visualizationMode = 2;
+            cy2dLayout = GeoLayout;
+
+            return;
+        }
+
+        if (mode == GlobeMode)
+        {
+            visualizationMode = 3;
+            g3dLayout = GlobeLayout;
+
+            return;
+        }
+
+        if (mode == 2 && cy2dLayout == GeoLayout)
+            cy2dLayout = "cose";
+
+        if (mode == 3 && g3dLayout == GlobeLayout)
+            g3dLayout = "force";
+
+        visualizationMode = mode;
     }
 
     //The graph data to render: the loaded database baseline, or — when "reflect database state" is off
@@ -295,6 +447,9 @@ public partial class Home
         hasPropertyChanges = false;
         commitStatus = null;
 
+        //The geographic layouts say what they could place, so a map with nothing on it explains itself.
+        RefreshGeoCoverage();
+
         await Task.Yield();
         StateHasChanged();
         await Task.Delay(50);
@@ -316,6 +471,7 @@ public partial class Home
             {
                 await JS.InvokeVoidAsync("setCytoscapeDotNetRef", SelfRef());
                 var elementsJson = GraphDataConverter.ToCytoscapeJson(data, labelStyles, edgeColorMode, edgeColors);
+                await JS.InvokeVoidAsync("setCytoscapeMapStyle", mapStyle);
                 await JS.InvokeVoidAsync("drawCytoscapeGraph", elementsJson, "cyGraph", cy2dLayout);
 
                 //A redraw builds a fresh Cytoscape instance, so re-apply grid mode if it's on.
@@ -326,6 +482,7 @@ public partial class Home
             {
                 await JS.InvokeVoidAsync("graph3DInterop.setDotNetRef", SelfRef());
                 var graphJson = GraphDataConverter.ToForceGraphJson(data, labelStyles, edgeColorMode, edgeColors);
+                await JS.InvokeVoidAsync("graph3DInterop.setGlobeStyle", mapStyle);
                 await JS.InvokeVoidAsync("graph3DInterop.drawGraph", "graph3d", graphJson, g3dLayout);
                 await JS.InvokeVoidAsync("graph3DInterop.setLabelVisibility", show3dVertexLabels, show3dEdgeLabels, show3dProps);
                 await JS.InvokeVoidAsync("graph3DInterop.setLabelDrawDistance", draw3dLabelDistance);

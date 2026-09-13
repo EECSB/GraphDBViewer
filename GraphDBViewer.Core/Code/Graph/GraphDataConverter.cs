@@ -76,6 +76,7 @@ public static class GraphDataConverter
         ApplyPerNodeStyle(data, properties);
         ApplyLowConfidence(data, properties);
         ApplyShownProperties(data, properties);
+        ApplyGeoPosition(data, properties);
 
         //Rectangle is the default 2D canvas shape when nothing else set one.
         if (!data.ContainsKey("shape"))
@@ -91,6 +92,61 @@ public static class GraphDataConverter
         {
             elements.Add(new { data });
         }
+    }
+
+    //Where the vertex is on the earth, when its properties say so — read by the Map and Globe layouts,
+    //which place the node by these, and ignored by every other layout. Under names of their own so a
+    //user property that happens to be called "lat" never collides with what the view reads.
+    private static void ApplyGeoPosition(Dictionary<string, object> data, IReadOnlyDictionary<string, string> properties)
+    {
+        if (!GeoCoordinates.TryRead(properties, out double latitude, out double longitude))
+            return;
+
+        data["geoLat"] = latitude;
+        data["geoLng"] = longitude;
+    }
+
+    ///<summary>
+    ///How many of the result's vertices carry a place on the earth, and how many there are — what the
+    ///Map and Globe say about the graph they were asked to draw ("12 of 40 located"), and what tells
+    ///them to say so when the answer is none.
+    ///</summary>
+    public static (int Located, int Total) GeoCoverage(JsonElement results)
+    {
+        int located = 0;
+        int total = 0;
+        var seen = new HashSet<string>();
+
+        if (results.ValueKind != JsonValueKind.Array)
+            return (0, 0);
+
+        foreach (var item in results.EnumerateArray())
+        {
+            var unwrapped = UnwrapGraphSON(item);
+
+            if (TryExtractTraversalTriple(unwrapped, out var v, out _, out var o))
+            {
+                CountGeo(v, seen, ref located, ref total);
+                CountGeo(o, seen, ref located, ref total);
+            }
+            else if (IsVertex(unwrapped))
+                CountGeo(unwrapped, seen, ref located, ref total);
+        }
+
+        return (located, total);
+    }
+
+    private static void CountGeo(JsonElement vertex, HashSet<string> seen, ref int located, ref int total)
+    {
+        string id = GetId(vertex);
+
+        if (id == null || !seen.Add(id))
+            return;
+
+        total++;
+
+        if (GeoCoordinates.TryRead(ExtractProperties(vertex), out _, out _))
+            located++;
     }
 
     //Folds a label's configured color/size/icon/3D model into the node data so the JS view styles it.
@@ -315,6 +371,7 @@ public static class GraphDataConverter
             data["model"] = model;
 
         ApplyShownProperties(data, properties);
+        ApplyGeoPosition(data, properties);
 
         //Sphere is the default 3D solid when nothing else set one.
         if (!data.ContainsKey("shape3d"))
@@ -694,6 +751,10 @@ public static class GraphDataConverter
                 if (skip.Contains(prop.Name) || prop.Name.StartsWith("_"))
                     continue;
 
+                //The value itself is typed too in GraphSON 3 — {"@type":"g:Double","@value":48.2} — so it is
+                //unwrapped like the property that carries it, or a number reads as a JSON blob and no
+                //parser downstream (coordinates, pinned positions, sizes) can make anything of it. A
+                //JsonElement's ToString gives a number's raw text, which is culture-invariant by nature.
                 if (prop.Value.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var entry in prop.Value.EnumerateArray())
@@ -701,7 +762,7 @@ public static class GraphDataConverter
                         var unwrapped = UnwrapGraphSON(entry);
                         if (unwrapped.TryGetProperty("value", out var val))
                         {
-                            result[prop.Name] = val.ToString();
+                            result[prop.Name] = UnwrapGraphSON(val).ToString();
                             break;
                         }
                         result[prop.Name] = unwrapped.ToString();
@@ -712,7 +773,7 @@ public static class GraphDataConverter
                 {
                     var unwrapped = UnwrapGraphSON(prop.Value);
                     if (unwrapped.TryGetProperty("value", out var val))
-                        result[prop.Name] = val.ToString();
+                        result[prop.Name] = UnwrapGraphSON(val).ToString();
                     else
                         result[prop.Name] = unwrapped.ToString();
                 }

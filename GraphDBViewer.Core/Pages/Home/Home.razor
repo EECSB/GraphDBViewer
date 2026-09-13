@@ -553,6 +553,7 @@
                                         <option value="circle">Layout: Circle</option>
                                         <option value="grid">Layout: Grid</option>
                                         <option value="random">Layout: Random</option>
+                                        <option value="@GeoLayout">Layout: Map (by coordinates)</option>
                                         @if (HasUserSavedPositions)
                                         {
                                             <option value="@UserSavedLayout">Layout: User saved positions</option>
@@ -585,6 +586,7 @@
                                         <option value="lr">Layout: Left → right</option>
                                         <option value="radialout">Layout: Radial</option>
                                         <option value="zout">Layout: Z-stack</option>
+                                        <option value="@GlobeLayout">Layout: Globe (by coordinates)</option>
                                         @if (HasUserSavedPositions)
                                         {
                                             <option value="@UserSavedLayout">Layout: User saved positions</option>
@@ -616,10 +618,58 @@
                                     Data model
                                 </button>
                             }
+                            @* The Map lives under the 2D button and the Globe under the 3D one: each is its view with
+                               the earth behind it — a way of drawing that view, not a view of its own — so a click on
+                               2D or 3D is the plain view, and hovering (or focusing) the button opens a small toggle
+                               beneath it where the map or the globe is chosen (Home.GraphView.cs has both as layouts). *@
                             <div class="btn-group" role="group" aria-label="Visualization mode">
                                 <button class="btn btn-sm @(visualizationMode == 1 ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(1)">JSON</button>
-                                <button class="btn btn-sm @(visualizationMode == 2 ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(2)">2D</button>
-                                <button class="btn btn-sm @(visualizationMode == 3 ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(3)">3D</button>
+                                <div class="btn-group position-relative gdbv-mode-2d" role="group"
+                                     @onmouseenter="Show2dOptions"
+                                     @onmouseleave="Hide2dOptions"
+                                     @onfocusin="Show2dOptions"
+                                     @onfocusout="Hide2dOptionsOnFocusOut">
+                                    <button class="btn btn-sm @(visualizationMode == 2 ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(2)" title="The 2D graph. Hover for the map background.">2D@(IsMap ? " · Map" : "")</button>
+                                    @if (show2dOptions)
+                                    {
+                                        <div class="gdbv-mode-popover">
+                                            <div class="btn-group btn-group-sm" role="group" aria-label="2D background">
+                                                <button class="btn @(!IsMap ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(2)" title="The plain 2D graph">2D</button>
+                                                <button class="btn @(IsMap ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(MapMode)" title="The 2D graph on a world map: vertices placed by their latitude and longitude">Map</button>
+                                            </div>
+                                            @if (IsMap)
+                                            {
+                                                <div class="btn-group btn-group-sm" role="group" aria-label="Map style">
+                                                    <button class="btn @(mapStyle != OutlineStyle ? "btn-secondary" : "btn-outline-secondary")" @onclick="() => SetMapStyle(SatelliteStyle)" title="The earth as seen from space">Satellite</button>
+                                                    <button class="btn @(mapStyle == OutlineStyle ? "btn-secondary" : "btn-outline-secondary")" @onclick="() => SetMapStyle(OutlineStyle)" title="Coastlines and borders only">Outline</button>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                                <div class="btn-group position-relative gdbv-mode-3d" role="group"
+                                     @onmouseenter="Show3dOptions"
+                                     @onmouseleave="Hide3dOptions"
+                                     @onfocusin="Show3dOptions"
+                                     @onfocusout="Hide3dOptionsOnFocusOut">
+                                    <button class="btn btn-sm @(visualizationMode == 3 ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(3)" title="The 3D graph. Hover for the globe.">3D@(IsGlobe ? " · Globe" : "")</button>
+                                    @if (show3dOptions)
+                                    {
+                                        <div class="gdbv-mode-popover">
+                                            <div class="btn-group btn-group-sm" role="group" aria-label="3D background">
+                                                <button class="btn @(!IsGlobe ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(3)" title="The plain 3D graph">3D</button>
+                                                <button class="btn @(IsGlobe ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(GlobeMode)" title="The 3D graph on a globe: vertices placed by their latitude and longitude">Globe</button>
+                                            </div>
+                                            @if (IsGlobe)
+                                            {
+                                                <div class="btn-group btn-group-sm" role="group" aria-label="Globe style">
+                                                    <button class="btn @(mapStyle != OutlineStyle ? "btn-secondary" : "btn-outline-secondary")" @onclick="() => SetMapStyle(SatelliteStyle)" title="The earth as seen from space">Satellite</button>
+                                                    <button class="btn @(mapStyle == OutlineStyle ? "btn-secondary" : "btn-outline-secondary")" @onclick="() => SetMapStyle(OutlineStyle)" title="Coastlines and borders only">Outline</button>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
                                 <button class="btn btn-sm @(visualizationMode == 4 ? "btn-primary" : "btn-outline-primary")" @onclick="() => SetVisualizationMode(4)">Table</button>
                             </div>
                         </div>
@@ -963,6 +1013,14 @@
                             @if (visualizationMode == 3 && HasGraphData)
                             {
                                 <button class="btn btn-primary btn-sm fw-semibold shadow" style="position: absolute; bottom: 12px; right: 12px; z-index: 20;" @onclick="OpenXrViewerAsync" title="View this graph in VR / AR (WebXR). Opens an immersive viewer: needs a VR / AR headset on this machine, or a WebXR-capable phone (Android) over HTTPS.">VR / AR</button>
+                            }
+
+                            @* What the geographic layout could place — so a map with nothing on it explains itself,
+                               and one with half the graph says where the other half went. *@
+                            @if ((IsMap || IsGlobe) && HasGraphData)
+                            {
+                                @*Lifted clear of the graticule's bottom row of degrees while grid mode draws one.*@
+                                <div class="small px-2 py-1 rounded shadow-sm gdbv-geo-status" style="position: absolute; left: 12px; bottom: @(gridMode && IsMap ? "30px" : "12px"); z-index: 20; pointer-events: none; background: var(--bs-body-bg); opacity: 0.92;">@GeoStatus</div>
                             }
 
                             @if (ShowUncommittedBanner && connectionPickMode != "twoClick")

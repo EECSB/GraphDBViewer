@@ -470,6 +470,512 @@ function runTrackedLayout(layout) {
     return layout;
 }
 
+//── The Map: the 2D view under a geographic layout ─────────────────────────────────────────────
+//Located nodes (data.geoLat / geoLng, read from their properties by GeoCoordinates.cs) are placed by an
+//equirectangular projection onto a plane the size of the bundled world image, and the earth is drawn
+//on a canvas behind the graph, kept in step with every pan and zoom. Nodes with no place are hidden
+//with their edges — placed arbitrarily they would read as wrong, and a map is a claim about where
+//things are.
+//
+//The layer is its own <canvas>, a sibling just behind the graph container: two styles paint it — the
+//satellite image, or the coastlines of Natural Earth's 1:110m countries as lines on the theme's own
+//background — and grid mode, which on a plain graph is a square grid on the container's CSS
+//background, becomes here a graticule: meridians and parallels at a spacing that suits the zoom, with
+//their degrees along the edges. Both assets load on first use.
+const GEO_MAP_URL = '_content/GraphDBViewer.Core/img/earth.jpg';
+const GEO_OUTLINE_URL = '_content/GraphDBViewer.Core/img/earth-outline.json';
+const GEO_MAP_WIDTH = 2048;
+const GEO_MAP_HEIGHT = 1024;
+const GEO_GRATICULE_MIN_SPACING = 70;//px between graticule lines, at least
+const GEO_MARKER_PROPS = 'font-size padding text-max-width width height';//what the marker scale bypasses on a node
+const GEO_MARKER_EDGE_PROPS = 'font-size width arrow-scale';//and on an edge
+let geoLayerOn = false;
+let geoLayer = null;//the canvas behind the graph while the map is on
+let geoStyle = 'satellite';//'satellite' or 'outline' — setCytoscapeMapStyle
+let geoImage = null;//the world image, once loaded
+let geoOutline = null;//the coastline rings [[[lon, lat], ...], ...], once loaded
+let geoLoading = {};//url → true while a fetch is in flight, so a redraw never starts a second one
+
+function geoPosition(n) {
+    const lat = n.data('geoLat');
+    const lng = n.data('geoLng');
+
+    if (typeof lat !== 'number' || typeof lng !== 'number')
+        return undefined;
+
+    return window.graphGeometry.geoProject(lat, lng, GEO_MAP_WIDTH, GEO_MAP_HEIGHT);
+}
+
+function geoLayout() {
+    cy.nodes().forEach(n => {
+        if (geoPosition(n))
+            n.removeClass('gdbv-unlocated');
+        else
+            n.addClass('gdbv-unlocated');
+    });
+
+    enableGeoLayer();
+    applyGeoEdgeBends();
+    startGeoMarkerScale();
+
+    runTrackedLayout(cy.layout({
+        name: 'preset',
+        positions: n => geoPosition(n) || { x: 0, y: 0 },
+        padding: 50,
+        fit: true,
+        animate: true,
+        animationDuration: 500
+    }));
+}
+
+//Every other layout: nothing hidden, no earth behind the graph, edges straight again.
+function clearGeoLayout() {
+    if (!cy)
+        return;
+
+    cy.nodes('.gdbv-unlocated').removeClass('gdbv-unlocated');
+    clearGeoEdgeBends();
+    clearGeoMarkerScale();
+    disableGeoLayer();
+}
+
+//On the map a node is a marker: its box and label keep their screen size whatever the zoom — the
+//stylesheet's size, as at zoom 1 — instead of growing with the earth as the user zooms in, which is
+//how the 2D view behaves and is right there and wrong here (the user's call, 2026-09-02). Each
+//element's stylesheet values are read once, bypasses off, and kept in its scratch; every zoom writes
+//them back divided by the zoom. Edge labels the same. Off again with the map, so the plain view is
+//untouched. Nodes sized to their label keep that: only a fixed width/height is scaled.
+function startGeoMarkerScale() {
+    cy.off('zoom', applyGeoMarkerScale);
+    cy.on('zoom', applyGeoMarkerScale);
+    applyGeoMarkerScale();
+}
+
+function applyGeoMarkerScale() {
+    if (!cy || !geoLayerOn)
+        return;
+
+    const f = 1 / cy.zoom();
+
+    cy.batch(() => {
+        cy.nodes().forEach(n => {
+            let base = n.scratch('gdbvMarker');
+
+            if (!base) {
+                n.removeStyle(GEO_MARKER_PROPS);
+                base = {
+                    font: n.numericStyle('font-size'),
+                    padding: n.numericStyle('padding'),
+                    maxWidth: n.numericStyle('text-max-width'),
+                    width: null,
+                    height: null
+                };
+
+                if (n.style('width') !== 'label') {
+                    base.width = n.numericStyle('width');
+                    base.height = n.numericStyle('height');
+                }
+
+                n.scratch('gdbvMarker', base);
+            }
+
+            const style = {
+                'font-size': (base.font * f) + 'px',
+                'padding': (base.padding * f) + 'px',
+                'text-max-width': (base.maxWidth * f) + 'px'
+            };
+
+            if (base.width !== null) {
+                style.width = base.width * f;
+                style.height = base.height * f;
+            }
+
+            n.style(style);
+        });
+
+        //Edges too: a route stays a line, not a band, and its arrowhead an arrowhead.
+        cy.edges().forEach(e => {
+            let base = e.scratch('gdbvMarker');
+
+            if (!base) {
+                e.removeStyle(GEO_MARKER_EDGE_PROPS);
+                base = { font: e.numericStyle('font-size'), width: e.numericStyle('width'), arrow: e.numericStyle('arrow-scale') };
+                e.scratch('gdbvMarker', base);
+            }
+
+            e.style({
+                'font-size': (base.font * f) + 'px',
+                'width': base.width * f,
+                'arrow-scale': base.arrow * f
+            });
+        });
+    });
+}
+
+function clearGeoMarkerScale() {
+    cy.off('zoom', applyGeoMarkerScale);
+
+    cy.batch(() => {
+        cy.nodes().forEach(n => {
+            n.removeStyle(GEO_MARKER_PROPS);
+            n.removeScratch('gdbvMarker');
+        });
+
+        cy.edges().forEach(e => {
+            e.removeStyle(GEO_MARKER_EDGE_PROPS);
+            e.removeScratch('gdbvMarker');
+        });
+    });
+}
+
+//A route between two places follows the great circle, which on the flat map is a curve: each edge
+//between located nodes gets Cytoscape's `segments` curve through points along the arc, computed by
+//graphGeometry.geoEdgeBend from the coordinates — the layout's positions come from the same numbers,
+//so the controls are right before the nodes have moved. Applied as a bypass style so the stylesheet's
+//own curve comes back untouched when the map goes. Short hops stay straight, and so does a route
+//whose arc crosses the antimeridian, where the map ends.
+function applyGeoEdgeBends() {
+    const geo = window.graphGeometry;
+
+    cy.edges().forEach(e => {
+        const s = e.source();
+        const t = e.target();
+        const lat1 = s.data('geoLat');
+        const lng1 = s.data('geoLng');
+        const lat2 = t.data('geoLat');
+        const lng2 = t.data('geoLng');
+
+        if (typeof lat1 !== 'number' || typeof lng1 !== 'number' || typeof lat2 !== 'number' || typeof lng2 !== 'number')
+            return;
+
+        const bend = geo.geoEdgeBend(lat1, lng1, lat2, lng2, GEO_MAP_WIDTH, GEO_MAP_HEIGHT);
+
+        if (!bend)
+            return;
+
+        e.style({
+            'curve-style': 'segments',
+            'segment-weights': bend.weights.join(' '),
+            'segment-distances': bend.distances.join(' ')
+        });
+        e.addClass('gdbv-geodesic');
+    });
+}
+
+function clearGeoEdgeBends() {
+    cy.edges('.gdbv-geodesic')
+      .removeStyle('curve-style segment-weights segment-distances')
+      .removeClass('gdbv-geodesic');
+}
+
+//Which earth the map and the globe draw: 'satellite' (the image) or 'outline' (coastlines). Remembered
+//for the next map even when none is showing, so it can be set before the draw.
+function setCytoscapeMapStyle(style) {
+    if (style === 'outline')
+        geoStyle = 'outline';
+    else
+        geoStyle = 'satellite';
+
+    if (geoLayerOn) {
+        loadGeoAssets();
+        drawGeoLayer();
+    }
+}
+
+//What the layer is doing, for tests: whether it is on, its style, whether the graticule is drawn and
+//at what spacing, and which assets have arrived.
+function getCytoscapeGeoState() {
+    let step = null;
+
+    if (geoLayerOn && gridEnabled && cy)
+        step = window.graphGeometry.geoGraticuleStep(GEO_MAP_WIDTH * cy.zoom() / 360, GEO_GRATICULE_MIN_SPACING);
+
+    return {
+        on: geoLayerOn,
+        style: geoStyle,
+        graticule: geoLayerOn && gridEnabled,
+        graticuleStep: step,
+        imageReady: !!geoImage,
+        outlineReady: !!geoOutline
+    };
+}
+
+function enableGeoLayer() {
+    const container = cy.container();
+
+    if (!geoLayer) {
+        geoLayer = document.createElement('canvas');
+        geoLayer.className = 'gdbv-geo-layer';
+        geoLayer.style.position = 'absolute';
+        geoLayer.style.inset = '0';
+        geoLayer.style.width = '100%';
+        geoLayer.style.height = '100%';
+        geoLayer.style.pointerEvents = 'none';
+    }
+
+    //Behind the graph: an earlier sibling of its container, which is positioned and so paints over it.
+    if (geoLayer.parentElement !== container.parentElement)
+        container.parentElement.insertBefore(geoLayer, container);
+
+    if (!geoLayerOn) {
+        geoLayerOn = true;
+        cy.on('zoom pan resize', drawGeoLayer);
+    }
+
+    //The square grid would paint over the earth; while the map is on, grid mode is the graticule.
+    clearPlainGrid();
+    loadGeoAssets();
+    drawGeoLayer();
+}
+
+function disableGeoLayer() {
+    if (!geoLayerOn)
+        return;
+
+    geoLayerOn = false;
+    cy.off('zoom pan resize', drawGeoLayer);
+
+    if (geoLayer && geoLayer.parentElement)
+        geoLayer.parentElement.removeChild(geoLayer);
+
+    //Grid mode outlives the map: the square grid comes back on the plain graph.
+    if (gridEnabled)
+        updateGridOverlay();
+}
+
+//Fetches what the current style needs, once; the layer redraws itself when it arrives.
+function loadGeoAssets() {
+    if (geoStyle === 'satellite' && !geoImage && !geoLoading[GEO_MAP_URL]) {
+        geoLoading[GEO_MAP_URL] = true;
+        const image = new Image();
+        image.onload = function () {
+            geoImage = image;
+            geoLoading[GEO_MAP_URL] = false;
+            drawGeoLayer();
+        };
+        image.onerror = function () {
+            geoLoading[GEO_MAP_URL] = false;
+        };
+        image.src = GEO_MAP_URL;
+    }
+
+    if (geoStyle === 'outline' && !geoOutline && !geoLoading[GEO_OUTLINE_URL]) {
+        geoLoading[GEO_OUTLINE_URL] = true;
+        fetch(GEO_OUTLINE_URL)
+            .then(r => r.json())
+            .then(rings => {
+                geoOutline = rings;
+                geoLoading[GEO_OUTLINE_URL] = false;
+                drawGeoLayer();
+            })
+            .catch(() => {
+                geoLoading[GEO_OUTLINE_URL] = false;
+            });
+    }
+}
+
+//The colors the layer paints with, by theme. The image gets a veil so nodes read against it; the
+//outline draws on the theme's own background, so it needs none.
+function geoPalette() {
+    if (document.documentElement.getAttribute('data-bs-theme') === 'dark') {
+        return {
+            veil: 'rgba(10, 14, 20, 0.55)',
+            coast: 'rgba(186, 198, 214, 0.75)',
+            edge: 'rgba(186, 198, 214, 0.35)',
+            grid: 'rgba(255, 255, 255, 0.28)',
+            label: 'rgba(235, 240, 248, 0.9)',
+            halo: 'rgba(10, 14, 20, 0.85)'
+        };
+    }
+
+    return {
+        veil: 'rgba(255, 255, 255, 0.28)',
+        coast: 'rgba(58, 70, 90, 0.75)',
+        edge: 'rgba(58, 70, 90, 0.35)',
+        grid: 'rgba(0, 0, 0, 0.28)',
+        label: 'rgba(30, 36, 46, 0.9)',
+        halo: 'rgba(255, 255, 255, 0.85)'
+    };
+}
+
+//Paints the layer for the current viewport: the world plane is model coordinates [0, W] × [0, H], so
+//on screen it is W·zoom wide and starts at the pan. Everything is clipped to that rectangle except the
+//graticule's labels, which sit along the visible edges of the world.
+function drawGeoLayer() {
+    if (!cy || !geoLayerOn || !geoLayer)
+        return;
+
+    const container = cy.container();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+
+    if (geoLayer.width !== Math.round(width * dpr) || geoLayer.height !== Math.round(height * dpr)) {
+        geoLayer.width = Math.round(width * dpr);
+        geoLayer.height = Math.round(height * dpr);
+    }
+
+    const ctx = geoLayer.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    paintGeoScene(ctx, geoWorldRect(cy.zoom(), cy.pan()), width, height, gridEnabled);
+}
+
+//Where the world plane lands on screen for a zoom and pan.
+function geoWorldRect(zoom, pan) {
+    return { x: pan.x, y: pan.y, w: GEO_MAP_WIDTH * zoom, h: GEO_MAP_HEIGHT * zoom };
+}
+
+//Paints the earth — and the graticule when asked — for a world rectangle onto any context of the given
+//logical size: the layer on screen, or an export's canvas.
+function paintGeoScene(ctx, world, width, height, graticule) {
+    const colors = geoPalette();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(world.x, world.y, world.w, world.h);
+    ctx.clip();
+
+    if (geoStyle === 'satellite' && geoImage) {
+        ctx.drawImage(geoImage, world.x, world.y, world.w, world.h);
+        ctx.fillStyle = colors.veil;
+        ctx.fillRect(world.x, world.y, world.w, world.h);
+    } else if (geoStyle === 'outline') {
+        drawGeoOutline(ctx, world, colors);
+    }
+
+    if (graticule)
+        drawGeoGraticuleLines(ctx, world, colors, width, height);
+
+    ctx.restore();
+
+    if (graticule)
+        drawGeoGraticuleLabels(ctx, world, colors, width, height);
+}
+
+//Coastlines and borders as one stroke per ring, and the edge of the world so the map has one.
+function drawGeoOutline(ctx, world, colors) {
+    ctx.strokeStyle = colors.edge;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(world.x + 0.5, world.y + 0.5, world.w - 1, world.h - 1);
+
+    if (!geoOutline)
+        return;
+
+    const sx = world.w / 360;
+    const sy = world.h / 180;
+
+    ctx.strokeStyle = colors.coast;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+
+    geoOutline.forEach(ring => {
+        ring.forEach((p, i) => {
+            const x = world.x + (p[0] + 180) * sx;
+            const y = world.y + (90 - p[1]) * sy;
+
+            if (i === 0)
+                ctx.moveTo(x, y);
+            else
+                ctx.lineTo(x, y);
+        });
+    });
+
+    ctx.stroke();
+}
+
+//Meridians and parallels at the spacing the zoom allows, only across the part of the world on screen.
+function drawGeoGraticuleLines(ctx, world, colors, width, height) {
+    const step = window.graphGeometry.geoGraticuleStep(world.w / 360, GEO_GRATICULE_MIN_SPACING);
+    const sx = world.w / 360;
+    const sy = world.h / 180;
+    const top = Math.max(world.y, 0);
+    const bottom = Math.min(world.y + world.h, height);
+    const left = Math.max(world.x, 0);
+    const right = Math.min(world.x + world.w, width);
+
+    ctx.strokeStyle = colors.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    for (let lon = -180; lon <= 180; lon += step) {
+        const x = Math.round(world.x + (lon + 180) * sx) + 0.5;
+
+        if (x < 0 || x > width)
+            continue;
+
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, bottom);
+    }
+
+    for (let lat = -90; lat <= 90; lat += step) {
+        const y = Math.round(world.y + (90 - lat) * sy) + 0.5;
+
+        if (y < 0 || y > height)
+            continue;
+
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+    }
+
+    ctx.stroke();
+}
+
+//Degrees along the edges: longitudes across the top and bottom, latitudes down the left and right —
+//at the world's edge when it is on screen, else at the canvas's, so the labels never scroll away.
+function drawGeoGraticuleLabels(ctx, world, colors, width, height) {
+    const geo = window.graphGeometry;
+    const step = geo.geoGraticuleStep(world.w / 360, GEO_GRATICULE_MIN_SPACING);
+    const sx = world.w / 360;
+    const sy = world.h / 180;
+    const top = Math.max(world.y, 0);
+    const bottom = Math.min(world.y + world.h, height);
+    const left = Math.max(world.x, 0);
+    const right = Math.min(world.x + world.w, width);
+    const pad = 3;
+
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = colors.halo;
+    ctx.fillStyle = colors.label;
+
+    const label = function (text, x, y) {
+        ctx.strokeText(text, x, y);
+        ctx.fillText(text, x, y);
+    };
+
+    ctx.textAlign = 'center';
+
+    for (let lon = -180; lon <= 180; lon += step) {
+        const x = world.x + (lon + 180) * sx;
+
+        if (x < left + 12 || x > right - 12)
+            continue;
+
+        const text = geo.geoDegreeLabel(lon, 'lon');
+        ctx.textBaseline = 'top';
+        label(text, x, top + pad);
+        ctx.textBaseline = 'bottom';
+        label(text, x, bottom - pad);
+    }
+
+    ctx.textBaseline = 'middle';
+
+    for (let lat = -90; lat <= 90; lat += step) {
+        const y = world.y + (90 - lat) * sy;
+
+        if (y < top + 14 || y > bottom - 14)
+            continue;
+
+        const text = geo.geoDegreeLabel(lat, 'lat');
+        ctx.textAlign = 'left';
+        label(text, left + pad, y);
+        ctx.textAlign = 'right';
+        label(text, right - pad, y);
+    }
+}
+
 //Returns a Cytoscape layout config for one of the built-in layout names.
 //All of these ship with cytoscape core — no extra layout extensions required.
 function cytoscapeLayout(name) {
@@ -564,6 +1070,13 @@ function clusterByLabelLayout() {
 //Saved positions (gdbvX/gdbvY → data.px/py) are honored ONLY for the user-saved layout; every other
 //layout arranges all nodes and ignores them.
 function applyCytoscapeLayout(layoutName) {
+    if (layoutName === 'geo') {
+        geoLayout();
+        return;
+    }
+
+    clearGeoLayout();
+
     if (layoutName === 'cluster') {
         clusterByLabelLayout();
         return;
@@ -708,6 +1221,15 @@ function cytoscapeStyle() {
                     'target-arrow-color': '#fd7e14',
                     'width': 3
                 }
+            },
+            {
+                //A node the Map cannot place — no latitude/longitude among its properties. Hidden with
+                //its edges, which Cytoscape hides along with either endpoint; back the moment the
+                //layout is anything but geographic (clearGeoLayout).
+                selector: '.gdbv-unlocated',
+                style: {
+                    'display': 'none'
+                }
             }
     ];
 }
@@ -749,6 +1271,9 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
         stopCurrentLayout();
         unobserveCyResize();
         teardownShowLabels();
+        //The map layer is a sibling of the container, which outlives the instance — take it down while
+        //the instance can still unhook its listener.
+        disableGeoLayer();
         cy.destroy();
         cy = null;
     }
@@ -1086,6 +1611,13 @@ function setCytoscapeLayout(layoutName) {
     if (!cy)
         return;
 
+    if (layoutName === 'geo') {
+        geoLayout();
+        return;
+    }
+
+    clearGeoLayout();
+
     if (layoutName === 'cluster')
         clusterByLabelLayout();
     else
@@ -1118,12 +1650,14 @@ function applyCytoscapePositions(json) {
 //Grid mode: draws a grid overlay behind the 2D graph and snaps nodes to it (on drag, and on
 //click-to-place via the tap handler above). The overlay is a CSS background on the container, aligned
 //to graph coordinates by tracking zoom/pan so the drawn lines line up with the snap positions.
+//
+//On the Map the same switch means the graticule instead — drawn by the map layer, in degrees — and
+//no snapping, since a node's place there is its coordinates, not a grid cell.
 function setCytoscapeGridMode(enabled) {
     if (!cyIsLive())
         return;
 
     gridEnabled = enabled;
-    const container = cy.container();
 
     //Detach first so re-enabling (e.g. after a re-render) never stacks duplicate handlers.
     cy.off('zoom pan resize', updateGridOverlay);
@@ -1133,15 +1667,24 @@ function setCytoscapeGridMode(enabled) {
         cy.on('zoom pan resize', updateGridOverlay);
         cy.on('dragfree', 'node', snapNodeToGrid);
         updateGridOverlay();
-    } else if (container) {
-        container.style.backgroundImage = '';
+    } else {
+        clearPlainGrid();
     }
+
+    if (geoLayerOn)
+        drawGeoLayer();
 }
 
 //Redraws the grid overlay so its lines fall on multiples of GRID_STEP in graph coordinates.
 function updateGridOverlay() {
     if (!cyIsLive() || !gridEnabled)
         return;
+
+    //While the map is on, the graticule is the grid; the square one would paint over the earth.
+    if (geoLayerOn) {
+        clearPlainGrid();
+        return;
+    }
 
     const container = cy.container();
     if (!container)
@@ -1157,8 +1700,23 @@ function updateGridOverlay() {
     container.style.backgroundPosition = pan.x + 'px ' + pan.y + 'px';
 }
 
-//Snaps a dragged node to the nearest grid intersection.
+function clearPlainGrid() {
+    const container = cy && cy.container();
+
+    if (!container)
+        return;
+
+    container.style.backgroundImage = '';
+    container.style.backgroundSize = '';
+    container.style.backgroundPosition = '';
+}
+
+//Snaps a dragged node to the nearest grid intersection — not on the map, where the drag is the
+//user's and the grid is only drawn.
 function snapNodeToGrid(evt) {
+    if (geoLayerOn)
+        return;
+
     const n = evt.target;
     const p = n.position();
     n.position({
@@ -1243,15 +1801,63 @@ function zoomCytoscape(factor) {
 
 //Returns an image data URL of the current 2D graph (white background), or null.
 //format 'jpeg' emits a JPEG, otherwise PNG.
+//
+//On the Map the export is the viewport as seen — the earth, and the graticule when grid mode is on,
+//painted under the graph at twice the screen's size — because the earth has no elements for a
+//whole-graph crop to find. That path returns a promise: the graph's own render is decoded into an
+//image and drawn over the earth.
 function cytoscapeImage(format) {
-    if (cy) {
+    if (!cy)
+        return null;
+
+    if (!geoLayerOn) {
         if (format === 'jpeg')
             return cy.jpg({ full: true, scale: 2, bg: '#ffffff' });
         else
             return cy.png({ full: true, scale: 2, bg: '#ffffff' });
     }
 
-    return null;
+    const scale = 2;
+    const canvas = mapExportCanvas(scale);
+    const graph = cy.png({ full: false, scale: scale });
+
+    return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = function () {
+            const ctx = canvas.getContext('2d');
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+            if (format === 'jpeg')
+                resolve(canvas.toDataURL('image/jpeg', 0.92));
+            else
+                resolve(canvas.toDataURL('image/png'));
+        };
+        image.onerror = function () {
+            resolve(graph);
+        };
+        image.src = graph;
+    });
+}
+
+//The earth as the viewport shows it, on the page's own background, at a scale — what goes under an
+//export of the Map.
+function mapExportCanvas(scale) {
+    const container = cy.container();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.fillStyle = getComputedStyle(document.body).backgroundColor || '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    paintGeoScene(ctx, geoWorldRect(cy.zoom(), cy.pan()), width, height, gridEnabled);
+
+    return canvas;
 }
 
 let svgExtRegistered = false;
@@ -1270,12 +1876,23 @@ function ensureSvgExtension() {
     return false;
 }
 
-//Returns an SVG string of the current 2D graph (white background), or null.
+//Returns an SVG string of the current 2D graph (white background), or null. On the Map it is the
+//viewport, with the earth (and graticule) as one raster image behind the vector graph.
 function cytoscapeToSvg() {
-    if (cy && ensureSvgExtension())
+    if (!cy || !ensureSvgExtension())
+        return null;
+
+    if (!geoLayerOn)
         return cy.svg({ full: true, scale: 1, bg: '#ffffff' });
 
-    return null;
+    const container = cy.container();
+    const earth = mapExportCanvas(2).toDataURL('image/jpeg', 0.9);
+    const image = '<image x="0" y="0" width="' + container.clientWidth + '" height="' + container.clientHeight + '" preserveAspectRatio="none" href="' + earth + '"/>';
+    const svg = cy.svg({ full: false, scale: 1 });
+
+    return svg.replace(/<svg\b[^>]*>/, function (tag) {
+        return tag + image;
+    });
 }
 
 //Renders the given elements through a throwaway off-screen Cytoscape instance with a real layout and
@@ -1410,6 +2027,9 @@ function destroyCytoscapeGraph() {
         stopCurrentLayout();
         unobserveCyResize();
         teardownShowLabels();
+        //The map layer is a sibling of the container, which outlives the instance — take it down while
+        //the instance can still unhook its listener.
+        disableGeoLayer();
         cy.destroy();
         cy = null;
     }

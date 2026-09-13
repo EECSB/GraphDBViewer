@@ -197,7 +197,7 @@ public partial class Home : IAsyncDisposable
 
         //Initial view (JSON / 2D / 3D / Table).
         if (settings.View.HasValue)
-            visualizationMode = settings.View.Value;
+            ApplyVisualizationMode(settings.View.Value);
 
         //Initial query text + editor language, set before connecting so LoadQueryAsync can't overwrite it.
         if (settings.Query != null)

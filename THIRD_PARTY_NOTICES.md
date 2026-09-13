@@ -5,8 +5,8 @@ property of its respective owners and is used under its own license. Graph DB
 Viewer's own code is licensed separately — see [LICENSE](LICENSE) (noncommercial)
 and [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) (commercial).
 
-Every component below is licensed under the **MIT License**, whose full text
-follows the list.
+Every component in the first list is licensed under the **MIT License**, whose
+full text follows the lists; the imagery in the second is in the public domain.
 
 ## Bundled in the application
 
@@ -21,6 +21,13 @@ follows the list.
 | Blazor / ASP.NET Core (Microsoft.AspNetCore.Components.WebAssembly) | Copyright (c) .NET Foundation and Contributors | https://github.com/dotnet/aspnetcore |
 | Blazored.LocalStorage | Copyright (c) 2019 Blazored | https://github.com/Blazored/LocalStorage |
 | Net.Codecrete.QrCodeGenerator | Copyright (c) Manuel Bleichenbacher; portions Copyright (c) Project Nayuki | https://github.com/manuelbl/QrCodeGenerator |
+
+## Public domain imagery
+
+| Asset | Source | Terms |
+|---|---|---|
+| `GraphDBViewer.Core/wwwroot/img/earth.jpg` — the world image behind the Map and on the Globe (satellite style) | NASA Visible Earth, *Blue Marble* (downscaled to 8192 × 4096) | NASA imagery is in the public domain; credit: NASA |
+| `GraphDBViewer.Core/wwwroot/img/earth-outline.json` — the coastlines and borders of the Map's and the Globe's outline style | Natural Earth, *1:110m Admin 0 – Countries* (reduced to a ring list, two decimals) | Natural Earth data is in the public domain |
 
 ## Development / test only (not distributed with the application)
 

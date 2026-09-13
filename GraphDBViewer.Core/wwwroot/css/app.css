@@ -767,3 +767,36 @@ code {
     max-height: 14em;
     overflow: auto;
 }
+
+/* The toggle beneath the 2D mode button (plain 2D or the Map), opened on hover or focus. The top
+   padding is the bridge the pointer crosses from the button down to the toggle without leaving the
+   group that shows it. */
+.gdbv-mode-popover {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 30;
+    padding-top: 0.35rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+}
+
+.gdbv-mode-popover > .btn-group {
+    background: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.375rem;
+    padding: 0.25rem;
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.25);
+    white-space: nowrap;
+}
+
+/* The map layer: a canvas just behind the 2D graph's container while the Map is on (CytoscapeInterop.js). */
+.gdbv-geo-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}

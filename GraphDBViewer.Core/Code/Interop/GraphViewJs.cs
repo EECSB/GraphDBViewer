@@ -121,6 +121,25 @@ public class GraphViewJs
         catch { }
     }
 
+    ///<summary>
+    ///Which earth the Map and the Globe draw — "satellite" or "outline". Both views remember it, so it
+    ///is told to both whatever is showing: the one on screen repaints, the other has it for later.
+    ///</summary>
+    public async Task SetMapStyleAsync(string style)
+    {
+        try
+        {
+            await _js.InvokeVoidAsync("setCytoscapeMapStyle", style);
+        }
+        catch { }
+
+        try
+        {
+            await _js.InvokeVoidAsync("graph3DInterop.setGlobeStyle", style);
+        }
+        catch { }
+    }
+
     ///<summary>Toggles always-on vertex/edge labels and the shown-properties overlay in the 3D view.</summary>
     public async Task Set3dLabelVisibilityAsync(bool vertexLabels, bool edgeLabels, bool props)
     {
