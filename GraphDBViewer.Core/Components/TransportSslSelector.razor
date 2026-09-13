@@ -81,6 +81,12 @@
         @*The route isn't a choice for this engine, so the note explains why rather than describing one.*@
         <span>⚠ This database runs in the browser. The page itself is a peer, so there is no host-side option. It must be reachable from this machine, and on an https page its peers must use https too.</span>
     }
+    else if (HostOptions.HasServerRoute && !RouteAllowed)
+    {
+        @*The host is there and this account may not use it: the pair of buttons is gone, and the note
+          says what would bring it back before it describes the route that is left.*@
+        <span>⚠ Your account cannot route connections through the host — that takes the <code>connections.route</code> permission, which an administrator grants through a role. Your browser opens this connection instead, so the database has to be reachable from this machine and must return CORS headers for this origin (or sit behind a proxy that does). On an https page it must use SSL too.</span>
+    }
     else
     {
         @*Only the browser route is left to describe: the host route says nothing (see ShowRouteNote), and
@@ -94,6 +100,14 @@
 @code {
     [Parameter] public GremlinDB.GremlinConnection Connection { get; set; }
     [Parameter] public bool Disabled { get; set; }
+
+    ///<summary>
+    ///Who is signed in, cascaded from the layout. Routing through the host takes a permission
+    ///(<c>connections.route</c>), and the server refuses without it; this row is the courtesy that
+    ///stops the refusal being the first anyone hears of it. Null on the standalone viewer, which has
+    ///no accounts, and on the platform until the host has answered.
+    ///</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
 
     ///<summary>The HTTP / WebSocket buttons — Gremlin's choice. Off for the endpoint-URL databases (the URL
     ///carries the scheme) and for Bolt (which is always WebSocket in the browser, TCP on the host).</summary>
@@ -127,8 +141,26 @@
     ///</summary>
     protected override void OnParametersSet()
     {
-        if (!HostOptions.HasServerRoute && Connection != null && Connection.ViaServer)
+        //And the same settling for an account the host would refuse: the browser route is the one that
+        //can still work, and the row should show it from the moment the account is known.
+        if ((!HostOptions.HasServerRoute || !RouteAllowed) && Connection != null && Connection.ViaServer)
             Connection.ViaServer = false;
+    }
+
+    ///<summary>
+    ///Whether this account may route through the host at all. Unknown reads as allowed — the standalone
+    ///viewer has no accounts, and the platform has none to show until the host answers — so the row
+    ///never opens on a refusal it cannot yet justify; the account arriving re-settles it above.
+    ///</summary>
+    private bool RouteAllowed
+    {
+        get
+        {
+            if (Account == null)
+                return true;
+
+            return Account.Can(AccountInfo.ConnectionsRoute);
+        }
     }
 
     ///<summary>
@@ -185,6 +217,11 @@
     {
         get
         {
+            //No choice to offer an account the host would refuse: a Server button that only ever
+            //produced a 403 is a dead button, and the note below says what would bring it back.
+            if (!RouteAllowed)
+                return false;
+
             return HostOptions.HasServerRoute || !string.IsNullOrEmpty(HostOptions.ServerEditionUrl);
         }
     }

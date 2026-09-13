@@ -96,13 +96,27 @@
                 </div>
 
                 <button class="dropdown-item px-3 py-2 border-bottom" @onclick="ShowLlmSettingsFromMenu">AI settings</button>
-                <button class="dropdown-item px-3 py-2 @(HostOptions.HasPlugins ? "border-bottom" : null)" @onclick="ShowAboutFromMenu">About</button>
+                <button class="dropdown-item px-3 py-2 @(OfferPlugins || OfferInstanceGraph ? "border-bottom" : null)" @onclick="ShowAboutFromMenu">About</button>
 
-                @* Only a host with the plugin platform gets this — the standalone web-only viewer must
-                   show no trace of it. The page it points at is the plugin-system spec's to build. *@
-                @if (HostOptions.HasPlugins)
+                @* Only a host with the plugin platform gets these — the standalone web-only viewer must
+                   show no trace of them — and only for accounts holding the permission each screen
+                   takes: the app does not offer what the server would refuse (accounts-and-roles
+                   task 20). Hiding is a courtesy; the refusal itself is the server's. *@
+                @if (OfferPlugins)
                 {
-                    <a class="dropdown-item px-3 py-2 text-decoration-none" href="/plugins">Plugins</a>
+                    @* Closes the menu itself: the bar survives the navigation now, so nothing else
+                       would — the menu would still be open on the page this lands on. *@
+                    <a class="dropdown-item px-3 py-2 text-decoration-none @(OfferInstanceGraph ? "border-bottom" : null)" href="/plugins" @onclick="() => showSettings = false">Plugins</a>
+                }
+
+                @if (OfferInstanceGraph)
+                {
+                    <a class="dropdown-item px-3 py-2 text-decoration-none @(OfferBackups ? "border-bottom" : null)" href="/instance-graph" @onclick="() => showSettings = false">Instance graph</a>
+                }
+
+                @if (OfferBackups)
+                {
+                    <a class="dropdown-item px-3 py-2 text-decoration-none" href="/backups" @onclick="() => showSettings = false">Backups</a>
                 }
             </div>
         }
@@ -110,7 +124,7 @@
 
     @* Account menu. Absent entirely when the deployment runs without sign-in — there is one built-in user
        everybody is, so there would be nothing behind this to manage. *@
-    @if (Account != null && Account.HasAccounts)
+    @if (Account != null)
     {
         <div class="position-relative ms-2">
             <button class="btn btn-outline-secondary btn-sm d-flex align-items-center gap-2 text-body-emphasis"
@@ -160,6 +174,20 @@
 @code {
     ///<summary>Who is signed in, or null while that is still being asked / when the host has no accounts.</summary>
     [Parameter] public AccountInfo Account { get; set; }
+
+    ///<summary>
+    ///Whether the menu offers the Plugins page: a host that has the platform, and an account permitted
+    ///to install. Null-account means the answer has not arrived yet, and nothing is offered until it has.
+    ///</summary>
+    private bool OfferPlugins => HostOptions.HasPlugins && Account != null && Account.Can(AccountInfo.PluginsInstall);
+
+    ///<summary>The instance-graph settings, for who may configure it — same reasoning as Plugins.</summary>
+    private bool OfferInstanceGraph => HostOptions.HasPlugins && Account != null && Account.Can(AccountInfo.InstanceConfigure);
+
+    //Backups are the host's, so they follow the host route rather than the plugin platform — and they
+    //are offered to whoever may merely SEE them, because "when was this last safe" is the question the
+    //page exists to answer and it is not an editing one.
+    private bool OfferBackups => HostOptions.HasServerRoute && Account != null && Account.Can(BackupsContract.PermissionRead);
 
     //Whether the Settings dropdown is open. The theme switch keeps it open (a live toggle);
     //About closes it since it opens a modal.

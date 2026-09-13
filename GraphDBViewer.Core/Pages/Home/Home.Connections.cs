@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using GraphDBViewerWeb.Code;
+using System.Net.Http.Json;
 
 namespace GraphDBViewerWeb.Pages;
 
@@ -22,7 +23,20 @@ public partial class Home
     //client, because the UI gates on them before there is one — the Load DB row, for instance, renders
     //while disconnected so that clicking it can prompt you to connect.
     private GraphDbProvider Provider => GraphDbProviders.For(connection.DatabaseType);
-    private GraphDbCapabilities Caps => Provider.Capabilities;
+
+    //Nearly always the engine's own answer. The exception is the instance's own graph, which is offered
+    //here to be LOOKED at: the endpoint behind it refuses anything but a read, so the page should not
+    //draw a Commit button whose only possible outcome is a refusal.
+    private GraphDbCapabilities Caps
+    {
+        get
+        {
+            if (instanceGraph)
+                return Provider.Capabilities.ReadOnly();
+            else
+                return Provider.Capabilities;
+        }
+    }
 
     //The query language the viewer writes in on this connection's behalf — Load DB, expand, staged edits.
     //Only ever reached through a capability that the provider turned on by supplying it, so the null a
@@ -82,6 +96,22 @@ public partial class Home
 
     //Host/port shown in the top bar — an endpoint-URL database parses them back out of the URL.
     private string DisplayHost => Provider.DisplayHost(connection);
+
+    ///<summary>
+    ///What the toolbar calls this connection when a host and a port are the wrong words for it. Null for
+    ///every ordinary connection, which is addressed by exactly those two; the instance's own graph is
+    ///addressed by neither, because the browser is never given it.
+    ///</summary>
+    private string ConnectionLabel
+    {
+        get
+        {
+            if (instanceGraph)
+                return "this instance's graph";
+
+            return null;
+        }
+    }
     private int DisplayPort => Provider.DisplayPort(connection);
 
     private GremlinDB.GremlinConnection connection = new("WebSocket", 443, true, string.Empty, string.Empty, string.Empty, string.Empty);
@@ -176,6 +206,120 @@ public partial class Home
     #endregion
 
 
+    #region The instance's own graph
+
+    ///<summary>
+    ///The key the saved-connection picker uses for the instance graph. The trailing space is what makes it
+    ///safe: a saved name is trimmed before it becomes a key, so no saved connection can ever hold this one.
+    ///It is not a saved connection and is never stored as one — the picker is only where somebody looks for what can be opened.
+    ///</summary>
+    private const string InstanceGraphKey = "instance-graph ";
+
+    ///<summary>
+    ///The platform's own graph, browsed rather than plugged into (PIM's question 3, the user's
+    ///decision of 2026-09-04: it is what lets someone open the catalog as a graph, which is half the
+    ///pitch).
+    ///
+    ///Offered only where all three hold: this host has the plugin platform, the account holds
+    ///<c>instance.query</c>, and a graph is actually configured. The last is asked once on startup — the
+    ///status endpoint carries no secret and no data — because an option that opens onto "none is
+    ///configured" is worse than no option.
+    ///</summary>
+    private bool OffersInstanceGraph
+    {
+        get
+        {
+            if (!HostOptions.HasPlugins || !instanceGraphConfigured)
+                return false;
+
+            return Account != null && Account.Can(AccountInfo.InstanceQuery);
+        }
+    }
+
+    private bool instanceGraphConfigured;
+
+    ///<summary>Plugins taken down from the registry that are still installed. Empty on a viewer with no plugin host.</summary>
+    private List<SeenTakedown> takedowns = new();
+
+    ///<summary>
+    ///Whether Connect has anything to do. Normally that is "the engine has what it needs and the route
+    ///is available"; the instance graph's answer is always yes, because there is nothing to fill in and
+    ///no route to choose — the host holds the connection and dials it itself.
+    ///</summary>
+    private bool MayConnect
+    {
+        get
+        {
+            if (instanceGraph)
+                return true;
+
+            return !routeUnavailable && Provider.IsConfigured(connection);
+        }
+    }
+
+    //Whether the ACTIVE connection is it. Drives the capabilities, the driver, and the form being hidden
+    //rather than shown empty: there is nothing about this connection for anyone to fill in.
+    private bool instanceGraph;
+
+    ///<summary>Asks once whether a graph is configured. Failure is "no", which is what the picker should show.</summary>
+    private async Task LoadInstanceGraphOfferAsync()
+    {
+        if (!HostOptions.HasPlugins)
+            return;
+
+        try
+        {
+            var status = await new InstanceGraph(Http).StatusAsync();
+
+            instanceGraphConfigured = status.Configured;
+        }
+        catch
+        {
+        }
+    }
+
+    ///<summary>
+    ///Plugins withdrawn from the registry that are still installed here (plugin-store criterion 15).
+    ///
+    ///<strong>Repeated until the plugin is gone, and never dismissible.</strong> The Store tab is where
+    ///a take-down is learned, and it is a tab nobody has a reason to revisit — seen, quite possibly, by
+    ///somebody who is not the person who decides. A banner that could be closed would be closed once and
+    ///never seen again, which for "this thing you are running was withdrawn, and we changed nothing on
+    ///your behalf" is the wrong shape.
+    ///
+    ///The server crosses the seen list with what is actually installed, so uninstalling ends the
+    ///reminder without anybody clearing anything.
+    ///</summary>
+    private async Task LoadTakedownsAsync()
+    {
+        if (!HostOptions.HasPlugins)
+            return;
+
+        try
+        {
+            takedowns = await Http.GetFromJsonAsync<List<SeenTakedown>>(PluginTakedowns.Path) ?? new();
+        }
+        catch
+        {
+            //A viewer with no such endpoint, or a request that failed: no reminder, and no error on a
+            //page that has nothing to do with plugins.
+        }
+    }
+
+    //Selecting it clears the connection form to the engine it is — TinkerPop, always: the designated
+    //connection may only be one an instance graph can live on — so the provider, the query builder, the
+    //editor language and the schema source are all the right ones without a special case anywhere.
+    private void SelectInstanceGraph()
+    {
+        connection = new GremlinDB.GremlinConnection { DatabaseType = GraphDbProviders.TinkerPop };
+        instanceGraph = true;
+        selectedConnectionKey = InstanceGraphKey;
+        connectionName = "This instance's graph";
+    }
+
+    #endregion
+
+
     #region Connect / disconnect
 
     private void OnConnectionSelected(ChangeEventArgs e)
@@ -189,10 +333,18 @@ public partial class Home
     //Loads the saved connection with the given key into the active fields.
     private void SelectConnection(string key)
     {
+        instanceGraph = false;
+
         if (string.IsNullOrEmpty(key))
         {
             selectedConnectionKey = null;
             connectionName = null;
+            return;
+        }
+
+        if (key == InstanceGraphKey)
+        {
+            SelectInstanceGraph();
             return;
         }
 
@@ -296,7 +448,9 @@ public partial class Home
         //A static build has no host to proxy through, and ViaServer defaults to true — so a connection
         //saved on a hosted deployment, or a URL parameter asking for the server route, would otherwise
         //aim at something that is not there. What the host says it is wins over what the connection asks.
-        if (!HostOptions.HasServerRoute)
+        //The same for an account the host would refuse: routing through it takes a permission, and the
+        //browser route is the one that can still work.
+        if (!HostOptions.HasServerRoute || !MayRouteThroughHost)
             connection.ViaServer = false;
 
         try
@@ -307,7 +461,11 @@ public partial class Home
             //capabilities, the probe query and the failure hint, since none of that depends on the route.
             //CreateBrowser hands back the browser-direct driver: the JS-interop one for Bolt (which needs
             //this handler's IJSRuntime, the static provider factory has none), the shared HTTP one otherwise.
-            if (connection.ViaServer)
+            //Three routes now, and the third names no connection at all: the instance graph's is the
+            //administrator's, held on the host under a reserved key, and a browser is never given it.
+            if (instanceGraph)
+                db = new InstanceGraphDb(Http);
+            else if (connection.ViaServer)
                 db = new ServerProxyGraphDb(Http, connection);
             else
                 db = provider.CreateBrowser(Http, JS, connection);

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using Microsoft.JSInterop;
@@ -43,6 +43,31 @@ public sealed class GraphDbCapabilities
     ///subscription rather than a request.
     ///</summary>
     public bool LiveUpdates { get; init; }
+
+    ///<summary>
+    ///The same engine, browsed rather than edited: everything it can do except stage an edit. What a
+    ///connection can do is the engine's answer nearly always, and the exception is a connection the
+    ///viewer is only allowed to read — the instance's own graph, offered on the canvas so somebody can
+    ///see the shape of what the plugins have stored without being one keystroke from rewriting it.
+    ///
+    ///Only <see cref="StageEdits"/> falls, because it is the one that gates every writing control there
+    ///is — the Generated tab, Commit, Save positions, Database cleanup. Browsing, traversal and the
+    ///debugger stay: they are the point.
+    ///</summary>
+    public GraphDbCapabilities ReadOnly()
+    {
+        return new GraphDbCapabilities
+        {
+            BrowseGraph = BrowseGraph,
+            Traverse = Traverse,
+            StageEdits = false,
+            MultiStatement = MultiStatement,
+            Debug = Debug,
+            DebugSteps = DebugSteps,
+            AiTools = AiTools,
+            LiveUpdates = LiveUpdates
+        };
+    }
 }
 
 ///<summary>

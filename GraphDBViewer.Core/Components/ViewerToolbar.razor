@@ -57,6 +57,13 @@
     [Parameter] public EventCallback OnToggleConnectionCard { get; set; }
     [Parameter] public EventCallback OnToggleImportExport { get; set; }
 
+    ///<summary>
+    ///What to call the connection when host and port are the wrong words for it. The instance's own
+    ///graph is the case: it is addressed by nothing the user typed — the host holds the connection —
+    ///so "No host:0" is not a terse label but a wrong one.
+    ///</summary>
+    [Parameter] public string ConnectionLabel { get; set; }
+
     //The connection button doubles as the app's mode indicator: green when connected, blue while drawing
     //offline, gray otherwise. Offline mode used to be invisible here — the bar kept saying "Disconnected"
     //while the card holding the "Exit offline mode" toggle had closed, leaving no visible way back out.
@@ -92,6 +99,9 @@
     {
         get
         {
+            if (!string.IsNullOrEmpty(ConnectionLabel))
+                return ConnectionLabel;
+
             if (string.IsNullOrEmpty(Hostname))
                 return $"No host:{Port}";
 

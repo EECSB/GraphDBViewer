@@ -1,0 +1,394 @@
+@using System.Globalization
+@using System.Net.Http.Json
+@using GraphDBViewerWeb.Code
+@inject HttpClient Http
+
+@*One dataset on the canvas, drawn (ADR 0016, question 5).
+
+   THE VIEWER KNOWS NOTHING ABOUT MEANING, and every decision here comes from that. What is drawn is
+   decided by the vertex's own declaration — a chart when a column orders the rows and another holds
+   numbers, a table otherwise — and never by the label, the plugin id or anything this component could
+   be taught about MQTT. The owning perspective's page draws the same rows WITH their meaning, the unit
+   and the threshold and the machine; the two are not in competition.
+
+   The chart is hand-drawn SVG rather than a charting library. It is two paths and some text, it
+   inherits the theme through currentColor without a second palette to keep in step, and the viewer
+   already carries one large visualization dependency it did not want a second of.*@
+
+<div class="card gdbv-tint p-2" data-testid="dataset-panel" data-dataset="@Key">
+    <div class="d-flex align-items-baseline gap-2 flex-wrap">
+        <strong style="font-size: .85rem;">@Title</strong>
+
+        @if (rows != null && rows.Rows.Count > 0)
+        {
+            <span class="text-body-secondary" style="font-size: .75rem;">
+                @rows.Rows.Count row@(rows.Rows.Count == 1 ? "" : "s")@(rows.Capped ? ", the most recent" : "")
+            </span>
+        }
+
+        @*The window. "Recent" is the default and is not a window at all — the newest rows whenever they
+           were — because a sensor that stopped publishing last week should still draw something rather
+           than an empty hour.*@
+        <select class="form-select form-select-sm py-0 ms-auto" style="font-size: .72rem; width: auto;" @onchange="WindowChangedAsync" disabled="@busy" data-testid="dataset-window">
+            @foreach (var offered in DatasetsContract.Windows)
+            {
+                <option value="@offered.Name" selected="@(offered.Window == window)">@offered.Name</option>
+            }
+        </select>
+
+        <button type="button" class="btn btn-outline-secondary btn-sm py-0" style="font-size: .72rem;" disabled="@busy" @onclick="LoadAsync" data-testid="dataset-refresh">Refresh</button>
+    </div>
+
+    @if (busy && rows == null)
+    {
+        <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;">Reading…</p>
+    }
+    else if (rows != null && rows.Problem != null)
+    {
+        @*A sentence where the dataset is drawn, never a failure of the page around it: this panel sits
+           on a canvas beside things that are working.*@
+        <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;" data-testid="dataset-problem">@rows.Problem</p>
+    }
+    else if (rows != null && rows.Rows.Count == 0)
+    {
+        @if (window == null)
+        {
+            <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;" data-testid="dataset-empty">
+                Nothing has arrived yet. The dataset exists and its payload is empty.
+            </p>
+        }
+        else
+        {
+            @*A DIFFERENT SENTENCE, and the difference matters: one says the sensor never started, this
+               says it has said nothing lately. Collapsing them would hide a line that went quiet.*@
+            <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;" data-testid="dataset-quiet">
+                Nothing in the @WindowName.ToLowerInvariant(). There are readings outside it.
+            </p>
+        }
+    }
+    else if (rows != null && Charts)
+    {
+        @*viewBox and no width: the chart scales to whatever column it is put in, and the aspect ratio
+           is the one thing about it that is fixed.*@
+        <svg viewBox="0 0 @Wide @High" preserveAspectRatio="none" role="img" aria-label="@Title"
+             style="width: 100%; height: 7rem; overflow: visible;" data-testid="dataset-chart">
+            @*The axis, and the two ends of the range. Nothing else: a chart four hundred pixels wide
+               with eight gridlines is a grid with a chart in it.*@
+            <line x1="0" y1="@High" x2="@Wide" y2="@High" stroke="currentColor" stroke-opacity=".25" stroke-width="1" vector-effect="non-scaling-stroke" />
+
+            @foreach (var line in Lines())
+            {
+                <polyline points="@line.Points" fill="none" stroke="@line.Stroke" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round" />
+            }
+        </svg>
+
+        <div class="d-flex justify-content-between text-body-secondary" style="font-size: .68rem;">
+            <span>@Moment(Low)</span>
+            <span>@Span</span>
+            <span>@Moment(High_)</span>
+        </div>
+
+        @if (Lines().Count > 1)
+        {
+            <div class="d-flex gap-2 flex-wrap mt-1" style="font-size: .68rem;" data-testid="dataset-legend">
+                @foreach (var line in Lines())
+                {
+                    <span class="text-body-secondary">
+                        <span style="display: inline-block; width: .7rem; height: .2rem; background: @line.Stroke; vertical-align: middle;"></span>
+                        @line.Series
+                    </span>
+                }
+            </div>
+        }
+    }
+    else if (rows != null)
+    {
+        @*A table, for a dataset with no ordering column — and for a series of WORDS, which has an order
+           but nothing to plot: a chart of "open" and "closed" is a chart of nothing.*@
+        <div class="table-responsive mt-1" style="max-height: 9rem;">
+            <table class="table table-sm mb-0" style="font-size: .72rem;" data-testid="dataset-table">
+                <thead>
+                    <tr>
+                        @foreach (var column in Columns)
+                        {
+                            <th>@column.Name</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in rows.Rows.AsEnumerable().Reverse().Take(50))
+                    {
+                        <tr>
+                            @foreach (var column in Columns)
+                            {
+                                <td>@Cell(row, column.Name)</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    ///<summary>The dataset vertex's key — what the read surface is addressed by.</summary>
+    [Parameter] public string Key { get; set; }
+
+    ///<summary>Its properties, as the canvas already has them. The declaration is read from here rather than fetched again.</summary>
+    [Parameter] public IReadOnlyDictionary<string, string> Properties { get; set; }
+
+    private DatasetRows rows;
+    private bool busy;
+    private string loaded;
+
+    ///<summary>The window being shown, or null for "the newest, whenever they were".</summary>
+    private TimeSpan? window;
+
+    private string WindowName
+    {
+        get
+        {
+            foreach (var offered in DatasetsContract.Windows)
+            {
+                if (offered.Window == window)
+                    return offered.Name;
+            }
+
+            return "window";
+        }
+    }
+
+    private async Task WindowChangedAsync(ChangeEventArgs args)
+    {
+        var chosen = args.Value?.ToString() ?? "";
+
+        foreach (var offered in DatasetsContract.Windows)
+        {
+            if (offered.Name == chosen)
+                window = offered.Window;
+        }
+
+        await LoadAsync();
+    }
+
+    //The drawing's own coordinate space. Nothing on screen is measured in these — the viewBox scales
+    //them — so they are round numbers chosen for arithmetic rather than for pixels.
+    private const int Wide = 600;
+    private const int High = 140;
+
+    ///<summary>
+    ///The palette for several channels on one chart. Deliberately short: past a handful of lines a chart
+    ///is unreadable whatever the colors, and the honest answer then is a query that asks for fewer.
+    ///</summary>
+    private static readonly string[] Strokes =
+    [
+        "var(--bs-primary)",
+        "var(--bs-success)",
+        "var(--bs-warning)",
+        "var(--bs-info)",
+        "var(--bs-danger)"
+    ];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        //Keyed on the dataset, not on every render: this component redraws whenever the canvas does,
+        //which is on every selection and every staged edit.
+        if (Key == loaded)
+            return;
+
+        loaded = Key;
+        rows = null;
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Key))
+            return;
+
+        busy = true;
+
+        try
+        {
+            rows = await Http.GetFromJsonAsync<DatasetRows>(DatasetsContract.RowsPath(Key, window, DateTimeOffset.Now));
+        }
+        catch (Exception ex)
+        {
+            rows = new DatasetRows { Problem = $"The rows could not be read: {ex.Message}" };
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private string Title
+    {
+        get
+        {
+            if (Properties != null && Properties.TryGetValue(DatasetVertex.Name, out var name) && !string.IsNullOrWhiteSpace(name))
+                return name;
+
+            return "Dataset";
+        }
+    }
+
+    private IReadOnlyList<DatasetColumn> Columns
+    {
+        get
+        {
+            var declared = DatasetVertex.Read(Json());
+
+            if (declared.Count > 0)
+                return declared;
+
+            //A dataset written before the declaration existed, or by something that did not fill it in.
+            //Question 5's stated failure: a table with no headings — except that the READ surface is
+            //uniform, so the honest fallback is the shape it actually answers with.
+            return [new("series", DatasetColumnKinds.Text), new("at", DatasetColumnKinds.Date), new("number", DatasetColumnKinds.Number), new("state", DatasetColumnKinds.Text)];
+        }
+    }
+
+    private string Json()
+    {
+        if (Properties != null && Properties.TryGetValue(DatasetVertex.Columns, out var json))
+            return json;
+
+        return null;
+    }
+
+    ///<summary>
+    ///Whether this draws as a chart. <strong>Two conditions, both from the declaration and the rows
+    ///rather than from anything about MQTT</strong>: a column has to order the rows, and some column has
+    ///to hold numbers that are actually there. A series of words is still a series and still has an
+    ///order — and a chart of "open" and "closed" is a chart of nothing, so it draws as a table.
+    ///</summary>
+    private bool Charts
+    {
+        get
+        {
+            if (DatasetVertex.OrderedBy(Columns) == null)
+                return false;
+
+            return rows != null && rows.Rows.Any(one => one.Number != null);
+        }
+    }
+
+    private DateTimeOffset Low
+    {
+        get
+        {
+            return rows.Rows.Min(one => one.At);
+        }
+    }
+
+    private DateTimeOffset High_
+    {
+        get
+        {
+            return rows.Rows.Max(one => one.At);
+        }
+    }
+
+    private string Span
+    {
+        get
+        {
+            var span = High_ - Low;
+
+            if (span.TotalMinutes < 1)
+                return $"{span.TotalSeconds:0} s";
+
+            if (span.TotalHours < 1)
+                return $"{span.TotalMinutes:0} min";
+
+            if (span.TotalDays < 1)
+                return $"{span.TotalHours:0.#} h";
+
+            return $"{span.TotalDays:0.#} days";
+        }
+    }
+
+    private sealed record Drawn(string Series, string Points, string Stroke);
+
+    ///<summary>
+    ///One polyline per channel, scaled into the drawing's box.
+    ///
+    ///<strong>Every channel shares one vertical scale.</strong> Two sensors on one chart with two scales
+    ///would draw a line crossing another that is ten times its value, which is the chart lying about the
+    ///only thing it is for.
+    ///</summary>
+    private List<Drawn> Lines()
+    {
+        var drawn = new List<Drawn>();
+
+        var plotted = rows.Rows.Where(one => one.Number != null).ToList();
+
+        if (plotted.Count == 0)
+            return drawn;
+
+        var from = Low.ToUnixTimeMilliseconds();
+        var to = High_.ToUnixTimeMilliseconds();
+        var across = Math.Max(1, to - from);
+
+        var least = plotted.Min(one => one.Number.Value);
+        var most = plotted.Max(one => one.Number.Value);
+        var tall = most - least;
+
+        //A flat line is a real answer — a sensor that has not moved — and dividing by its zero range
+        //would put it nowhere. Drawn down the middle instead, decided once here rather than per point.
+        var flat = tall <= 0;
+
+        if (flat)
+            tall = 1;
+
+        var at = 0;
+
+        foreach (var channel in plotted.Select(one => one.Series).Distinct().Take(Strokes.Length))
+        {
+            var points = new List<string>();
+
+            foreach (var row in plotted.Where(one => one.Series == channel).OrderBy(one => one.At))
+            {
+                var x = (row.At.ToUnixTimeMilliseconds() - from) * (double)Wide / across;
+                var y = High - (row.Number.Value - least) / tall * High;
+
+                if (flat)
+                    y = High / 2d;
+
+                points.Add($"{x.ToString("0.#", CultureInfo.InvariantCulture)},{y.ToString("0.#", CultureInfo.InvariantCulture)}");
+            }
+
+            if (points.Count > 0)
+                drawn.Add(new Drawn(channel, string.Join(" ", points), Strokes[at % Strokes.Length]));
+
+            at++;
+        }
+
+        return drawn;
+    }
+
+    private static string Moment(DateTimeOffset at)
+    {
+        return at.ToLocalTime().ToString("d MMM HH:mm", CultureInfo.CurrentCulture);
+    }
+
+    private static string Cell(DatasetRow row, string column)
+    {
+        if (column == "series")
+            return row.Series;
+
+        if (column == "at")
+            return Moment(row.At);
+
+        if (column == "state")
+            return row.State;
+
+        if (column == "number" && row.Number != null)
+            return row.Number.Value.ToString("0.###", CultureInfo.CurrentCulture);
+
+        return "";
+    }
+}

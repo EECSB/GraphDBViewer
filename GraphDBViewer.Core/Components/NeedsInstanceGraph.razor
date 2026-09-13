@@ -1,0 +1,68 @@
+@using GraphDBViewerWeb.Code
+@using Microsoft.Extensions.DependencyInjection
+@inject IServiceProvider Services
+
+@*The inert state (instance-graph task 5): a plugin that needs a graph and has none says so and stays
+   visible — a setup state, never a fault, because this card is much of what a fresh instance shows
+   and reading it as broken is how a good default gets reported as a bug. Plugins wrap their page
+   content in this; the provisioning plugin deliberately does not, being what creates the graph.*@
+@if (status == null)
+{
+    @*Still asking the host whether one is configured.*@
+}
+else if (status.Configured)
+{
+    @ChildContent
+}
+else
+{
+    <div class="card gdbv-tint p-3" style="max-width: 40rem;">
+        <strong>@PluginName needs an instance graph. None is configured.</strong>
+
+        <p class="text-body-secondary mt-2 mb-2">
+            The instance graph is the shared database plugins keep their data in. Nothing is wrong — this
+            plugin simply waits until the instance has one.
+        </p>
+
+        @if (Account != null && Account.Can(AccountInfo.InstanceConfigure))
+        {
+            <div>
+                <a href="/instance-graph">Point it at a graph server →</a>
+                <span class="text-body-secondary mx-1">·</span>
+                <a href="/provision">Let Treeality start one →</a>
+            </div>
+        }
+        else
+        {
+            <div class="text-body-secondary" style="font-size: .9rem;">
+                An administrator can configure one — by pointing the instance at a graph server, or by letting
+                Treeality start a container.
+            </div>
+        }
+    </div>
+}
+
+@code {
+    ///<summary>What renders once a graph exists.</summary>
+    [Parameter] public RenderFragment ChildContent { get; set; }
+
+    ///<summary>How the card names the plugin — "This plugin", or its actual name.</summary>
+    [Parameter] public string PluginName { get; set; } = "This plugin";
+
+    ///<summary>Who is signed in, cascaded by the layout — decides whether to offer the fix or name who can.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private InstanceGraphStatus status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        //Resolved optionally: a host without the platform registers no InstanceGraph, and the answer
+        //there is the same as "none configured".
+        var graph = Services.GetService<InstanceGraph>();
+
+        if (graph == null)
+            status = new InstanceGraphStatus { Configured = false };
+        else
+            status = await graph.StatusAsync();
+    }
+}

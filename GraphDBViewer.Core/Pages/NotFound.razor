@@ -1,5 +1,36 @@
-﻿@page "/not-found"
+@page "/not-found"
+@page "/{*Path}"
 @layout MainLayout
+@using GraphDBViewerWeb.Code
+@using Microsoft.Extensions.DependencyInjection
+@inject IServiceProvider Services
 
-<h3>Not Found</h3>
-<p>Sorry, the content you are looking for does not exist.</p>
+@*The catch-all is what lets an installed plugin's route survive a hard navigation (plugin-system
+   phase 3): the server cannot know a route somebody installed at runtime, so a direct GET of /erp
+   must still serve the app shell — endpoint routing prefers every real route over a catch-all, so
+   only the unknowns land here. Once WebAssembly is up, the client router knows the loaded plugins'
+   routes and resolves them ahead of this page for the same precedence reason; what reaches it in the
+   browser really is nothing — or a route whose plugin is installed and did not load, which this page
+   can tell apart and says so (ledger items 19 and 29).*@
+<h3 data-testid="not-found-headline">@explanation.Headline</h3>
+<p data-testid="not-found-detail">@explanation.Detail</p>
+@if (explanation.PluginId != null)
+{
+    <p><a href="/plugins">See the Plugins page</a></p>
+}
+
+@code {
+    ///<summary>The path that matched nothing — matched here against every installed manifest's declared routes.</summary>
+    [Parameter] public string Path { get; set; }
+
+    private NotFoundExplainer.Explanation explanation = NotFoundExplainer.Generic;
+
+    ///<summary>
+    ///The installed list and the boot report are the client's singletons, registered before Build();
+    ///resolved by hand so a host without them — the web-only edition — renders the generic page.
+    ///</summary>
+    protected override void OnParametersSet()
+    {
+        explanation = NotFoundExplainer.Explain(Path, Services.GetService<InstalledPlugins>(), Services.GetService<PluginBootReport>());
+    }
+}

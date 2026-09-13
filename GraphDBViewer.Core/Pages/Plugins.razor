@@ -1,0 +1,1931 @@
+@page "/plugins"
+@layout MainLayout
+@using System.Net.Http.Json
+@using GraphDBViewerWeb.Code
+@using Microsoft.Extensions.DependencyInjection
+@inject ViewerHostOptions HostOptions
+@inject IServiceProvider Services
+@inject HttpClient Http
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+@*The Plugins page (plugin-system phases 1 and 3): what this instance runs — bundled and installed —
+   and the administrator's controls over it: install by manifest URL, enable, disable, uninstall,
+   retry a quarantined one. Every change is a rewrite of the instance list and takes effect on a full
+   reload, because nothing unloads at runtime. Gated on the install permission like the Settings-menu
+   entry that links here — a courtesy the server repeats on the write endpoints.
+
+   The plugin services resolve through GetService rather than @inject on purpose: the web-only
+   edition registers none of them, shows its not-found face below, and must not be forced to carry
+   registrations for a platform it does not have.*@
+@if (HostOptions.HasPlugins)
+{
+    <PageTitle>Plugins · @HostOptions.AppName</PageTitle>
+
+    @*One centered column, and every card in it the same width. Each section used to set its own
+       max-width — 40rem here, 46rem there, none at all on the Store — so they disagreed about where
+       the right edge was, and the whole page hugged the left of a wide window.*@
+    <div class="mx-auto" style="max-width: 48rem;">
+        <h3>Plugins</h3>
+
+        @if (Account == null)
+        {
+            @*Who is asking is still being answered — a beat of nothing beats a flash of the wrong face.*@
+        }
+        else if (!Account.Can(AccountInfo.PluginsInstall))
+        {
+            <p>Managing plugins needs a permission your account does not hold. An administrator can grant it through a role.</p>
+        }
+        else
+        {
+            @if (report.SafeMode)
+            {
+                <div class="alert alert-warning">
+                    <strong>Safe mode.</strong> No installed plugins were loaded on this boot. Remove or disable the one
+                    that was breaking things, then <a href="/plugins">leave safe mode</a>.
+                </div>
+            }
+
+            @if (pendingReload)
+            {
+                <div class="alert alert-info d-flex align-items-center gap-3">
+                    <span class="flex-grow-1">Changes are saved and take effect on a full reload — nothing unloads at runtime.</span>
+                    <button type="button" class="btn btn-primary btn-sm" @onclick="Reload">Reload now</button>
+                </div>
+            }
+
+            @if (!string.IsNullOrEmpty(error))
+            {
+                <div class="alert alert-danger">@error</div>
+            }
+
+            @if (!string.IsNullOrEmpty(notice))
+            {
+                <div class="alert alert-success">@notice</div>
+            }
+
+            <p class="text-body-secondary">What this instance runs, and where more comes from: the store below, a manifest URL, or a zip.</p>
+
+            <div class="card gdbv-tint mb-3">
+                <div class="list-group list-group-flush">
+                    @foreach (var row in Rows())
+                    {
+                        @*Two lines, not one. Everything a row says about itself in a sentence — a retype
+                           report, an update offer — used to sit in the right-hand column beside the buttons,
+                           which is sized for buttons and does not shrink: one long report pushed the column
+                           wide, squeezed the plugin's own name into two lines and spilled past the card. So
+                           the top line is name and controls, and anything with prose in it gets the full
+                           width underneath.*@
+                        <div class="list-group-item bg-transparent">
+                            <div class="d-flex align-items-center gap-3">
+                                @if (row.Icon != null)
+                                {
+                                    <img src="@row.Icon" alt="" style="width: 1.8rem; height: 1.6rem; flex-shrink: 0;" />
+                                }
+
+                                <div class="flex-grow-1" style="min-width: 0;">
+                                    <div><strong>@row.Name</strong> <span class="text-body-secondary ms-1">@row.Version</span></div>
+                                    <div class="text-body-secondary text-break" style="font-size: .8rem;">@row.Id</div>
+
+                                    @*A plugin that came out of a zip has no URL anywhere on this page to say
+                                       where it came from, so it says the one thing there is to say.*@
+                                    @if (row.Record != null && !string.IsNullOrWhiteSpace(row.Record.UploadedFile))
+                                    {
+                                        <div class="text-body-secondary text-break" style="font-size: .8rem;" data-testid="plugin-from-file">Installed from @row.Record.UploadedFile</div>
+                                    }
+
+                                    @if (row.Status != null)
+                                    {
+                                        <div class="@(row.Trouble ? "text-warning" : "text-body-secondary")" style="font-size: .8rem;">@row.Status</div>
+                                    }
+                                </div>
+
+                                <div class="text-end" style="flex-shrink: 0;">
+                                    @foreach (var link in row.PageLinks)
+                                    {
+                                        <div><a href="@link.Route">@link.Title →</a></div>
+                                    }
+
+                                    @if (row.Record != null)
+                                    {
+                                        <div><a href="@($"/plugins/settings/{row.Id}")">Settings →</a></div>
+
+                                        <div class="d-flex gap-2 flex-wrap justify-content-end mt-1">
+                                            @if (row.Quarantined)
+                                            {
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@busy" @onclick="() => RetryAsync(row.Record)">Retry</button>
+                                            }
+
+                                            <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@busy" @onclick="() => ToggleEnabledAsync(row.Record)">
+                                                @(row.Record.Enabled ? "Disable" : "Enable")
+                                            </button>
+
+                                            @*A plugin installed from a URL has no store entry to be told about a
+                                               new version by, so it has to go and look. Store-installed ones
+                                               already get Update from the Store tab, with a reviewed hash — and
+                                               an uploaded one has nowhere to look at all, so it gets neither.*@
+                                            @if (PluginIdentity.KindOf(PluginIdentity.MarkerOf(row.Record)) == PluginIdentity.OriginKind)
+                                            {
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@busy" @onclick="() => CheckUrlUpdateAsync(row.Record)" data-testid="plugin-check-updates">Check for updates</button>
+                                            }
+
+                                            <button type="button" class="btn btn-outline-danger btn-sm" disabled="@busy" @onclick="() => AskUninstallAsync(row.Record)">Uninstall</button>
+                                        </div>
+                                    }
+                                    else if (row.Registered != null && row.Registered.Disabled)
+                                    {
+                                        <div class="d-flex gap-2 flex-wrap justify-content-end mt-1">
+                                            <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@busy" @onclick="() => RestoreBundledAsync(row.Registered)">Restore</button>
+
+                                            @*The purge (ADR 0011, question 2), and it lives HERE rather than on the
+                                               uninstall prompt: what an installed plugin holds is data, and what a
+                                               removed one holds is leftovers. The endpoint refuses either way, so the
+                                               button is only offered where it could work.*@
+                                            <button type="button" class="btn btn-outline-danger btn-sm" disabled="@busy" @onclick="() => AskPurgeAsync(row.Registered)" data-testid="plugin-purge">Remove its data</button>
+                                        </div>
+                                    }
+                                    else if (row.Registered != null && row.Registered.Removable)
+                                    {
+                                        <div class="text-body-secondary" style="font-size: .8rem;">Bundled</div>
+
+                                        <div class="d-flex gap-2 flex-wrap justify-content-end mt-1">
+                                            @if (RetypeSupported(row.Id))
+                                            {
+                                                @*The on-demand rewrite of the plugin's typed properties (ADR 0014,
+                                                   question 1): a graph written before the seam was typed holds text
+                                                   where numbers belong, and a range query under-matches until this runs.*@
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@busy" @onclick="() => RetypeAsync(row.Registered)" data-testid="plugin-retype">Retype the graph</button>
+                                            }
+                                            <button type="button" class="btn btn-outline-danger btn-sm" disabled="@busy" @onclick="() => AskUninstallBundledAsync(row.Registered)">Uninstall</button>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="text-body-secondary" style="font-size: .8rem;">Bundled — part of the app</div>
+                                    }
+                                </div>
+                            </div>
+
+                            @*Everything a row says in a sentence, on its own full-width line under it. In the
+                               column above, a report naming a time, a person and four counts had nowhere to
+                               wrap and pushed the whole row past the card's edge.*@
+                            @if (row.Record != null && urlUpdates.TryGetValue(row.Id, out var said) && !string.IsNullOrWhiteSpace(said))
+                            {
+                                <div class="text-body-secondary mt-2" style="font-size: .8rem;" data-testid="plugin-url-update">
+                                    @said
+
+                                    @if (urlOffers.ContainsKey(row.Id))
+                                    {
+                                        <button type="button" class="btn btn-outline-primary btn-sm py-0 ms-2" disabled="@busy" @onclick="() => TakeUrlUpdateAsync(row.Record)" data-testid="plugin-url-update-take">Update it</button>
+                                    }
+                                </div>
+                            }
+
+                            @if (row.Registered != null && retypes.TryGetValue(row.Id, out var retype) && retype != null && retype.Ran)
+                            {
+                                <div class="text-body-secondary mt-2" style="font-size: .8rem;" data-testid="plugin-retype-report">
+                                    Retyped @Moment(retype.RanAt) by @retype.RanBy — @retype.Scanned scanned, @retype.Rewritten rewritten, @retype.Quarantined quarantined@(retype.Renamed > 0 ? $", {retype.Renamed} identities renamed to uid" : "").
+                                </div>
+
+                                @if (retype.Quarantined > 0)
+                                {
+                                    <div class="table-responsive">
+                                        <table class="table table-sm mt-1 mb-0" style="font-size: .8rem;">
+                                            <tbody>
+                                                @foreach (var label in retype.Labels)
+                                                {
+                                                    @foreach (var quarantine in label.Quarantines)
+                                                    {
+                                                        <tr data-testid="plugin-retype-quarantine">
+                                                            <td>@label.Label</td>
+                                                            <td><code>@quarantine.Key</code></td>
+                                                            <td>@quarantine.Property</td>
+                                                            <td class="text-warning">@quarantine.Raw</td>
+                                                        </tr>
+                                                    }
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @if (uninstallTarget != null || uninstallBundled != null)
+            {
+                @*The uninstall prompt (ADR 0011): keeping is the default and the primary button, the
+                   destructive option names what would go with counts, and configuration (settings and
+                   grants — trivially recreated) is separable from graph data (the user's work).*@
+                <div class="card gdbv-tint p-3 mb-3" style="border-color: var(--bs-warning);">
+                    <strong>Uninstall @UninstallName()?</strong>
+
+                    @if (uninstallNote != null)
+                    {
+                        <p class="mb-0 mt-2"><em>@uninstallNote</em></p>
+                    }
+
+                    <p class="mb-2 mt-2">Uninstalling removes its code and its pages, and keeps what it stored unless you say otherwise. What it stored here:</p>
+
+                    <ul class="mb-2">
+                        @if (uninstallLeftovers == null)
+                        {
+                            <li>What it stored could not be counted just now — you can still uninstall and keep everything.</li>
+                        }
+                        else
+                        {
+                            <li>
+                                Configuration:
+                                @if (uninstallLeftovers.Configuration)
+                                {
+                                    <text>1 stored value (@uninstallLeftovers.ConfigurationBytes characters)</text>
+                                }
+                                else
+                                {
+                                    <text>nothing stored</text>
+                                }
+                            </li>
+                            <li>
+                                Permission grants:
+                                @if (uninstallLeftovers.PermissionGrants > 0)
+                                {
+                                    <text>@uninstallLeftovers.PermissionGrants on roles here</text>
+                                }
+                                else
+                                {
+                                    <text>none</text>
+                                }
+                            </li>
+                            @if (uninstallLeftovers.InstanceGraphConfigured)
+                            {
+                                <li>Graph data: @uninstallLeftovers.GraphVertices vertices and @uninstallLeftovers.GraphEdges edges under this plugin's labels — kept. Removing it is offered after the uninstall, on the row this plugin leaves behind, and only where a backup vouches.</li>
+
+                                @*What a purge will ask, shown where it will be asked (backups spec, criterion 6).*@
+                                @if (!string.IsNullOrEmpty(uninstallLeftovers.BackupRefusal))
+                                {
+                                    <li data-testid="plugin-backup-refusal">@uninstallLeftovers.BackupRefusal <a href="/backups">Backups →</a></li>
+                                }
+                                else if (uninstallLeftovers.BackupTakenAt != null)
+                                {
+                                    <li data-testid="plugin-backup-vouches">A backup from @uninstallLeftovers.BackupTakenAt.Value.ToLocalTime().ToString("f") would vouch for removing this if it were offered.</li>
+                                }
+                            }
+                            else
+                            {
+                                <li>Graph data: no instance graph is designated, so there is nothing to look in.</li>
+                            }
+                            @*A plugin that came out of a zip has its code here and nowhere else, which
+                               makes it the one irreversible thing on a keep-everything uninstall. It
+                               belongs in the prompt rather than in the notice afterwards, because this
+                               is where the administrator is deciding.*@
+                            @if (uninstallTarget != null && PluginUploads.IsUploaded(uninstallTarget))
+                            {
+                                <li data-testid="plugin-uploaded-code">
+                                    Its code: uploaded here as <strong>@uninstallTarget.UploadedFile</strong> and kept by this
+                                    instance, because there was no URL to fetch it from. <strong>It is deleted</strong> — and a
+                                    backup does not carry it either, so installing it again means having the zip.
+                                </li>
+                            }
+
+                            @*ADR 0011 §3: a plugin that asked for a container is responsible for it, so the
+                               containers stop with the plugin — named here, because a stop that nobody
+                               announced is an outage somebody has to diagnose.*@
+                            @if (uninstallLeftovers.ContainersProblem != null)
+                            {
+                                <li data-testid="plugin-containers">Containers: @uninstallLeftovers.ContainersProblem</li>
+                            }
+                            else if (uninstallLeftovers.Containers.Count > 0)
+                            {
+                                <li data-testid="plugin-containers">
+                                    Containers it started: @string.Join(", ", uninstallLeftovers.Containers) — they stop with it.
+                                    Their volumes and the data on them stay, and restoring the plugin starts them again.
+
+                                    @*MQTT criterion 11 asks for this in as many words: a stopped broker is not a
+                                       plugin being disabled, it is a factory line with nowhere to publish. Named
+                                       from the container rather than from the plugin id, so it says so whatever
+                                       plugin is being removed.*@
+                                    @if (uninstallLeftovers.Containers.Any(one => one.Contains("mqtt", StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        <strong data-testid="plugin-broker-warning"> The line loses its broker until then: devices publishing to it will have nowhere to publish.</strong>
+                                    }
+                                </li>
+                            }
+                            else
+                            {
+                                <li data-testid="plugin-containers">Containers: none.</li>
+                            }
+                        }
+                    </ul>
+
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-primary" disabled="@busy" @onclick="() => UninstallAsync(deleteConfiguration: false)">Uninstall, keep everything</button>
+
+                        @if (uninstallLeftovers != null && (uninstallLeftovers.Configuration || uninstallLeftovers.PermissionGrants > 0))
+                        {
+                            <button type="button" class="btn btn-outline-danger" disabled="@busy" @onclick="() => UninstallAsync(deleteConfiguration: true)">Uninstall and delete its configuration</button>
+                        }
+
+                        <button type="button" class="btn btn-outline-secondary ms-auto" disabled="@busy" @onclick="CancelUninstall">Cancel</button>
+                    </div>
+                </div>
+            }
+
+            @if (pendingInstall != null)
+            {
+                @*Trust on first use (ADR 0012): this id has leftovers from an install this copy cannot be
+                   shown to be — adopt them deliberately, install clean, or walk away. Never inherit by
+                   default.*@
+                <div class="card gdbv-tint p-3 mb-3" style="border-color: var(--bs-warning);">
+                    <strong>This id has been here before.</strong>
+
+                    @*The sentence is PluginIdentity's, not this page's: there are three kinds of marker now
+                       — an origin, a repository, an uploaded file's own bytes — and a page writing its own
+                       version of it named the wrong one for two of the three.*@
+                    <p class="mb-2 mt-2" data-testid="plugin-identity-says">
+                        <code>@pendingInstall.Manifest.Id</code> — @PluginIdentity.Says(pendingIdentity?.Source, PluginIdentity.MarkerOf(pendingInstall))
+                    </p>
+
+                    <p class="mb-2 mt-2">
+                        What was left behind —
+                        @if (pendingLeftovers != null && pendingLeftovers.Configuration)
+                        {
+                            <text>a stored configuration (@pendingLeftovers.ConfigurationBytes characters)</text>
+                        }
+                        else
+                        {
+                            <text>no stored configuration</text>
+                        }
+                        and
+                        @if (pendingLeftovers != null && pendingLeftovers.PermissionGrants > 0)
+                        {
+                            <text>@pendingLeftovers.PermissionGrants permission grants</text>
+                        }
+                        else
+                        {
+                            <text>no permission grants</text>
+                        }
+                        — would apply to it.
+                    </p>
+
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-outline-secondary" disabled="@busy" @onclick="() => CommitPendingAsync(installClean: false)">Adopt what was left</button>
+                        <button type="button" class="btn btn-outline-danger" disabled="@busy" @onclick="() => CommitPendingAsync(installClean: true)">Delete the leftovers and install clean</button>
+                        <button type="button" class="btn btn-primary ms-auto" disabled="@busy" @onclick="CancelPending">Cancel</button>
+                    </div>
+                </div>
+            }
+
+            @if (purgeTarget != null)
+            {
+                @*The purge prompt. This is the only irreversible thing on the page that a backup cannot be
+                   taken after, so keeping is the primary button, the destructive one is only rendered when
+                   a backup vouches, and what will be LEFT is named as plainly as what will go.*@
+                <div class="card gdbv-tint p-3 mb-3" style="border-color: var(--bs-danger);" data-testid="plugin-purge-prompt">
+                    <strong>Remove @purgeTarget.Name's data from the instance graph?</strong>
+
+                    @if (purgeLeftovers == null)
+                    {
+                        <p class="mb-2 mt-2">What it left could not be counted just now, so this is not offered.</p>
+                    }
+                    else
+                    {
+                        <ul class="mb-2 mt-2">
+                            <li><strong>@purgeLeftovers.GraphVertices vertices and @purgeLeftovers.GraphEdges edges</strong> under this plugin's labels. Removing a vertex takes its edges with it.</li>
+
+                            @if (purgeLeftovers.SharedLabels.Count > 0)
+                            {
+                                <li data-testid="plugin-purge-shared">
+                                    <strong>Kept: @string.Join(", ", purgeLeftovers.SharedLabels).</strong> Another installed
+                                    plugin owns those labels too, and nothing in the graph records which one wrote a given
+                                    vertex — so removing them would take that plugin's work with them. Leaving them is
+                                    recoverable; the other way is not.
+                                </li>
+                            }
+
+                            <li><strong>This cannot be undone</strong> except by restoring the backup below.</li>
+                        </ul>
+
+                        @if (!string.IsNullOrEmpty(purgeLeftovers.BackupRefusal))
+                        {
+                            <p class="mb-2" data-testid="plugin-purge-refusal">@purgeLeftovers.BackupRefusal <a href="/backups">Backups →</a></p>
+                        }
+                        else if (purgeLeftovers.BackupTakenAt != null)
+                        {
+                            <p class="mb-2" data-testid="plugin-purge-vouches">The backup from @purgeLeftovers.BackupTakenAt.Value.ToLocalTime().ToString("f") vouches for this.</p>
+                        }
+                    }
+
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-secondary" disabled="@busy" @onclick="() => purgeTarget = null" data-testid="plugin-purge-keep">Keep it</button>
+
+                        @if (purgeLeftovers != null && string.IsNullOrEmpty(purgeLeftovers.BackupRefusal))
+                        {
+                            <button type="button" class="btn btn-danger" disabled="@busy" @onclick="PurgeAsync" data-testid="plugin-purge-confirm">Remove the data</button>
+                        }
+                    </div>
+                </div>
+            }
+
+            @*Take-downs, learned by opening the Store tab and never by a timer (open question 4). A notice
+               with the uninstall in it — the instance never acts on the registry's behalf.*@
+            @foreach (var (removal, record) in takedowns)
+            {
+                <div class="alert alert-warning" data-testid="plugin-takedown">
+                    <strong>"@(record.Manifest?.Name ?? removal.Id)" was taken down from the registry@(string.IsNullOrWhiteSpace(removal.Date) ? "" : " on " + removal.Date).</strong>
+                    <div class="mt-1" style="font-size: .85rem;">@removal.Reason</div>
+                    <div class="mt-1" style="font-size: .85rem;">
+                        Nothing has been changed here. It is still installed and still running; this is the registry
+                        saying it would no longer list it.
+                    </div>
+                    <button type="button" class="btn btn-outline-danger btn-sm mt-2" disabled="@busy" @onclick="() => AskUninstallAsync(record)" data-testid="plugin-takedown-uninstall">Uninstall it</button>
+                </div>
+            }
+
+            <div class="card gdbv-tint p-3 mb-3" data-testid="plugin-store">
+                <h5 class="mb-2">Store</h5>
+                <PluginStorePanel Installed="records" Busy="busy" OnInstall="StoreInstallAsync" OnUpdate="StoreUpdateAsync" OnRead="StoreRead" />
+            </div>
+
+            <div class="card gdbv-tint p-3">
+                <h5 class="mb-2">Install a plugin</h5>
+
+                <label for="manifest-url" class="form-label mb-1" style="font-size: .85rem;">From a manifest URL</label>
+                <div class="d-flex gap-2">
+                    <input id="manifest-url" class="form-control" placeholder="https://example.com/plugin/manifest.json" @bind="installUrl" @bind:event="oninput" />
+                    <button type="button" class="btn btn-primary" style="flex-shrink: 0;" disabled="@(busy || string.IsNullOrWhiteSpace(installUrl))" @onclick="InstallAsync">
+                        @(busy ? "Checking…" : "Install")
+                    </button>
+                </div>
+
+                @*Install by file (plugin-system criterion 21). The zip is opened HERE, in the browser: the
+                   bytes have to be here anyway to be loaded-to-prove, so the host never learns what a zip
+                   is — it is handed one proved assembly and keeps it under its own hash.*@
+                <label for="plugin-zip" class="form-label mb-1 mt-3" style="font-size: .85rem;">Or from a zip</label>
+                <div class="d-flex gap-2 align-items-start flex-wrap">
+                    <InputFile id="plugin-zip" class="form-control" style="min-width: 14rem;" accept=".zip" OnChange="ZipChosenAsync" disabled="@busy" data-testid="plugin-zip" />
+                    <button type="button" class="btn btn-primary" style="flex-shrink: 0;" disabled="@(busy || zipBytes == null)" @onclick="InstallZipAsync" data-testid="plugin-zip-install">
+                        @(busy ? "Checking…" : "Install the file")
+                    </button>
+                </div>
+
+                @if (zipChosen != null)
+                {
+                    <div class="text-body-secondary mt-2" style="font-size: .8rem;" data-testid="plugin-zip-chosen">@zipChosen</div>
+                }
+
+                <div class="text-body-secondary mt-3" style="font-size: .8rem;">
+                    Either way the manifest is checked before anything is kept — its permissions must sit under its own id —
+                    and the plugin is loaded once, here and now, to prove it can be: finding a problem during install beats
+                    finding it at the next boot.
+                </div>
+
+                <div class="text-body-secondary mt-2" style="font-size: .8rem;">
+                    A zip is the plugin's folder: its <code>manifest.json</code> and the assembly the manifest's entry names,
+                    beside it. <strong>An uploaded plugin is kept by this instance</strong>, because there is no URL to fetch
+                    it from again — so it is not in a backup, and uninstalling it deletes the only copy here. Keep the zip.
+                </div>
+            </div>
+
+            @*The file-system sibling of the audit below. Shown only when there is something to say —
+               most instances install nothing from a file and should not carry an empty card about it.*@
+            @if (sweep != null && (sweep.Held.Any(one => one.IsOrphan) || sweep.Missing.Count > 0))
+            {
+                <div class="card gdbv-tint p-3 mt-3" data-testid="plugin-files">
+                    <h5 class="mb-2">Uploaded plugin code</h5>
+
+                    @if (sweep.Missing.Count > 0)
+                    {
+                        @*THE HALF NOBODY EXPECTS. A record whose bytes are gone is a plugin that fails at
+                           everyone's next boot with a 404 in its quarantine mark — and it is exactly what a
+                           restored backup looks like, because the database is carried and this folder is
+                           not.*@
+                        <div class="alert alert-warning py-2 px-3 mb-2" data-testid="plugin-files-missing">
+                            <strong>@string.Join(", ", sweep.Missing)</strong>
+                            @(sweep.Missing.Count == 1 ? " is installed and its code is not here." : " are installed and their code is not here.")
+                            They will fail at the next boot. Install them again from their zip, or uninstall them.
+                        </div>
+                    }
+
+                    @if (sweep.Held.Any(one => one.IsOrphan))
+                    {
+                        <p class="text-body-secondary mb-2" style="font-size: .8rem;">
+                            Assemblies this instance is holding that no installed plugin runs on. A plugin
+                            uninstalled while the instance could not reach its own disk leaves one; so does
+                            restoring a database next to a folder that moved on without it.
+                        </p>
+
+                        <table class="table table-sm mb-0" style="font-size: .85rem;" data-testid="plugin-files-table">
+                            <tbody>
+                                @foreach (var held in sweep.Held.Where(one => one.IsOrphan))
+                                {
+                                    <tr>
+                                        <td><code>@held.Hash.Substring(0, 12)</code></td>
+                                        <td class="text-body-secondary">@Kilobytes(held.Bytes)</td>
+                                        <td class="text-body-secondary">@Arrived(held.At)</td>
+                                        <td class="text-end">
+                                            <button type="button" class="btn btn-outline-danger btn-sm py-0" disabled="@busy" @onclick="() => ForgetAsync(held)" data-testid="plugin-files-remove">Remove</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            }
+
+            @*The uninstall prompt above answers "what would this plugin leave behind". This answers the
+               question that has no plugin to ask it of: what is already in the graph that nothing claims.*@
+            <div class="card gdbv-tint p-3 mt-3">
+                <h5 class="mb-2">What is in the graph that nothing claims</h5>
+                <p class="text-body-secondary mb-2" style="font-size: .8rem;">
+                    Every vertex label in the instance graph, attributed to the plugin that owns it. A label with a dot is a
+                    plugin's namespace; one without is the platform's, a bundled perspective's, or <strong>your own data,
+                    which is left alone</strong>. What is left over is plugin-shaped and unclaimed — a plugin somebody
+                    removed, or one that was never installed here. Read-only: nothing is deleted from this page.
+                </p>
+
+                <div>
+                    <button type="button" class="btn btn-outline-secondary" disabled="@busy" @onclick="AuditOrphansAsync" data-testid="plugin-orphans">Audit the graph</button>
+                </div>
+
+                @if (orphans != null)
+                {
+                    @if (!orphans.InstanceGraphConfigured)
+                    {
+                        <p class="text-body-secondary mt-2 mb-0" style="font-size: .8rem;" data-testid="plugin-orphans-none">No instance graph is designated, so there is nothing to audit.</p>
+                    }
+                    else if (orphans.Error != null)
+                    {
+                        <p class="text-danger mt-2 mb-0" style="font-size: .8rem;" data-testid="plugin-orphans-error">@orphans.Error</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm mt-2 mb-0" style="font-size: .85rem;" data-testid="plugin-orphans-table">
+                                <thead>
+                                    <tr><th>Namespace</th><th>Owner</th><th class="text-end">Vertices</th><th class="text-end">Edges</th><th>Labels</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var group in orphans.Groups)
+                                    {
+                                        <tr class="@(group.Owner == "Orphaned" ? "table-warning" : null)">
+                                            <td>@group.Namespace</td>
+                                            <td>@OwnerWord(group.Owner)</td>
+                                            <td class="text-end">@group.Vertices</td>
+                                            <td class="text-end">@(group.Owner == "Orphaned" ? group.Edges.ToString() : "—")</td>
+                                            <td class="text-body-secondary">
+                                                @string.Join(", ", group.Labels)
+                                                @if (group.Sample.Count > 0)
+                                                {
+                                                    <div class="mt-1" style="font-size: .78rem;">for example @string.Join(", ", group.Sample)</div>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </div>
+}
+else
+{
+    <h3>Not Found</h3>
+    <p>Sorry, the content you are looking for does not exist.</p>
+}
+
+@code {
+    ///<summary>Who is signed in, cascaded by the layout — null until the host answers.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    ///<summary>The last audit of the whole graph, or null before one has been asked for.</summary>
+    private GraphOrphanReport orphans;
+
+    ///<summary>
+    ///What this instance is holding as uploaded plugin code, and what it is missing.
+    ///
+    ///Asked for when the page opens rather than behind a button, unlike the graph audit beside it: that
+    ///one walks the whole instance graph and is worth asking for deliberately, while this reads a
+    ///directory. And a plugin whose code is gone is something an administrator wants to be TOLD, not
+    ///something they have to think to go and check.
+    ///</summary>
+    private PluginFileSweep sweep;
+
+    private async Task SweepAsync()
+    {
+        try
+        {
+            sweep = await Http.GetFromJsonAsync<PluginFileSweep>(PluginUploads.SweepPath);
+        }
+        catch
+        {
+            //A sweep that cannot be read is not a reason for the Plugins page to fail: everything else
+            //on it works, and this card simply does not appear.
+            sweep = null;
+        }
+    }
+
+    ///<summary>Removes one orphaned assembly. The server refuses if a plugin turns out to be running on it after all.</summary>
+    private async Task ForgetAsync(HeldPlugin held)
+    {
+        busy = true;
+        error = null;
+
+        try
+        {
+            var answer = await Http.DeleteAsync(PluginUploads.UrlOf(held.Hash));
+
+            if (!answer.IsSuccessStatusCode)
+            {
+                error = await answer.Content.ReadAsStringAsync();
+
+                return;
+            }
+
+            notice = $"{Kilobytes(held.Bytes)} of plugin code nothing was running is removed.";
+
+            await SweepAsync();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>When an upload arrived, in the reader's own time zone — a file on this instance's disk, not a stamp from the graph.</summary>
+    private static string Arrived(DateTimeOffset at)
+    {
+        return at.ToLocalTime().ToString("f");
+    }
+
+    private static string Kilobytes(long bytes)
+    {
+        if (bytes >= 1024 * 1024)
+            return $"{bytes / 1024d / 1024d:0.#} MB";
+
+        return $"{bytes / 1024d:0.#} KB";
+    }
+
+    ///<summary>
+    ///The audit that takes no plugin id. Read-only, and the answer is a list rather than an offer:
+    ///deleting what an orphaned namespace holds waits on backups, exactly as the per-plugin purge does.
+    ///</summary>
+    private async Task AuditOrphansAsync()
+    {
+        busy = true;
+        error = null;
+        orphans = null;
+
+        try
+        {
+            orphans = await Http.GetFromJsonAsync<GraphOrphanReport>(GraphOrphanReport.Path);
+        }
+        catch (Exception ex)
+        {
+            error = $"The audit did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>The owner, said rather than named — "Orphaned" on a row is not a word anybody wants to have to decode.</summary>
+    private static string OwnerWord(string owner)
+    {
+        if (owner == "Orphaned")
+            return "nobody claims it";
+
+        if (owner == "Yours")
+            return "your own data";
+
+        if (owner == "Platform")
+            return "the platform";
+
+        if (owner == "Bundled")
+            return "a bundled perspective";
+
+        return "an installed plugin";
+    }
+
+    private IPageRegistry registry;
+    private PluginBootReport report = PluginBootReport.Empty;
+    private List<InstalledPluginRecord> records = new();
+    private PluginInstaller installer;
+
+    private string installUrl = "";
+    private string error;
+    private string notice;
+    private bool pendingReload;
+    private bool busy;
+
+    //The uninstall prompt's state: whom it is about — an installed record, or a bundled plugin,
+    //whose removal is a flag rather than a list edit — and what they left (ADR 0011).
+    private InstalledPluginRecord uninstallTarget;
+    private RegisteredPlugin uninstallBundled;
+    private PluginLeftovers uninstallLeftovers;
+    private string uninstallNote;
+
+    //The trust-on-first-use ask's state: a proven install held back because its id has leftovers from
+    //a different origin (ADR 0012).
+    private InstalledPluginRecord pendingInstall;
+    private PluginIdentity pendingIdentity;
+    private PluginLeftovers pendingLeftovers;
+
+    //The bytes an install by file is holding, and what to say about them. The zip stays in the browser
+    //until the administrator commits — the assembly is uploaded then, so an install abandoned at the
+    //trust prompt leaves no code on the instance.
+    private byte[] zipBytes;
+    private string zipName;
+    private string zipChosen;
+
+    //The proved assembly out of the chosen zip, kept beside the record it belongs to so a second file
+    //picked while a prompt is open cannot be uploaded in the first one's place.
+    private byte[] zipAssembly;
+    private byte[] pendingAssembly;
+
+    protected override void OnInitialized()
+    {
+        registry = Services.GetService<IPageRegistry>();
+        report = Services.GetService<PluginBootReport>() ?? PluginBootReport.Empty;
+        records = new List<InstalledPluginRecord>(Services.GetService<InstalledPlugins>()?.Records ?? []);
+        installer = new PluginInstaller(Http);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        //The last rewrite of each bundled perspective's typed properties, so the page shows it.
+        await LoadRetypesAsync();
+
+        //And what is on disk that nothing runs on. A directory read, not a graph walk, so it happens on
+        //open rather than behind a button — and a plugin whose code is GONE is something to be told
+        //about rather than something to think to go and check.
+        await SweepAsync();
+    }
+
+    ///<summary>One line of the list: a registry entry (bundled, or an installed plugin that loaded),
+    ///or an installed record the boot did not load — disabled, quarantined, or waiting for a reload.</summary>
+    private sealed class Row
+    {
+        public string Id;
+        public string Name;
+        public string Version;
+        public string Icon;
+        public string Status;
+        public bool Trouble;
+        public bool Quarantined;
+        public InstalledPluginRecord Record;
+        public RegisteredPlugin Registered;
+        public List<(string Route, string Title)> PageLinks = new();
+    }
+
+    private List<Row> Rows()
+    {
+        var rows = new List<Row>();
+
+        foreach (var plugin in registry?.Plugins ?? [])
+        {
+            var row = new Row
+            {
+                Id = plugin.Id,
+                Name = plugin.Name,
+                Version = plugin.Version,
+                Registered = plugin,
+                Record = RecordOf(plugin.Id)
+            };
+
+            foreach (var page in plugin.Pages)
+            {
+                if (row.Icon == null && !string.IsNullOrEmpty(page.Icon))
+                    row.Icon = page.Icon;
+
+                row.PageLinks.Add((page.Route, page.Title));
+            }
+
+            if (plugin.Disabled)
+                row.Status = "Removed — it still ships in the image; Restore brings it back on the next reload.";
+            else if (row.Record != null)
+                Describe(row);
+
+            rows.Add(row);
+        }
+
+        //Installed but not in the registry: nothing of theirs loaded this boot — the reason is the row.
+        foreach (var record in records)
+        {
+            if (registry?.Plugins.Any(plugin => plugin.Id == record.Manifest.Id) == true)
+                continue;
+
+            var row = new Row
+            {
+                Id = record.Manifest.Id,
+                Name = record.Manifest.Name,
+                Version = record.Manifest.Version,
+                Record = record
+            };
+
+            Describe(row);
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    private InstalledPluginRecord RecordOf(string id)
+    {
+        foreach (var record in records)
+        {
+            if (record.Manifest.Id == id)
+                return record;
+        }
+
+        return null;
+    }
+
+    private void Describe(Row row)
+    {
+        var entry = report.For(row.Id);
+
+        if (entry == null)
+        {
+            if (report.ListUnavailable)
+            {
+                //A timed-out list fetch is not a fresh install waiting for a reload; it is a boot that
+                //loaded nothing because it could not ask what to load.
+                row.Status = "Not loaded: the installed list could not be fetched at boot — reload to try again.";
+                row.Trouble = true;
+            }
+            else if (row.Record.Enabled)
+            {
+                row.Status = "Installed — takes effect on the next full reload.";
+            }
+            else
+            {
+                row.Status = "Disabled.";
+            }
+
+            return;
+        }
+
+        if (entry.Outcome == PluginBootOutcome.Loaded)
+            row.Status = "Loaded.";
+        else if (entry.Outcome == PluginBootOutcome.Disabled)
+            row.Status = "Disabled — kept, not loaded.";
+        else if (entry.Outcome == PluginBootOutcome.SafeMode)
+            row.Status = "Not loaded: safe mode.";
+        else if (entry.Outcome == PluginBootOutcome.Quarantined)
+        {
+            row.Status = $"Quarantined — {entry.Detail}";
+            row.Trouble = true;
+            row.Quarantined = true;
+        }
+        else if (entry.Outcome == PluginBootOutcome.Failed)
+        {
+            row.Status = $"Failed to load — {entry.Detail} It will be skipped next boot.";
+            row.Trouble = true;
+            row.Quarantined = true;
+        }
+    }
+
+    private async Task InstallAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var (installed, refusal) = await installer.FetchAndProveAsync(installUrl.Trim(), Taken());
+
+            if (refusal != null)
+            {
+                error = refusal;
+
+                return;
+            }
+
+            if (await AskFirstAsync(installed))
+                return;
+
+            await CommitInstallAsync(installed, recordIdentity: true);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    //── Installing from a file ─────────────────────────────────────────────────────────────────
+
+    ///<summary>
+    ///The administrator picked a zip. Read into memory and no further: nothing is parsed, proved or
+    ///sent until they press the button, because picking a file is not consenting to install what is
+    ///in it.
+    ///</summary>
+    private async Task ZipChosenAsync(InputFileChangeEventArgs args)
+    {
+        ForgetZip();
+
+        var file = args.File;
+
+        if (file == null)
+            return;
+
+        if (file.Size > PluginUploads.MaxBytes)
+        {
+            error = $"That file is {file.Size / 1024d / 1024d:0.#} MB, past the {PluginUploads.MaxBytes / 1024d / 1024d:0.#} MB a plugin package may be.";
+
+            return;
+        }
+
+        try
+        {
+            using var stream = file.OpenReadStream(PluginUploads.MaxBytes);
+            using var buffer = new System.IO.MemoryStream();
+
+            await stream.CopyToAsync(buffer);
+
+            zipBytes = buffer.ToArray();
+            zipName = file.Name;
+            zipChosen = $"{file.Name} — {zipBytes.Length / 1024d:0.#} KB. Nothing has been read out of it yet.";
+        }
+        catch (Exception ex)
+        {
+            error = $"That file could not be read: {ex.Message}";
+        }
+    }
+
+    ///<summary>
+    ///Installing what is in the zip: opened, checked and proved in the browser, and only then — at
+    ///<see cref="CommitInstallAsync"/> — handed to the instance to keep.
+    ///</summary>
+    private async Task InstallZipAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var (installed, assembly, refusal) = installer.OpenAndProve(zipName, zipBytes, Taken());
+
+            if (refusal != null)
+            {
+                error = refusal;
+
+                return;
+            }
+
+            zipAssembly = assembly;
+
+            if (await AskFirstAsync(installed, assembly))
+                return;
+
+            await CommitInstallAsync(installed, recordIdentity: true, assembly);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>Drops the picked file and everything said about it — after an install, and before reading a new one.</summary>
+    private void ForgetZip()
+    {
+        zipBytes = null;
+        zipName = null;
+        zipChosen = null;
+        zipAssembly = null;
+    }
+
+    ///<summary>
+    ///Drops an uploaded plugin's code from the instance, once nothing installed points at it.
+    ///
+    ///Quiet on failure, deliberately: the plugin is already out of the list and already stopped
+    ///mattering, so a file left behind is a few hundred kilobytes on disk rather than anything that
+    ///changes what runs — and failing an uninstall over it would be the worse outcome.
+    ///</summary>
+    private async Task ForgetUploadAsync(string hash)
+    {
+        try
+        {
+            await Http.DeleteAsync(PluginUploads.UrlOf(hash));
+        }
+        catch { }
+    }
+
+    ///<summary>
+    ///Closes the trust-on-first-use ask and drops everything held for it — the proved assembly
+    ///included, which is the one thing here that would otherwise sit in memory holding a plugin
+    ///nobody agreed to install.
+    ///</summary>
+    private void CancelPending()
+    {
+        pendingInstall = null;
+        pendingIdentity = null;
+        pendingLeftovers = null;
+        pendingAssembly = null;
+    }
+
+    ///<summary>
+    ///Trust on first use (ADR 0012), with the plugin store's amendment: <strong>the marker is the
+    ///store entry's repository when there is one and the install URL's origin otherwise</strong>,
+    ///because an origin distinguishes nothing on a store where every release is on github.com.
+    ///
+    ///Answers whether the administrator is being asked. Two markers of different KINDS — an origin
+    ///recorded before the store, a repository arriving from it — are neither a match nor a mismatch,
+    ///and always prompt (open question 5): re-marking silently would let the store quietly adopt
+    ///anything ever installed by URL, and only a person's yes should do that.
+    ///</summary>
+    private async Task<bool> AskFirstAsync(InstalledPluginRecord installed, byte[] assembly = null)
+    {
+        var identity = await FetchIdentityAsync(installed.Manifest.Id);
+
+        if (!PluginIdentity.Prompts(identity?.Source, PluginIdentity.MarkerOf(installed)))
+            return false;
+
+        pendingInstall = installed;
+        pendingIdentity = identity;
+        pendingAssembly = assembly;
+        pendingLeftovers = await FetchLeftoversAsync(installed.Manifest.Id);
+
+        return true;
+    }
+
+    //── The store ──────────────────────────────────────────────────────────────────────────────
+
+    ///<summary>Every take-down that names something installed here. A notice, never an action (open question 4).</summary>
+    private List<(StoreRemoval Removal, InstalledPluginRecord Record)> takedowns = new();
+
+    ///<summary>
+    ///Crossing each index's <c>removed</c> list with what is installed. The instance learns of a
+    ///take-down only when somebody opens this tab — never at boot and never on a timer — and learning
+    ///of one uninstalls nothing.
+    ///</summary>
+    private void StoreRead(IReadOnlyList<StoreSourceState> read)
+    {
+        takedowns = new();
+
+        foreach (var state in read ?? [])
+        {
+            foreach (var record in records)
+            {
+                var removal = PluginStore.Removal(state.Index, record.Manifest?.Id);
+
+                if (removal != null && !takedowns.Any(t => t.Removal.Id == removal.Id))
+                    takedowns.Add((removal, record));
+            }
+        }
+
+        //Written down so the home page can repeat it. The person who opens this tab is not necessarily
+        //the person who decides, and this tab is not one anybody has a reason to revisit.
+        _ = RememberTakedownsAsync();
+    }
+
+    ///<summary>
+    ///Records what this read learned, so the reminder outlives the tab.
+    ///
+    ///Fire-and-forget on purpose: the notices are already on screen, and a page that waited on this
+    ///would make learning about a take-down slower than not learning about one. A failure costs the
+    ///REMINDER, never the notice.
+    ///</summary>
+    private async Task RememberTakedownsAsync()
+    {
+        if (takedowns.Count == 0)
+            return;
+
+        try
+        {
+            var seen = takedowns.Select(t => new SeenTakedown
+            {
+                Id = t.Removal.Id,
+                Name = t.Record.Manifest?.Name,
+                Reason = t.Removal.Reason,
+                Date = t.Removal.Date
+            }).ToList();
+
+            await Http.PutAsJsonAsync(PluginTakedowns.Path, seen);
+        }
+        catch
+        {
+            //The notice is on the page either way. Only the reminder is lost.
+        }
+    }
+
+    ///<summary>What the last check for updates said, by plugin id. Shown on the row rather than as a banner: it is about one plugin.</summary>
+    private Dictionary<string, string> urlUpdates = new(StringComparer.Ordinal);
+
+    ///<summary>
+    ///Re-fetches a URL-installed plugin's own manifest and says what is there.
+    ///
+    ///<strong>It never installs by itself.</strong> A store update carries a hash the registry reviewed;
+    ///this one has nothing to compare against, so finding a newer version is an OFFER with the trust
+    ///spelled out — exactly as trusted as the URL the plugin came from in the first place, which is a
+    ///sentence the person who typed that URL is the right one to weigh.
+    ///</summary>
+    private async Task CheckUrlUpdateAsync(InstalledPluginRecord record)
+    {
+        busy = true;
+        error = null;
+        notice = null;
+        urlUpdates.Remove(record.Manifest?.Id ?? "");
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(record.Source))
+            {
+                urlUpdates[record.Manifest?.Id ?? ""] = "This was installed before the source URL was recorded, so there is nowhere to look.";
+
+                return;
+            }
+
+            var (fetched, refusal) = await installer.FetchManifestAsync(record.Source);
+
+            if (refusal != null)
+            {
+                urlUpdates[record.Manifest.Id] = refusal;
+
+                return;
+            }
+
+            var why = PluginStore.UpdateFromUrl(record, fetched, PluginManifest.SupportedHostApiVersions);
+
+            if (why != null)
+            {
+                urlUpdates[record.Manifest.Id] = why;
+
+                return;
+            }
+
+            urlUpdates[record.Manifest.Id] = PluginStore.UpdateOffer(record, fetched);
+            urlOffers[record.Manifest.Id] = fetched.Version;
+        }
+        catch (Exception ex)
+        {
+            urlUpdates[record.Manifest?.Id ?? ""] = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>Which ids a check found a newer version for, and which version. What turns the message into a button.</summary>
+    private Dictionary<string, string> urlOffers = new(StringComparer.Ordinal);
+
+    ///<summary>
+    ///Takes the update a check offered, through the same prove-then-swap path a store update uses —
+    ///minus the hash, because a URL install never had one to compare against.
+    ///
+    ///Everything the id owns is kept: enabled, the install date, its settings and its grants. None of
+    ///them is keyed by anything that changed.
+    ///</summary>
+    private async Task TakeUrlUpdateAsync(InstalledPluginRecord record)
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var taken = Taken().Where(id => !string.Equals(id, record.Manifest.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+            var (updated, refusal) = await installer.FetchUpdateAsync(record, record.Source, taken);
+
+            if (refusal != null)
+            {
+                error = refusal;
+
+                return;
+            }
+
+            var at = records.FindIndex(one => string.Equals(one.Manifest?.Id, record.Manifest.Id, StringComparison.Ordinal));
+
+            if (at < 0)
+            {
+                error = "That plugin is no longer in the list.";
+
+                return;
+            }
+
+            records[at] = updated;
+
+            var saved = await installer.SaveAsync(records);
+
+            if (saved != null)
+            {
+                error = saved;
+
+                return;
+            }
+
+            urlUpdates.Remove(record.Manifest.Id);
+            urlOffers.Remove(record.Manifest.Id);
+            notice = $"Updated to {updated.Manifest.Version}. It loads on the next reload.";
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>Install from a store card: the path that already exists, with the entry's hash to match.</summary>
+    private async Task StoreInstallAsync((StoreEntry Entry, StoreVersion Version) chosen)
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var taken = Taken();
+            var (installed, refusal) = await installer.FetchAndProveAsync(chosen.Version.Manifest, taken, chosen.Version.Sha256, chosen.Entry);
+
+            if (refusal != null)
+            {
+                error = refusal;
+
+                return;
+            }
+
+            if (await AskFirstAsync(installed))
+                return;
+
+            await CommitInstallAsync(installed, recordIdentity: true);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>
+    ///Update in place. <strong>Nothing about the id's data, settings or grants is touched</strong>,
+    ///because none of them is keyed by anything that changed — the id is the same id. The record is
+    ///swapped where it stands rather than removed and added, so its position in the list survives too.
+    ///</summary>
+    private async Task StoreUpdateAsync((StoreEntry Entry, StoreVersion Version) chosen)
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var at = records.FindIndex(r => string.Equals(r.Manifest?.Id, chosen.Entry.Id, StringComparison.OrdinalIgnoreCase));
+
+            if (at < 0)
+            {
+                error = "That plugin is not installed here any more.";
+
+                return;
+            }
+
+            var was = records[at];
+
+            //Its own id is not "taken" against itself; every other still is.
+            var taken = Taken().Where(id => !string.Equals(id, was.Manifest.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+            var (updated, refusal) = await installer.FetchUpdateAsync(was, chosen.Version.Manifest, taken, chosen.Version.Sha256, chosen.Entry);
+
+            if (refusal != null)
+            {
+                error = refusal;
+
+                return;
+            }
+
+            records[at] = updated;
+
+            if (!await SaveAsync())
+            {
+                records[at] = was;
+
+                return;
+            }
+
+            await WriteIdentityAsync(updated);
+
+            notice = $@"""{updated.Manifest.Name}"" is updated to {updated.Manifest.Version}. Its settings and grants are untouched.";
+            pendingReload = true;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>Every id something already answers to — the bundled registry's and the installed list's.</summary>
+    private List<string> Taken()
+    {
+        var taken = new List<string>();
+
+        foreach (var plugin in registry?.Plugins ?? [])
+            taken.Add(plugin.Id);
+
+        foreach (var record in records)
+            taken.Add(record.Manifest.Id);
+
+        return taken;
+    }
+
+    ///<summary>The ask's two live outcomes: adopt the leftovers, or delete them and install clean.
+    ///Either way the identity marker is rewritten to the new origin — trust moves deliberately.</summary>
+    private async Task CommitPendingAsync(bool installClean)
+    {
+        busy = true;
+        error = null;
+
+        try
+        {
+            if (installClean && !await DeleteLeftoversAsync(pendingInstall.Manifest.Id))
+                return;
+
+            await CommitInstallAsync(pendingInstall, recordIdentity: true, pendingAssembly);
+
+            if (error == null)
+                CancelPending();
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task CommitInstallAsync(InstalledPluginRecord installed, bool recordIdentity, byte[] assembly = null)
+    {
+        //An upload's bytes are not on the instance yet — this is the moment they go, because it is the
+        //first moment anybody has said yes. The hash is checked against the record rather than trusted
+        //from the field it arrived in: a second file picked while the trust prompt was open must not be
+        //able to be uploaded in the first one's place.
+        if (PluginUploads.IsUploaded(installed))
+        {
+            if (assembly == null || InstalledPluginRecord.HashOf(assembly) != installed.Hash)
+            {
+                error = "The file that was checked is not the one in hand any more. Choose the zip again.";
+
+                return;
+            }
+
+            var refusal = await installer.UploadAsync(assembly);
+
+            if (refusal != null)
+            {
+                error = refusal;
+
+                return;
+            }
+        }
+
+        records.Add(installed);
+
+        if (!await SaveAsync())
+        {
+            records.Remove(installed);
+
+            return;
+        }
+
+        if (recordIdentity)
+            await WriteIdentityAsync(installed);
+
+        installUrl = "";
+
+        ForgetZip();
+
+        pendingAssembly = null;
+
+        notice = $@"""{installed.Manifest.Name}"" proved out and is installed.";
+        pendingReload = true;
+    }
+
+    private async Task ToggleEnabledAsync(InstalledPluginRecord record)
+    {
+        record.Enabled = !record.Enabled;
+
+        if (!await SaveAsync())
+        {
+            record.Enabled = !record.Enabled;
+
+            return;
+        }
+
+        pendingReload = true;
+
+        //Its containers follow it (ADR 0011 §3): stopped with it, started with it.
+        if (record.Enabled)
+            notice = $@"""{record.Manifest.Name}"" is enabled and runs again on the next reload." + await ContainersAsync(record.Manifest.Id, "start");
+        else
+            notice = $@"""{record.Manifest.Name}"" is disabled — kept, not loaded, from the next reload." + await ContainersAsync(record.Manifest.Id, "stop");
+    }
+
+    ///<summary>
+    ///Asks the host to stop or start the plugin's containers, right after the change of state they
+    ///follow (ADR 0011 §3), and says what happened as a sentence for the notice — nothing when there
+    ///was nothing to do, which is most plugins; the Provisioner's own words when it could not.
+    ///</summary>
+    private async Task<string> ContainersAsync(string id, string action)
+    {
+        string done;
+
+        if (action == "stop")
+            done = "stopped";
+        else
+            done = "started";
+
+        PluginContainersOutcome outcome;
+
+        try
+        {
+            var response = await Http.PostAsync($"{PluginLeftovers.ContainersPath}?id={Uri.EscapeDataString(id)}&action={action}", null);
+
+            if (!response.IsSuccessStatusCode)
+                return $" Its containers were not {done}: the server answered {(int)response.StatusCode}.";
+
+            outcome = await response.Content.ReadFromJsonAsync<PluginContainersOutcome>();
+        }
+        catch (Exception ex)
+        {
+            return $" Its containers were not {done}: {ex.Message}";
+        }
+
+        if (outcome == null)
+            return "";
+
+        var said = "";
+
+        if (outcome.Names.Count > 0)
+            said = $" Its containers {done}: {string.Join(", ", outcome.Names)}.";
+
+        if (outcome.Error != null)
+            said += " Its containers: " + outcome.Error;
+
+        return said;
+    }
+
+    ///<summary>Opens the prompt with the counts it must show — "delete plugin data?" without a
+    ///quantity asks for consent to an amount nobody can see (ADR 0011).</summary>
+    private async Task AskUninstallAsync(InstalledPluginRecord record)
+    {
+        CancelPending();
+
+        uninstallBundled = null;
+        uninstallTarget = record;
+        uninstallNote = registry?.Plugins.FirstOrDefault(plugin => plugin.Id == record.Manifest.Id)?.UninstallNote;
+        uninstallLeftovers = await FetchLeftoversAsync(record.Manifest.Id);
+    }
+
+    ///<summary>The bundled variant: same prompt, but "uninstalled" means the boot skips its module —
+    ///it ships in the image, so the flag is what there is to flip (ADR 0010's removable-bundled).</summary>
+    private async Task AskUninstallBundledAsync(RegisteredPlugin plugin)
+    {
+        CancelPending();
+
+        uninstallTarget = null;
+        uninstallBundled = plugin;
+        uninstallNote = plugin.UninstallNote;
+        uninstallLeftovers = await FetchLeftoversAsync(plugin.Id);
+    }
+
+    private string UninstallName()
+    {
+        if (uninstallTarget != null)
+            return uninstallTarget.Manifest.Name;
+
+        return uninstallBundled?.Name ?? "";
+    }
+
+    private void CancelUninstall()
+    {
+        uninstallTarget = null;
+        uninstallBundled = null;
+    }
+
+    private async Task UninstallAsync(bool deleteConfiguration)
+    {
+        if (uninstallBundled != null)
+        {
+            await UninstallBundledAsync(deleteConfiguration);
+
+            return;
+        }
+
+        busy = true;
+        error = null;
+
+        var record = uninstallTarget;
+
+        try
+        {
+            records.Remove(record);
+
+            if (!await SaveAsync())
+            {
+                records.Add(record);
+
+                return;
+            }
+
+            //Its containers stop with it (ADR 0011 §3), kept beside their volumes for a reinstall —
+            //right after the list, so a configuration delete that fails cannot leave them running.
+            var containers = await ContainersAsync(record.Manifest.Id, "stop");
+
+            //Deleting is the administrator's explicit second choice, never the default: the settings
+            //blob, the identity marker and the role grants under the plugin's id go together — they
+            //are the configuration half; graph data is not touched here at all.
+            if (deleteConfiguration && !await DeleteLeftoversAsync(record.Manifest.Id))
+                return;
+
+            //Its quarantine mark has nothing left to guard, and the cached bytes go when the last
+            //record sharing them does — the refcount is the list itself.
+            await JsQuietlyAsync("gdbvPluginBoot.quarantineClear", record.Manifest.Id);
+
+            if (!records.Any(remaining => remaining.Hash == record.Hash))
+                await JsQuietlyAsync("gdbvPluginBoot.cacheDelete", record.Hash);
+
+            //And the code itself, for a plugin that came out of a zip. It is on the instance only
+            //because there is nowhere else to fetch it from, so leaving it would leave a stranger's
+            //assembly on disk that nothing points at. The same refcount as the byte cache above — and
+            //the server checks it again against the list it has just been sent, which is the copy that
+            //matters.
+            var uploaded = "";
+
+            if (PluginUploads.IsUploaded(record) && !records.Any(remaining => remaining.Hash == record.Hash))
+            {
+                await ForgetUploadAsync(record.Hash);
+
+                uploaded = " Its uploaded code is deleted — there was no URL to fetch it from again.";
+            }
+
+            if (deleteConfiguration)
+                notice = $@"""{record.Manifest.Name}"" is uninstalled and its configuration is deleted." + uploaded + containers;
+            else
+                notice = $@"""{record.Manifest.Name}"" is uninstalled. What it stored stays until removing it is asked for." + uploaded + containers;
+
+            uninstallTarget = null;
+            pendingReload = true;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task UninstallBundledAsync(bool deleteConfiguration)
+    {
+        busy = true;
+        error = null;
+
+        var plugin = uninstallBundled;
+
+        try
+        {
+            if (!await SaveDisabledBundledAsync(DisabledBundledIds().Append(plugin.Id)))
+                return;
+
+            //Its containers stop with it (ADR 0011 §3), kept beside their volumes for Restore — right
+            //after the flag, so a configuration delete that fails cannot leave them running.
+            var containers = await ContainersAsync(plugin.Id, "stop");
+
+            if (deleteConfiguration && !await DeleteLeftoversAsync(plugin.Id))
+                return;
+
+            notice = $@"""{plugin.Name}"" is removed. It still ships in the image — Restore brings it back." + containers;
+            uninstallBundled = null;
+            pendingReload = true;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    //── The rewrite of a perspective's typed properties (ADR 0014, question 1) ────────────────
+
+    private readonly Dictionary<string, RetypeReport> retypes = new(StringComparer.Ordinal);
+
+    ///<summary>Whether the plugin has a typed vocabulary to rewrite — known once its last report is fetched, assumed until then.</summary>
+    private bool RetypeSupported(string id)
+    {
+        if (retypes.TryGetValue(id, out var report) && report != null)
+            return report.Supported;
+
+        return true;
+    }
+
+    private static string Moment(string ranAt)
+    {
+        if (string.IsNullOrEmpty(ranAt))
+            return "";
+
+        return ranAt.Replace("T", " ").TrimEnd('Z') + " UTC";
+    }
+
+    ///<summary>The last report of every bundled plugin that could have one, so the page shows the last run.</summary>
+    private async Task LoadRetypesAsync()
+    {
+        foreach (var plugin in registry?.Plugins ?? [])
+        {
+            if (!plugin.Removable || plugin.Disabled)
+                continue;
+
+            try
+            {
+                var response = await Http.GetAsync(RetypeReport.Path + "?id=" + Uri.EscapeDataString(plugin.Id));
+
+                if (response.IsSuccessStatusCode)
+                    retypes[plugin.Id] = await response.Content.ReadFromJsonAsync<RetypeReport>();
+            }
+            catch
+            {
+                //Unreachable, or not permitted: the button stays, and a run says what it says.
+            }
+        }
+    }
+
+    private async Task RetypeAsync(RegisteredPlugin plugin)
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.PostAsync(RetypeReport.Path + "?id=" + Uri.EscapeDataString(plugin.Id), null);
+            var report = await response.Content.ReadFromJsonAsync<RetypeReport>();
+
+            if (report == null)
+            {
+                error = "The server did not answer the rewrite.";
+
+                return;
+            }
+
+            retypes[plugin.Id] = report;
+
+            if (!report.Ran)
+                error = report.Error ?? $@"The rewrite of ""{plugin.Name}"" did not run.";
+            else
+                notice = $@"""{plugin.Name}"": {report.Scanned} vertices looked at, {report.Rewritten} rewritten, {report.Quarantined} quarantined.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The rewrite did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    //── The purge (ADR 0011, question 2) ──────────────────────────────────────────
+
+    private RegisteredPlugin purgeTarget;
+    private PluginLeftovers purgeLeftovers;
+
+    ///<summary>
+    ///Open the purge prompt, with the counts and the shared labels read fresh. Read rather than reused
+    ///from the uninstall prompt: an uninstall may have been days ago, and what is about to be destroyed
+    ///has to be counted now.
+    ///</summary>
+    private async Task AskPurgeAsync(RegisteredPlugin plugin)
+    {
+        error = null;
+        notice = null;
+        purgeTarget = plugin;
+        purgeLeftovers = await FetchLeftoversAsync(plugin.Id);
+    }
+
+    ///<summary>
+    ///Destroy it. The host refuses without a vouching backup, refuses while the plugin is still
+    ///installed, and answers what it removed and what it left — all three of which are shown rather than
+    ///summarized, because this is the message somebody reads after an irreversible act.
+    ///</summary>
+    private async Task PurgeAsync()
+    {
+        var plugin = purgeTarget;
+
+        if (plugin == null)
+            return;
+
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.PostAsync($"{PluginLeftovers.PurgePath}?id={Uri.EscapeDataString(plugin.Id)}", null);
+            var answer = await response.Content.ReadFromJsonAsync<PluginPurgeResult>();
+
+            if (answer == null || !answer.Ok)
+            {
+                error = answer?.Error ?? $"The data could not be removed ({(int)response.StatusCode}).";
+
+                return;
+            }
+
+            purgeTarget = null;
+            purgeLeftovers = null;
+
+            var kept = "";
+
+            if (answer.Kept.Count > 0)
+                kept = $" {string.Join(", ", answer.Kept)} stayed, because another installed plugin owns them too.";
+
+            //Nothing is reloaded: the plugin list is unchanged by this, only the graph behind it.
+            notice = $@"""{plugin.Name}"" left {answer.Dropped:N0} vertices and they are removed.{kept}";
+        }
+        catch (Exception ex)
+        {
+            error = $"The data could not be removed: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task RestoreBundledAsync(RegisteredPlugin plugin)
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            if (!await SaveDisabledBundledAsync(DisabledBundledIds().Where(id => id != plugin.Id)))
+                return;
+
+            //Its containers come back with it (ADR 0011 §3), from where the stop left them.
+            notice = $@"""{plugin.Name}"" is restored and runs again on the next reload." + await ContainersAsync(plugin.Id, "start");
+            pendingReload = true;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>The full disabled set is reconstructable from the registry: every removed bundled
+    ///plugin has a metadata row, which is most of why the rows exist.</summary>
+    private IEnumerable<string> DisabledBundledIds()
+    {
+        foreach (var plugin in registry?.Plugins ?? [])
+        {
+            if (plugin.Disabled)
+                yield return plugin.Id;
+        }
+    }
+
+    private async Task<bool> SaveDisabledBundledAsync(IEnumerable<string> ids)
+    {
+        try
+        {
+            var response = await Http.PutAsync(
+                InstanceStateContract.PathFor(InstanceStateContract.DisabledBundledKey),
+                new StringContent(System.Text.Json.JsonSerializer.Serialize(ids.Distinct().ToArray()), System.Text.Encoding.UTF8, InstanceStateContract.ContentType));
+
+            if (response.IsSuccessStatusCode)
+                return true;
+
+            error = $"The server refused the change ({(int)response.StatusCode}).";
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = $"The change did not reach the server: {ex.Message}";
+
+            return false;
+        }
+    }
+
+    //── The host's answers about identity and leftovers ──────────────────────────
+
+    private async Task<PluginIdentity> FetchIdentityAsync(string id)
+    {
+        try
+        {
+            var response = await Http.GetAsync(InstanceStateContract.PathFor(InstanceStateContract.IdentityKeyFor(id)));
+
+            if (!response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                return null;
+
+            return System.Text.Json.JsonSerializer.Deserialize<PluginIdentity>(await response.Content.ReadAsStringAsync());
+        }
+        catch
+        {
+            //Unreadable reads as unrecorded: the ask cannot fire, which matches a first install.
+            return null;
+        }
+    }
+
+    private async Task WriteIdentityAsync(InstalledPluginRecord installed)
+    {
+        try
+        {
+            await Http.PutAsync(
+                InstanceStateContract.PathFor(InstanceStateContract.IdentityKeyFor(installed.Manifest.Id)),
+                new StringContent(
+                    System.Text.Json.JsonSerializer.Serialize(new PluginIdentity
+                    {
+                        Source = PluginIdentity.MarkerOf(installed),
+                        RecordedUtc = DateTimeOffset.UtcNow
+                    }),
+                    System.Text.Encoding.UTF8,
+                    InstanceStateContract.ContentType));
+        }
+        catch
+        {
+            //A marker that failed to write degrades trust-on-first-use to "first use again next time" —
+            //not worth failing an install over.
+        }
+    }
+
+    private async Task<PluginLeftovers> FetchLeftoversAsync(string id)
+    {
+        try
+        {
+            return await Http.GetFromJsonAsync<PluginLeftovers>($"{PluginLeftovers.Path}?id={Uri.EscapeDataString(id)}");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<bool> DeleteLeftoversAsync(string id)
+    {
+        try
+        {
+            var response = await Http.DeleteAsync($"{PluginLeftovers.Path}?id={Uri.EscapeDataString(id)}");
+
+            if (response.IsSuccessStatusCode)
+                return true;
+
+            error = $"The leftovers could not be deleted ({(int)response.StatusCode}).";
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = $"The leftovers could not be deleted: {ex.Message}";
+
+            return false;
+        }
+    }
+
+    private async Task RetryAsync(InstalledPluginRecord record)
+    {
+        //Lifting the mark is all a retry is: the next boot attempts the load again.
+        await JsQuietlyAsync("gdbvPluginBoot.quarantineClear", record.Manifest.Id);
+
+        notice = $@"""{record.Manifest.Name}"" will be tried again on the next reload.";
+        pendingReload = true;
+    }
+
+    private async Task<bool> SaveAsync()
+    {
+        var refusal = await installer.SaveAsync(records);
+
+        if (refusal != null)
+        {
+            error = refusal;
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task JsQuietlyAsync(string function, string argument)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync(function, argument);
+        }
+        catch
+        {
+            //A browser that refuses storage refuses cleanup too; nothing here is worth breaking the flow over.
+        }
+    }
+
+    private void Reload()
+    {
+        //A full reload, not a navigation: activation happens at boot, before Build(). Leaving
+        //?safemode=1 behind on the way is the point of reloading from here.
+        Nav.NavigateTo("/plugins", forceLoad: true);
+    }
+}

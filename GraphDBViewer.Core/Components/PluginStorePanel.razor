@@ -1,0 +1,328 @@
+@using System.Net.Http
+@using GraphDBViewerWeb.Code
+@using Microsoft.AspNetCore.Components.Web
+@inject HttpClient Http
+@inject IAppStorage Storage
+
+@*The Store tab (plugin-store criteria 5 to 17).
+
+   Its own component because Plugins.razor is already the longest page in the core, and because
+   everything here is READ from one static file: the panel owns the sources, the cards and the detail
+   view, and raises callbacks for install and update so the page keeps owning the installed list and
+   the save. Nothing here writes anything.
+
+   THE BADGE IS THE ENTRY'S OWN CLAIM, and the card says which source it came from for that reason: a
+   source is data, and this app trusts one no more than another. What makes "official" mean anything is
+   the registry's branch protection and review, not this page.*@
+<div data-testid="store-panel">
+    <div class="d-flex gap-2 flex-wrap align-items-center mb-2">
+        <input class="form-control form-control-sm" style="max-width: 20rem;" placeholder="Search the store" @bind="search" @bind:event="oninput" data-testid="store-search" />
+
+        <select class="form-select form-select-sm" style="max-width: 12rem;" @bind="trust" data-testid="store-trust">
+            <option value="">Official and community</option>
+            <option value="official">Official only</option>
+            <option value="community">Community only</option>
+        </select>
+
+        <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@busy" @onclick="RefreshAsync" data-testid="store-refresh">Refresh</button>
+    </div>
+
+    @*Per source, and never one hiding the others: a registry being down is a line here, not an empty
+       store. A stale cache is shown WITH ITS AGE, because a card an hour old beats a blank panel.*@
+    <div class="text-body-secondary mb-2" style="font-size: .78rem;" data-testid="store-sources">
+        @foreach (var state in sources)
+        {
+            <div>
+                @state.Source —
+                @if (state.Error != null && state.Ok)
+                {
+                    <span class="text-warning-emphasis" data-testid="store-source-stale">could not be reached (@state.Error) — showing what it last said, fetched @state.Age(Now())</span>
+                }
+                else if (state.Error != null)
+                {
+                    <span class="text-danger" data-testid="store-source-down">could not be read: @state.Error</span>
+                }
+                else if (state.FromCache)
+                {
+                    <span data-testid="store-source-cached">cached, fetched @state.Age(Now())</span>
+                }
+                else
+                {
+                    <span data-testid="store-source-live">fetched @state.Age(Now())</span>
+                }
+            </div>
+        }
+    </div>
+
+    @if (loading)
+    {
+        <p class="text-body-secondary" data-testid="store-loading">Reading the store…</p>
+    }
+    else if (Shown().Count == 0)
+    {
+        <p class="text-body-secondary" data-testid="store-empty">Nothing here matches. The manual install below still works.</p>
+    }
+    else
+    {
+        <div class="row g-2" data-testid="store-cards">
+            @foreach (var entry in Shown())
+            {
+                var installed = InstalledOf(entry.Id);
+                var newest = PluginStore.NewestCompatible(entry, PluginManifest.SupportedHostApiVersions);
+                var update = PluginStore.UpdateFor(installed, entry, PluginManifest.SupportedHostApiVersions);
+
+                <div class="col-md-6 col-xl-4">
+                    <div class="card gdbv-tint p-2 h-100" data-testid="store-card" data-plugin="@entry.Id">
+                        <div class="d-flex gap-2">
+                            @if (PluginStore.Resolve(entry.Source, entry.Icon) is string icon)
+                            {
+                                <img src="@icon" alt="" width="48" height="48" style="flex-shrink: 0; object-fit: contain;" />
+                            }
+
+                            <div class="flex-grow-1">
+                                <div class="d-flex align-items-center gap-2">
+                                    <a href="javascript:void(0)" class="fw-semibold" @onclick="() => OpenAsync(entry)" data-testid="store-card-name">@(entry.Name ?? entry.Id)</a>
+                                    <span class="badge @(entry.Trust == "official" ? "text-bg-primary" : "text-bg-secondary")" data-testid="store-card-trust">@(entry.Trust ?? "community")</span>
+                                </div>
+
+                                <div class="text-body-secondary" style="font-size: .78rem;">@entry.Author?.Name</div>
+                                <div style="font-size: .82rem;">@entry.Description</div>
+
+                                <div class="mt-1 d-flex gap-2 align-items-center flex-wrap">
+                                    @if (newest == null)
+                                    {
+                                        @*Shown, not hidden — so an administrator learns an upgrade would unlock it.*@
+                                        <span class="text-body-secondary" style="font-size: .78rem;" data-testid="store-card-incompatible">@PluginStore.Needs(entry)</span>
+                                    }
+                                    else if (update != null)
+                                    {
+                                        <button type="button" class="btn btn-primary btn-sm" disabled="@busy" @onclick="() => OnUpdate.InvokeAsync((entry, update))" data-testid="store-card-update">Update to @update.Version</button>
+                                    }
+                                    else if (installed != null)
+                                    {
+                                        <span class="badge text-bg-success" data-testid="store-card-installed">installed @installed.Manifest?.Version</span>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-outline-primary btn-sm" disabled="@busy" @onclick="() => OnInstall.InvokeAsync((entry, newest))" data-testid="store-card-install">Install @newest.Version</button>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+
+                        @if (open?.Id == entry.Id)
+                        {
+                            <div class="mt-2 pt-2 border-top" data-testid="store-detail">
+                                <div style="font-size: .8rem;">
+                                    @if (!string.IsNullOrWhiteSpace(entry.Repository))
+                                    {
+                                        <div>Repository: <a href="https://@entry.Repository.Replace("https://", "")" target="_blank" rel="noreferrer">@entry.Repository</a></div>
+                                    }
+
+                                    @if (!string.IsNullOrWhiteSpace(entry.License))
+                                    {
+                                        <div>License: @entry.License</div>
+                                    }
+
+                                    <div>From: @entry.Source</div>
+
+                                    @if (entry.Trust != "official" && !string.IsNullOrWhiteSpace(entry.Reviewed))
+                                    {
+                                        <div data-testid="store-detail-reviewed">Reviewed @entry.Reviewed</div>
+                                    }
+
+                                    @*What the badge MEANS, said rather than assumed (criterion 17).*@
+                                    <div class="text-body-secondary mt-1" data-testid="store-detail-badge">
+                                        @Means(entry.Trust)
+                                    </div>
+
+                                    <div class="mt-1">
+                                        Versions:
+                                        @foreach (var version in entry.Versions)
+                                        {
+                                            <span class="me-2">@version.Version (host API @version.HostApiVersion, @version.Released)</span>
+                                        }
+                                    </div>
+                                </div>
+
+                                @*Rendered at publish time by the registry's Action, so framing it is
+                                   safe and cheap: no scripts, no forms, and it cannot navigate the app.
+                                   An iframe reports neither a page nor an error, which is why the HEAD
+                                   check exists at all.*@
+                                <div class="mt-2" data-testid="store-readme">
+                                    @if (readmeState == "loading")
+                                    {
+                                        <div class="text-body-secondary" style="font-size: .8rem;" data-testid="store-readme-loading">
+                                            <span class="spinner-border spinner-border-sm me-1"></span> Loading the README…
+                                        </div>
+                                    }
+                                    else if (readmeState == "failed")
+                                    {
+                                        <div class="text-body-secondary" style="font-size: .8rem;" data-testid="store-readme-failed">
+                                            The README could not be fetched. The repository link above is what there is.
+                                        </div>
+                                    }
+                                    else if (readmeUrl != null)
+                                    {
+                                        <iframe src="@readmeUrl" title="README"
+                                                sandbox="allow-popups allow-popups-to-escape-sandbox"
+                                                referrerpolicy="no-referrer"
+                                                style="width: 100%; height: 22rem; border: 1px solid var(--bs-border-color); border-radius: .25rem;"
+                                                data-testid="store-readme-frame"></iframe>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    ///<summary>What is installed now — the page owns the list; this only reads it.</summary>
+    [Parameter] public IReadOnlyList<InstalledPluginRecord> Installed { get; set; } = [];
+
+    ///<summary>Raised with the entry and the version to install. The page does the installing and the saving.</summary>
+    [Parameter] public EventCallback<(StoreEntry Entry, StoreVersion Version)> OnInstall { get; set; }
+
+    [Parameter] public EventCallback<(StoreEntry Entry, StoreVersion Version)> OnUpdate { get; set; }
+
+    ///<summary>Every index that was read, so the page can cross the take-downs with what is installed.</summary>
+    [Parameter] public EventCallback<IReadOnlyList<StoreSourceState>> OnRead { get; set; }
+
+    [Parameter] public bool Busy { get; set; }
+
+    private List<StoreSourceState> sources = new();
+    private IReadOnlyList<StoreEntry> entries = [];
+    private StoreEntry open;
+    private string readmeUrl;
+    private string readmeState = "";
+    private string search = "";
+    private string trust = "";
+    private bool loading = true;
+
+    private bool busy
+    {
+        get { return Busy || loading; }
+    }
+
+    private PluginStoreClient Client()
+    {
+        return new PluginStoreClient(Http, Storage);
+    }
+
+    private static DateTimeOffset Now()
+    {
+        return DateTimeOffset.UtcNow;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReadAsync(refresh: false);
+    }
+
+    private async Task RefreshAsync()
+    {
+        await ReadAsync(refresh: true);
+    }
+
+    private async Task ReadAsync(bool refresh)
+    {
+        loading = true;
+
+        StateHasChanged();
+
+        try
+        {
+            var urls = await PluginStoreSources.LoadAsync(Http);
+
+            sources = (await Client().ReadAsync(urls, refresh)).ToList();
+            entries = PluginStore.Merge(sources.Where(s => s.Ok).Select(s => (s.Source, s.Index)));
+
+            await OnRead.InvokeAsync(sources);
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private InstalledPluginRecord InstalledOf(string id)
+    {
+        return Installed?.FirstOrDefault(r => string.Equals(r.Manifest?.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private List<StoreEntry> Shown()
+    {
+        return entries
+            .Where(e => PluginStore.Matches(e, search))
+            .Where(e => trust.Length == 0 || string.Equals(e.Trust ?? "community", trust, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(e => e.Name ?? e.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    ///<summary>
+    ///Opening an entry is what fetches its README, and nothing else ever does (open question 3): a
+    ///hundred cards would otherwise be a hundred requests to somebody's repository the moment the tab
+    ///opened, and the author would learn every instance that looked at the store.
+    ///</summary>
+    private async Task OpenAsync(StoreEntry entry)
+    {
+        if (open?.Id == entry.Id)
+        {
+            open = null;
+            readmeUrl = null;
+            readmeState = "";
+
+            return;
+        }
+
+        open = entry;
+        readmeUrl = null;
+        readmeState = "loading";
+
+        var url = PluginStore.Resolve(entry.Source, entry.Readme);
+
+        if (url == null)
+        {
+            readmeState = "failed";
+
+            return;
+        }
+
+        //An <iframe> reports neither a page nor an error, so the only way to know whether framing it
+        //would show something is to ask first. Pages allows a cross-origin HEAD.
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Head, url);
+            var response = await Http.SendAsync(request);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                readmeState = "failed";
+
+                return;
+            }
+        }
+        catch
+        {
+            readmeState = "failed";
+
+            return;
+        }
+
+        readmeUrl = url;
+        readmeState = "";
+    }
+
+    ///<summary>What a badge means, in the words criterion 17 asks for rather than a word nobody can check.</summary>
+    private static string Means(string trust)
+    {
+        if (string.Equals(trust, "official", StringComparison.OrdinalIgnoreCase))
+            return "Official means the maintainer wrote it and releases it. What that is worth is the registry's review and branch protection, which is written down in its contributing guide — there are no signatures yet.";
+
+        return "Community means somebody else wrote it and the maintainer reviewed the entry: the id, the permissions it asks for, and that the released bytes are the ones its own repository built. It is not an endorsement of the code.";
+    }
+}

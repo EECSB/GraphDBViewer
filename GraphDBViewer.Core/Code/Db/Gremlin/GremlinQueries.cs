@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
@@ -317,9 +317,16 @@ public static class GremlinStepParser
         "toList", "next", "tryNext", "iterate", "toSet", "toBulkSet", "hasNext", "fill", "promise", "profile", "explain"
     };
 
+    ///<summary>
+    ///The steps that change a graph. The six traversal ones are the obvious half; the other four are
+    ///the half that had been missing, and each is a real write nothing warned about: an element handed
+    ///to Groovy answers <c>remove()</c>, <c>graph</c> itself answers <c>addVertex</c> and
+    ///<c>addEdge</c>, and <c>io()</c> reads a file into the graph or writes the server one.
+    ///</summary>
     private static readonly HashSet<string> Mutating = new()
     {
-        "addV", "addE", "drop", "property", "mergeV", "mergeE"
+        "addV", "addE", "drop", "property", "mergeV", "mergeE",
+        "remove", "addVertex", "addEdge", "io"
     };
 
     ///<summary>Splits a traversal into top-level steps, each tagged with its role and character range.</summary>
@@ -537,7 +544,7 @@ public static class GremlinStepParser
             ranges.Add((s, e));
     }
 
-    ///<summary>True when the query contains a graph-mutating step (addV/addE/drop/property/mergeV/mergeE) outside a string.</summary>
+    ///<summary>True when the query contains a graph-mutating step (see <see cref="Mutating"/>) outside a string.</summary>
     public static bool IsMutating(string query)
     {
         if (string.IsNullOrEmpty(query))

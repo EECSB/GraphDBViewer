@@ -14,7 +14,12 @@
             <div class="container-fluid px-0 gdbv-page @(Shell.FullScreen ? "gdbv-fullscreen" : "")">
                 <TopBar Account="account" />
             </div>
-            @Body
+            @*The account cascades to the pages: what someone may do decides what a page offers (the
+               Plugins page gates on the install permission), and only the layout knows who is signed
+               in. Null until the host answers, and stays null on a host without accounts.*@
+            <CascadingValue Value="account">
+                @Body
+            </CascadingValue>
         </article>
     </main>
 </div>

@@ -313,6 +313,12 @@ public partial class Home
         await RenderGraphAsync();
     }
 
+    ///<summary>A picked URL, by the same path a typed one takes.</summary>
+    private Task SetLabelIconAsync(string label, string url)
+    {
+        return SetLabelIconAsync(label, new ChangeEventArgs { Value = url });
+    }
+
     private async Task SetLabelIconAsync(string label, ChangeEventArgs e)
     {
         if (styleToNode)
@@ -324,6 +330,12 @@ public partial class Home
         EnsureStyle(label).Icon = e.Value?.ToString();
         await SaveTabsAsync();
         await RenderGraphAsync();
+    }
+
+    ///<summary>A picked URL, by the same path a typed one takes.</summary>
+    private Task SetLabelModelAsync(string label, string url)
+    {
+        return SetLabelModelAsync(label, new ChangeEventArgs { Value = url });
     }
 
     private async Task SetLabelModelAsync(string label, ChangeEventArgs e)

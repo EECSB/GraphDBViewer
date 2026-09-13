@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading;
@@ -49,6 +50,11 @@ public sealed class ServerProxyGraphDb : IGraphDb
 
             if (!response.IsSuccessStatusCode)
             {
+                //The one refusal with a remedy worth naming: the host routes connections only for
+                //accounts holding the permission, and the browser route is still there.
+                if (response.StatusCode == HttpStatusCode.Forbidden)
+                    return GraphDbResult.Failure("The host will not route this connection for your account (403): that takes the connections.route permission, which an administrator grants through a role. Switch the connection to Browser to dial it from this machine instead.");
+
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
                 return GraphDbResult.Failure($"The server could not run the query ({(int)response.StatusCode}). {GraphWireText.Truncate(body)}".TrimEnd());

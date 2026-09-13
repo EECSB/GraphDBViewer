@@ -23,6 +23,27 @@ public partial class Home : IAsyncDisposable
     [Inject]
     private NavigationManager Nav { get; set; }
 
+    ///<summary>
+    ///Who is signed in, cascaded from the layout — null on the standalone viewer, and on the platform
+    ///until the host answers. Read at connect time: routing through the host takes a permission, and
+    ///a connection that would only be refused is put on the browser route instead (the connection row
+    ///says why).
+    ///</summary>
+    [CascadingParameter]
+    public AccountInfo Account { get; set; }
+
+    ///<summary>Whether the host would route a connection for this account. Unknown reads as yes.</summary>
+    private bool MayRouteThroughHost
+    {
+        get
+        {
+            if (Account == null)
+                return true;
+
+            return Account.Can(AccountInfo.ConnectionsRoute);
+        }
+    }
+
     private const string ExpansionLimitKey = "graphdbviewer:expansionLimit";
 
     //Full-width belongs to the shell now (ShellState, application-shell spec); this delegates so the
@@ -133,6 +154,13 @@ public partial class Home : IAsyncDisposable
         if (firstRender)
         {
             await LoadConnectionsAsync();
+
+            //Whether this instance has a graph of its own to offer. One GET, no secret in the answer.
+            await LoadInstanceGraphOfferAsync();
+
+            //Plugins withdrawn from the registry that are still installed here. The server crosses the
+            //seen list with what is installed, so this is only ever a list worth showing.
+            await LoadTakedownsAsync();
 
             //Anything a development machine has filled in, added to what is saved rather than over it.
             //There is no such file anywhere else, and none of this runs when there is not one.

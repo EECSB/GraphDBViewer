@@ -1,0 +1,339 @@
+@using System.Globalization
+@using GraphDBViewerWeb.Code
+@inject IServiceProvider Services
+
+@*The asset picker (DAM requirement 25): a modal over whatever IAssetSource is registered — the
+   folder tree, a name filter, a tag filter, the assets of the chosen folder as thumbnails, limited to
+   the kind the field takes. The URL already in the field is looked up when the modal opens, and Use
+   hands the chosen URL back. Inert without a source; the buttons that open it are not rendered then
+   (IsAvailable), which is how the web-only edition stays as it was.*@
+@if (Visible && source != null)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);" @onmousedown="() => backdropMouseDown = true" @onclick="CloseFromBackdrop" data-testid="asset-picker">
+        <div class="modal-dialog modal-xl" style="margin-top: 3rem;" @onmousedown="() => backdropMouseDown = false" @onmousedown:stopPropagation="true" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h5 class="modal-title" style="font-size: 1rem;">Choose @KindNoun() from the @source.Name</h5>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseAsync"></button>
+                </div>
+
+                <div class="modal-body p-0">
+                    @if (lookup != null && lookup.State != AssetLookupState.Found)
+                    {
+                        <div class="px-3 py-2 border-bottom text-body-secondary" style="font-size: .85rem;" data-testid="asset-picker-lookup">
+                            @if (lookup.State == AssetLookupState.NotOurs)
+                            {
+                                <text>The URL in the field is not a @source.Name asset — an external link. Pick one below to replace it, or close to keep it.</text>
+                            }
+                            else if (lookup.State == AssetLookupState.Missing)
+                            {
+                                <text>The asset the field points at no longer exists in the @source.Name.</text>
+                            }
+                            else
+                            {
+                                <text>@lookup.Message</text>
+                            }
+                        </div>
+                    }
+                    else if (lookup != null && lookup.Item != null)
+                    {
+                        <div class="px-3 py-2 border-bottom text-body-secondary" style="font-size: .85rem;" data-testid="asset-picker-lookup">
+                            The field holds <strong>@lookup.Item.Name</strong>@(string.IsNullOrEmpty(lookup.Item.Folder) ? "" : " in " + lookup.Item.Folder), selected below.
+                        </div>
+                    }
+
+                    <div class="d-flex" style="min-height: 24rem; max-height: 60vh;">
+                        <div class="border-end overflow-auto flex-shrink-0" style="width: 15rem; font-size: .85rem;" data-testid="asset-picker-folders">
+                            <button type="button" class="list-group-item list-group-item-action border-0 py-1 @(folder == null ? "active" : "")" @onclick="() => ChooseFolderAsync(null)" data-testid="asset-picker-folder" data-path="*">
+                                Everything
+                            </button>
+                            <button type="button" class="list-group-item list-group-item-action border-0 py-1 @(folder == "" ? "active" : "")" @onclick="() => ChooseFolderAsync(string.Empty)" data-testid="asset-picker-folder" data-path="">
+                                Top level
+                            </button>
+                            @if (result != null)
+                            {
+                                @foreach (var entry in result.Folders)
+                                {
+                                    <button type="button" class="list-group-item list-group-item-action border-0 py-1 text-truncate @(folder == entry.Path ? "active" : "")" style="padding-left: @((0.75 + entry.Depth * 0.9).ToString(CultureInfo.InvariantCulture))rem;" title="@entry.Path" @onclick="() => ChooseFolderAsync(entry.Path)" data-testid="asset-picker-folder" data-path="@entry.Path">
+                                        📁 @entry.Name <span class="text-body-secondary">(@entry.Count)</span>
+                                    </button>
+                                }
+                            }
+                        </div>
+
+                        <div class="flex-grow-1 d-flex flex-column overflow-hidden">
+                            <div class="d-flex gap-2 p-2 border-bottom">
+                                <input class="form-control form-control-sm" placeholder="Filter by name" value="@filter" @oninput="FilterChangedAsync" data-testid="asset-picker-filter" />
+                                <select class="form-select form-select-sm" style="width: auto; max-width: 12rem;" value="@tag" @onchange="TagChangedAsync" data-testid="asset-picker-tag">
+                                    <option value="">Any tag</option>
+                                    @if (result != null)
+                                    {
+                                        @foreach (var known in result.Tags)
+                                        {
+                                            <option value="@known">@known</option>
+                                        }
+                                    }
+                                </select>
+                            </div>
+
+                            <div class="flex-grow-1 overflow-auto p-2" data-testid="asset-picker-items">
+                                @if (result == null)
+                                {
+                                    <div class="text-body-secondary" style="font-size: .85rem;">Loading…</div>
+                                }
+                                else if (!string.IsNullOrEmpty(result.Error))
+                                {
+                                    <div class="text-danger" style="font-size: .85rem;" data-testid="asset-picker-error">@result.Error</div>
+                                }
+                                else if (result.Items.Count == 0)
+                                {
+                                    <div class="text-body-secondary" style="font-size: .85rem;" data-testid="asset-picker-empty">Nothing here@(string.IsNullOrEmpty(filter) && string.IsNullOrEmpty(tag) ? "" : " that matches").</div>
+                                }
+                                else
+                                {
+                                    <div class="d-flex flex-wrap gap-2">
+                                        @foreach (var item in result.Items)
+                                        {
+                                            <button type="button" class="asset-pick @(selected?.Url == item.Url ? "asset-pick-selected" : "")" title="@item.Name — @item.MediaType, @Human(item.Size)" @onclick="() => selected = item" @ondblclick="() => UseAsync(item)" data-testid="asset-picker-item" data-url="@item.Url">
+                                                <div class="asset-pick-thumb">
+                                                    @if (item.IsImage)
+                                                    {
+                                                        <img src="@item.Url" alt="" loading="lazy" />
+                                                    }
+                                                    else
+                                                    {
+                                                        <span>@Extension(item)</span>
+                                                    }
+                                                </div>
+                                                <div class="asset-pick-name text-truncate">@item.Name</div>
+                                            </button>
+                                        }
+                                    </div>
+
+                                    @if (result.Total > result.Items.Count)
+                                    {
+                                        <div class="text-body-secondary mt-2" style="font-size: .8rem;">@result.Items.Count of @result.Total — narrow it down with the filter.</div>
+                                    }
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer py-2">
+                    <span class="me-auto text-body-secondary text-truncate" style="font-size: .8rem;" data-testid="asset-picker-selected">
+                        @if (selected != null)
+                        {
+                            <text>@selected.Name</text>
+                        }
+                    </span>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="CloseAsync">Cancel</button>
+                    <button type="button" class="btn btn-primary btn-sm" disabled="@(selected == null)" @onclick="() => UseAsync(selected)" data-testid="asset-picker-use">Use</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .asset-pick { width: 8.5rem; border: 2px solid transparent; border-radius: .35rem; background: var(--bs-tertiary-bg); padding: .25rem; text-align: left; color: inherit; }
+    .asset-pick:hover { border-color: var(--bs-border-color); }
+    .asset-pick-selected, .asset-pick-selected:hover { border-color: var(--bs-primary); }
+    .asset-pick-thumb { height: 5.5rem; border-radius: .25rem; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--bs-body-bg); font-size: .7rem; text-transform: uppercase; color: var(--bs-secondary-color); }
+    .asset-pick-thumb img { width: 100%; height: 100%; object-fit: contain; }
+    .asset-pick-name { font-size: .75rem; margin-top: .25rem; }
+</style>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+
+    ///<summary>image, model, or any — what the field takes.</summary>
+    [Parameter] public string Kind { get; set; } = "any";
+
+    ///<summary>What the field holds now; looked up when the picker opens.</summary>
+    [Parameter] public string CurrentUrl { get; set; }
+
+    [Parameter] public EventCallback<string> OnPicked { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private IAssetSource source;
+    private AssetBrowseResult result;
+    private AssetLookup lookup;
+    private AssetInfo selected;
+    private string folder;
+    private string filter = "";
+    private string tag = "";
+    private bool wasVisible;
+    private bool backdropMouseDown;
+    private CancellationTokenSource debounce;
+
+    ///<summary>Whether a source is registered — the condition for rendering a Browse button at all.</summary>
+    public static bool IsAvailable(IServiceProvider services)
+    {
+        return services.GetService(typeof(IAssetSource)) is IAssetSource;
+    }
+
+    protected override void OnInitialized()
+    {
+        source = Services.GetService(typeof(IAssetSource)) as IAssetSource;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Visible && !wasVisible)
+        {
+            wasVisible = true;
+            await OpenAsync();
+        }
+        else if (!Visible)
+        {
+            wasVisible = false;
+        }
+    }
+
+    private async Task OpenAsync()
+    {
+        if (source == null)
+            return;
+
+        result = null;
+        selected = null;
+        lookup = null;
+        folder = null;
+        filter = "";
+        tag = "";
+
+        //The URL already in the field first: found means its folder is where to start, and it is
+        //selected; an empty field has nothing to say.
+        if (!string.IsNullOrWhiteSpace(CurrentUrl))
+        {
+            try
+            {
+                lookup = await source.LookupAsync(CurrentUrl, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                lookup = new AssetLookup { State = AssetLookupState.Unavailable, Message = ex.Message };
+            }
+        }
+
+        if (lookup != null && lookup.State == AssetLookupState.Found && lookup.Item != null)
+        {
+            folder = lookup.Item.Folder ?? "";
+            selected = lookup.Item;
+        }
+
+        await BrowseAsync();
+    }
+
+    private async Task BrowseAsync()
+    {
+        try
+        {
+            result = await source.BrowseAsync(new AssetBrowseRequest { Folder = folder, Recursive = folder == null, Filter = filter, Tag = tag, Kind = Kind ?? "any" }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            result = new AssetBrowseResult { Error = ex.Message };
+        }
+
+        //A selection made elsewhere stays selected only while it is on screen.
+        if (selected != null && result.Items.All(i => i.Url != selected.Url) && lookup?.Item?.Url != selected.Url)
+            selected = null;
+
+        StateHasChanged();
+    }
+
+    private async Task ChooseFolderAsync(string path)
+    {
+        folder = path;
+
+        await BrowseAsync();
+    }
+
+    private async Task FilterChangedAsync(ChangeEventArgs e)
+    {
+        filter = e.Value?.ToString() ?? "";
+
+        debounce?.Cancel();
+        debounce = new CancellationTokenSource();
+
+        var token = debounce.Token;
+
+        try
+        {
+            await Task.Delay(200, token);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        await BrowseAsync();
+    }
+
+    private async Task TagChangedAsync(ChangeEventArgs e)
+    {
+        tag = e.Value?.ToString() ?? "";
+
+        await BrowseAsync();
+    }
+
+    private async Task UseAsync(AssetInfo item)
+    {
+        if (item == null)
+            return;
+
+        await OnPicked.InvokeAsync(item.Url);
+        await CloseAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        debounce?.Cancel();
+
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task CloseFromBackdrop()
+    {
+        if (backdropMouseDown)
+            await CloseAsync();
+
+        backdropMouseDown = false;
+    }
+
+    private string KindNoun()
+    {
+        if (Kind == "image")
+            return "an image";
+
+        if (Kind == "model")
+            return "a 3D model";
+
+        return "an asset";
+    }
+
+    private static string Extension(AssetInfo item)
+    {
+        var name = item.Name ?? "";
+        var dot = name.LastIndexOf('.');
+
+        if (dot < 0 || dot == name.Length - 1 || name.Length - dot - 1 > 5)
+            return "file";
+
+        return name.Substring(dot + 1);
+    }
+
+    private static string Human(long bytes)
+    {
+        if (bytes < 1024)
+            return bytes + " B";
+
+        if (bytes < 1024 * 1024)
+            return (bytes / 1024.0).ToString("0.#", CultureInfo.InvariantCulture) + " KB";
+
+        return (bytes / (1024.0 * 1024)).ToString("0.#", CultureInfo.InvariantCulture) + " MB";
+    }
+}

@@ -1,0 +1,204 @@
+@page "/plugins/settings/{PluginId}"
+@layout MainLayout
+@using System.Net.Http.Json
+@using GraphDBViewerWeb.Code
+@inject ViewerHostOptions HostOptions
+@inject HttpClient Http
+
+@*One plugin's settings (plugin-system task 16): a single opaque blob under the plugin's own instance
+   key, edited here as text because its shape is the plugin's business, not the host's — a plugin that
+   ships its own settings screen will replace this view; until then the raw blob IS the settings page,
+   and it is also the "remove it later" screen ADR 0011 promises for configuration somebody kept at
+   uninstall. Saving is a plain PUT of the instance key: the server grants it to whoever holds the
+   <id>.configure permission the plugin declares, or plugins.install either way.*@
+@if (HostOptions.HasPlugins)
+{
+    <PageTitle>@Title() · @HostOptions.AppName</PageTitle>
+
+    <h3>@Title()</h3>
+
+    @if (Account == null || loading)
+    {
+        @*Still finding out who is asking and what is stored.*@
+    }
+    else if (record == null)
+    {
+        <p>No installed plugin has the id <code>@PluginId</code>. <a href="/plugins">Back to Plugins</a>.</p>
+    }
+    else if (!MayConfigure())
+    {
+        <p>Configuring this plugin needs a permission your account does not hold — @RequiredPermission() — which an administrator can grant through a role.</p>
+    }
+    else
+    {
+        <p class="text-body-secondary" style="max-width: 40rem;">
+            The plugin's configuration, exactly as the plugin reads it — one value, whose shape is the plugin's own.
+            Everyone on this instance shares it; a person's own preferences belong to their workspace, not here.
+        </p>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger" style="max-width: 40rem;">@error</div>
+        }
+
+        @if (!string.IsNullOrEmpty(notice))
+        {
+            <div class="alert alert-success" style="max-width: 40rem;">@notice</div>
+        }
+
+        <div class="card gdbv-tint p-3" style="max-width: 40rem;">
+            <textarea class="form-control font-monospace" rows="12" spellcheck="false" @bind="blob" @bind:event="oninput"></textarea>
+
+            <div class="d-flex gap-2 mt-2">
+                <button type="button" class="btn btn-primary" disabled="@busy" @onclick="SaveAsync">Save</button>
+                <button type="button" class="btn btn-outline-danger ms-auto" disabled="@(busy || !stored)" @onclick="DeleteAsync">Delete the stored value</button>
+            </div>
+        </div>
+
+        <p class="mt-3"><a href="/plugins">← Back to Plugins</a></p>
+    }
+}
+else
+{
+    <h3>Not Found</h3>
+    <p>Sorry, the content you are looking for does not exist.</p>
+}
+
+@code {
+    [Parameter] public string PluginId { get; set; }
+
+    ///<summary>Who is signed in, cascaded by the layout — null until the host answers.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private InstalledPluginRecord record;
+    private string blob = "";
+    private bool stored;
+    private bool loading = true;
+    private bool busy;
+    private string error;
+    private string notice;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!HostOptions.HasPlugins)
+            return;
+
+        //The list is fetched fresh rather than read from the boot singleton, so a plugin installed
+        //moments ago — before any reload — already has its settings reachable.
+        var installed = await InstalledPlugins.LoadAsync(Http);
+
+        foreach (var candidate in installed.Records)
+        {
+            if (candidate.Manifest.Id == PluginId)
+                record = candidate;
+        }
+
+        if (record != null)
+        {
+            try
+            {
+                var response = await Http.GetAsync(InstanceStateContract.PathFor(InstanceStateContract.SettingsKeyFor(PluginId)));
+
+                if (response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NoContent)
+                {
+                    blob = await response.Content.ReadAsStringAsync();
+                    stored = true;
+                }
+            }
+            catch
+            {
+                //Unreachable host reads as "nothing stored"; saving will say so properly.
+            }
+        }
+
+        loading = false;
+    }
+
+    private string Title()
+    {
+        if (record != null)
+            return $"{record.Manifest.Name} settings";
+
+        return "Plugin settings";
+    }
+
+    ///<summary>The permission the server will ask for — the plugin's own configure permission when it
+    ///declares one, the install permission otherwise (and install always suffices).</summary>
+    private string RequiredPermission()
+    {
+        var configure = PluginId + ".configure";
+
+        if ((record.Manifest.Permissions ?? []).Contains(configure, StringComparer.Ordinal))
+            return configure;
+
+        return AccountInfo.PluginsInstall;
+    }
+
+    private bool MayConfigure()
+    {
+        return Account.Can(RequiredPermission()) || Account.Can(AccountInfo.PluginsInstall);
+    }
+
+    private async Task SaveAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.PutAsync(
+                InstanceStateContract.PathFor(InstanceStateContract.SettingsKeyFor(PluginId)),
+                new StringContent(blob ?? "", System.Text.Encoding.UTF8, InstanceStateContract.ContentType));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                error = $"The server refused the save ({(int)response.StatusCode}).";
+
+                return;
+            }
+
+            stored = true;
+            notice = "Saved. The plugin reads it on its next look — for most, the next reload.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The save did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.DeleteAsync(InstanceStateContract.PathFor(InstanceStateContract.SettingsKeyFor(PluginId)));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                error = $"The server refused the delete ({(int)response.StatusCode}).";
+
+                return;
+            }
+
+            blob = "";
+            stored = false;
+            notice = "Deleted. The plugin starts from nothing next time it looks.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The delete did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

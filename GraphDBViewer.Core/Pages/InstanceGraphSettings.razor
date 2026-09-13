@@ -1,0 +1,535 @@
+@page "/instance-graph"
+@layout MainLayout
+@using System.Net.Http.Json
+@using GraphDBViewerWeb.Code
+@inject ViewerHostOptions HostOptions
+@inject HttpClient Http
+
+@*The instance graph's settings (instance-graph task 3): the one designated connection plugins read
+   and write, configured here and nowhere else. Same connection machinery as everything the viewer
+   dials — what differs is role and scope: it lives in instance state, only this permission ever sees
+   it, and every query against it runs on the server, so browsers never hold the credentials and a
+   container addressed by name (which only the host can resolve) works. Ineligible engines are listed
+   and refused with the reason, never hidden (ADR 0009).*@
+@if (HostOptions.HasPlugins)
+{
+    <PageTitle>Instance graph · @HostOptions.AppName</PageTitle>
+
+    <h3>Instance graph</h3>
+
+    @if (Account == null || loading)
+    {
+    }
+    else if (!Account.Can(AccountInfo.InstanceConfigure))
+    {
+        <p>Configuring the instance graph needs a permission your account does not hold — @AccountInfo.InstanceConfigure — which an administrator can grant through a role.</p>
+    }
+    else
+    {
+        <p class="text-body-secondary" style="max-width: 42rem;">
+            The shared database plugins keep their data in — one per instance, chosen by an administrator, and not
+            the same thing as a connection somebody browses: pointing the viewer somewhere else never touches it.
+        </p>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger" style="max-width: 42rem;">@error</div>
+        }
+
+        @if (!string.IsNullOrEmpty(notice))
+        {
+            <div class="alert alert-success" style="max-width: 42rem;">@notice</div>
+        }
+
+        <div class="card gdbv-tint p-3" style="max-width: 42rem;">
+            <div class="mb-2">
+                <label class="form-label" for="ig-type">Engine</label>
+                <select id="ig-type" class="form-select" @bind="connection.DatabaseType">
+                    <option value="@GraphDbProviders.TinkerPop">Apache TinkerPop (Gremlin)</option>
+                    <option value="@GraphDbProviders.CosmosDb">Cosmos DB (Gremlin)</option>
+                    <option value="@GraphDbProviders.Neo4j">Neo4j / Memgraph — cannot host it</option>
+                    <option value="@GraphDbProviders.Arango">ArangoDB — cannot host it</option>
+                    <option value="@GraphDbProviders.Dgraph">Dgraph — cannot host it</option>
+                    <option value="@GraphDbProviders.Sparql">SPARQL / RDF — cannot host it</option>
+                    <option value="@GraphDbProviders.Gun">GUN — cannot host it</option>
+                </select>
+            </div>
+
+            @if (!InstanceGraphContract.CanHost(connection.DatabaseType, out var reason))
+            {
+                <div class="alert alert-warning mb-2">@reason</div>
+            }
+
+            <div class="d-flex gap-2 mb-2">
+                <div class="flex-grow-1">
+                    <label class="form-label" for="ig-host">Hostname</label>
+                    <input id="ig-host" class="form-control" placeholder="graph host, or a provisioned container's name" @bind="connection.Hostname" />
+                </div>
+                <div style="width: 7rem;">
+                    <label class="form-label" for="ig-port">Port</label>
+                    <input id="ig-port" class="form-control" type="number" @bind="connection.Port" />
+                </div>
+            </div>
+
+            <div class="d-flex gap-3 align-items-center mb-2">
+                <div>
+                    <label class="form-label" for="ig-transport">Transport</label>
+                    <select id="ig-transport" class="form-select" @bind="connection.Transport">
+                        <option value="WebSocket">WebSocket</option>
+                        <option value="HTTP">HTTP</option>
+                    </select>
+                </div>
+                <label class="form-check mt-4"><input class="form-check-input" type="checkbox" @bind="connection.UseSSL" /> SSL</label>
+            </div>
+
+            <div class="mb-2">
+                <label class="form-label" for="ig-auth">Auth key / password <span class="text-body-secondary">(optional)</span></label>
+                <input id="ig-auth" class="form-control" type="password" @bind="connection.AuthKey" />
+            </div>
+
+            @if (connection.DatabaseType == GraphDbProviders.CosmosDb)
+            {
+                <div class="d-flex gap-2 mb-2">
+                    <div class="flex-grow-1">
+                        <label class="form-label" for="ig-db">Database</label>
+                        <input id="ig-db" class="form-control" @bind="connection.Database" />
+                    </div>
+                    <div class="flex-grow-1">
+                        <label class="form-label" for="ig-coll">Collection</label>
+                        <input id="ig-coll" class="form-control" @bind="connection.Collection" />
+                    </div>
+                </div>
+            }
+
+            <div class="d-flex gap-2 mt-2">
+                <button type="button" class="btn btn-outline-secondary" disabled="@busy" @onclick="TestAsync">Test</button>
+                <button type="button" class="btn btn-primary" disabled="@busy" @onclick="SaveAsync">Save</button>
+
+                @if (configured)
+                {
+                    <button type="button" class="btn btn-outline-danger ms-auto" disabled="@busy" @onclick="DetachAsync">Detach</button>
+                }
+            </div>
+
+            <div class="text-body-secondary mt-2" style="font-size: .8rem;">
+                Queries against it always run on the host — a provisioned container is addressed by its name on the
+                shared network, which resolves there and nowhere else. Detaching stores nothing new; plugins fall
+                back to their waiting state.
+            </div>
+        </div>
+
+        @if (configured && connection.DatabaseType == GraphDbProviders.TinkerPop)
+        {
+            @*Save now (the instance-graph-backend research, question 5): a file-backed TinkerGraph writes
+               its file only on a clean shutdown, so a crash loses everything since the last start; this
+               bounds the loss to "since the last save". Shown only for the engine it is for — Cosmos DB
+               persists on its own — and the server decides the rest: a TinkerGraph with no file, or a
+               different graph behind a TinkerPop connection, is refused with the reason.*@
+            <div class="card gdbv-tint p-3 mt-3" style="max-width: 42rem;">
+                <h5 class="mb-2">Save the graph to disk</h5>
+                <p class="text-body-secondary mb-2" style="font-size: .8rem;">
+                    A file-backed TinkerGraph lives in memory and writes its file only when the server stops cleanly, so a
+                    crash loses everything since the last start. Saving now writes the whole graph to that file — to a
+                    temporary file first, renamed over the old one, so a failure mid-write leaves the last good copy in
+                    place. The server's own 30-second limit on a script applies, and it is a full rewrite every time. A
+                    graph that persists on its own, or a TinkerGraph with no file configured, says so and writes nothing.
+                </p>
+                <div class="d-flex align-items-center gap-3 flex-wrap">
+                    <button type="button" class="btn btn-outline-primary" disabled="@busy" @onclick="SaveNowAsync" data-testid="ig-save-now">Save now</button>
+
+                    @*The same save on a timer, so the window is bounded without anybody clicking. Five
+                       minutes unless an administrator says otherwise; off is offered and says so.*@
+                    <label class="d-flex align-items-center gap-2 mb-0">
+                        <span class="text-body-secondary" style="font-size: .85rem;">Automatically</span>
+                        <select id="ig-autosave" class="form-select form-select-sm" style="width: auto;" disabled="@busy"
+                                @bind="autosaveMinutes" @bind:after="AutosaveChangedAsync">
+                            @foreach (var choice in InstanceGraphContract.AutosaveChoices)
+                            {
+                                <option value="@choice">@InstanceGraphContract.AutosaveLabel(choice)</option>
+                            }
+                        </select>
+                    </label>
+                </div>
+
+                <div class="text-body-secondary mt-2" style="font-size: .8rem;" data-testid="ig-autosave-state">
+                    @if (autosaveMinutes <= 0)
+                    {
+                        <span>The graph is written only when you click, or when the server stops cleanly.</span>
+                    }
+                    else if (autosave?.LastRunAt == null)
+                    {
+                        <span>@(InstanceGraphContract.AutosaveLabel(autosaveMinutes).ToLowerInvariant()), counted from this server's start. Nothing has run yet.</span>
+                    }
+                    else if (autosave.LastSaved)
+                    {
+                        <span>Last automatic save @autosave.LastRunAt.Value.ToLocalTime().ToString("g"): @(autosave.LastVertices.ToString("N0")) vertices and @(autosave.LastEdges.ToString("N0")) edges, @Human(autosave.LastBytes).</span>
+                    }
+                    else
+                    {
+                        <span class="text-warning">The last automatic save wrote nothing: @autosave.LastError</span>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (configured && connection.DatabaseType == GraphDbProviders.TinkerPop)
+        {
+            @*Declare the schema (the JanusGraph recipe). Offered beside Save now and for the opposite
+               engine: a TinkerGraph makes its own keys and refuses this, a JanusGraph cannot work
+               without it. The server decides which — the page does not know what is behind a Gremlin
+               connection until it asks.*@
+            <div class="card gdbv-tint p-3 mt-3" style="max-width: 42rem;">
+                <h5 class="mb-2">Declare the schema</h5>
+                <p class="text-body-secondary mb-2" style="font-size: .8rem;">
+                    JanusGraph wants its property keys and indexes declared before anything is written: it fixes a key's
+                    datatype from the first value it ever sees, and an index over a key that already holds data needs a
+                    reindex. This generates both from the perspectives' own vocabularies — every field's kind is its
+                    datatype, every searchable field its index — so <strong>run it on an empty graph</strong>, before the
+                    first import. Running it twice is safe and does nothing the second time. A TinkerGraph says so and
+                    declares nothing.
+                </p>
+
+                <div class="d-flex gap-2 flex-wrap">
+                    <button type="button" class="btn btn-outline-primary" disabled="@busy" @onclick="DeclareSchemaAsync" data-testid="ig-schema">Declare the schema</button>
+                    <button type="button" class="btn btn-outline-secondary" disabled="@busy" @onclick="CheckSearchAsync" data-testid="ig-search-health">Check the search indexes</button>
+                </div>
+
+                <p class="text-body-secondary mt-2 mb-0" style="font-size: .8rem;">
+                    The check is read-only and asks the graph rather than assuming: a search index that was never
+                    declared, or that never finished registering, still answers every query — by reading every vertex
+                    under the label. It cannot see an index that is enabled but was never reindexed over data written
+                    before it; finding that means counting a whole label, which is a full read of it.
+                </p>
+
+                @if (schema != null && schema.Steps.Count > 0)
+                {
+                    <div class="text-body-secondary mt-2" style="font-size: .8rem;" data-testid="ig-schema-steps">
+                        @foreach (var step in schema.Steps)
+                        {
+                            <div>@step.Title — @step.Detail</div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        <p class="mt-3"><a href="/plugins">← Back to Plugins</a></p>
+    }
+}
+else
+{
+    <h3>Not Found</h3>
+    <p>Sorry, the content you are looking for does not exist.</p>
+}
+
+@code {
+    ///<summary>Who is signed in, cascaded by the layout — null until the host answers.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private GremlinDB.GremlinConnection connection = Fresh();
+    private bool configured;
+    private bool loading = true;
+    private bool busy;
+    private string error;
+    private string notice;
+
+    private static GremlinDB.GremlinConnection Fresh()
+    {
+        return new GremlinDB.GremlinConnection
+        {
+            DatabaseType = GraphDbProviders.TinkerPop,
+            Transport = "WebSocket",
+            Port = 8182,
+            UseSSL = false
+        };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!HostOptions.HasPlugins)
+            return;
+
+        try
+        {
+            var response = await Http.GetAsync(InstanceGraphContract.ConfigPath);
+
+            if (response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NoContent)
+            {
+                var stored = await response.Content.ReadFromJsonAsync<GremlinDB.GremlinConnection>();
+
+                if (stored != null)
+                {
+                    connection = stored;
+                    configured = true;
+                }
+            }
+        }
+        catch
+        {
+            //Nothing stored, or nothing reachable: the form starts fresh either way.
+        }
+
+        await LoadAutosaveAsync();
+
+        loading = false;
+    }
+
+    ///<summary>The autosave's setting and its last run, read once with the connection and again after each save.</summary>
+    private InstanceGraphAutosaveState autosave;
+    private int autosaveMinutes = InstanceGraphContract.AutosaveDefaultMinutes;
+
+    ///<summary>What the timer is set to, and what it last did. Its own endpoint, gated like the connection.</summary>
+    private async Task LoadAutosaveAsync()
+    {
+        try
+        {
+            var state = await Http.GetFromJsonAsync<InstanceGraphAutosaveState>(InstanceGraphContract.AutosavePath);
+
+            if (state != null)
+            {
+                autosave = state;
+                autosaveMinutes = state.Minutes;
+            }
+        }
+        catch
+        {
+            //Nothing configured, or nothing reachable: the select shows the default and changing it still writes.
+        }
+    }
+
+    ///<summary>A new interval, saved as it is chosen — there is nothing else on this control to submit.</summary>
+    private async Task AutosaveChangedAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.PutAsJsonAsync(InstanceGraphContract.AutosavePath, new InstanceGraphAutosaveSetting { Minutes = autosaveMinutes });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                error = await response.Content.ReadAsStringAsync();
+
+                if (string.IsNullOrWhiteSpace(error))
+                    error = $"The server refused the interval ({(int)response.StatusCode}).";
+
+                autosaveMinutes = autosave?.Minutes ?? InstanceGraphContract.AutosaveDefaultMinutes;
+
+                return;
+            }
+
+            notice = $"Automatic saves: {InstanceGraphContract.AutosaveLabel(autosaveMinutes).ToLowerInvariant()}.";
+
+            await LoadAutosaveAsync();
+        }
+        catch (Exception ex)
+        {
+            error = $"The interval did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task TestAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync(InstanceGraphContract.TestPath, connection);
+            var answer = await response.Content.ReadFromJsonAsync<GraphQueryResponse>();
+
+            if (answer == null || answer.IsError)
+                error = $"The connection did not answer its probe: {answer?.Error ?? "no response"}";
+            else
+                notice = "The graph answered. Save to make it the instance graph.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The test did not run: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.PutAsJsonAsync(InstanceGraphContract.ConfigPath, connection);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                error = await response.Content.ReadAsStringAsync();
+
+                if (string.IsNullOrWhiteSpace(error))
+                    error = $"The server refused the save ({(int)response.StatusCode}).";
+
+                return;
+            }
+
+            configured = true;
+            notice = "Saved. Plugins see it on their next look.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The save did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task DetachAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.DeleteAsync(InstanceGraphContract.ConfigPath);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                error = $"The server refused the detach ({(int)response.StatusCode}).";
+
+                return;
+            }
+
+            configured = false;
+            connection = Fresh();
+            notice = "Detached. Nothing was deleted from any graph; plugins are back to waiting for one.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The detach did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>What the last declaration did, step by step — kept so the page can show it under the button.</summary>
+    private InstanceGraphSchemaResult schema;
+
+    ///<summary>
+    ///Declare the schema: the property keys and indexes a JanusGraph needs, generated from the
+    ///vocabularies. Every refusal is an answer rather than an exception, so this shows a sentence.
+    ///</summary>
+    private async Task DeclareSchemaAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+        schema = null;
+
+        try
+        {
+            var response = await Http.PostAsync(InstanceGraphContract.SchemaPath, null);
+
+            schema = await response.Content.ReadFromJsonAsync<InstanceGraphSchemaResult>();
+
+            if (schema == null)
+                error = "The server did not answer the declaration.";
+            else if (!schema.Ok)
+                error = schema.Error;
+            else
+                notice = $"The schema is declared: {schema.Steps.Count} statement(s), and every index in use.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The declaration did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>
+    ///Ask whether search would actually be served by an index. Shown in the same place the declaration
+    ///reports itself, because the answer to an unhealthy check is usually to press the button beside it.
+    ///</summary>
+    private async Task CheckSearchAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+        schema = null;
+
+        try
+        {
+            schema = await Http.GetFromJsonAsync<InstanceGraphSchemaResult>(InstanceGraphContract.SearchHealthPath);
+
+            if (schema == null)
+                error = "The server did not answer the check.";
+            else if (!schema.Ok)
+                error = schema.Error;
+            else
+                notice = $"Every searchable label has an index in use: {schema.Steps.Count} checked.";
+        }
+        catch (Exception ex)
+        {
+            error = $"The check did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    ///<summary>Save now: the whole graph to its own file, through the server. The answer names the file and what went into it.</summary>
+    private async Task SaveNowAsync()
+    {
+        busy = true;
+        error = null;
+        notice = null;
+
+        try
+        {
+            var response = await Http.PostAsync(InstanceGraphContract.SavePath, null);
+            var answer = await response.Content.ReadFromJsonAsync<InstanceGraphSaveResult>();
+
+            if (answer == null)
+                error = "The server did not answer the save.";
+            else if (!answer.Saved)
+                error = answer.Error;
+            else
+                notice = $"Saved {answer.Vertices:N0} vertices and {answer.Edges:N0} edges to {answer.Location} ({Human(answer.Bytes)}).";
+        }
+        catch (Exception ex)
+        {
+            error = $"The save did not reach the server: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private static string Human(long bytes)
+    {
+        if (bytes < 1024)
+            return bytes + " B";
+
+        if (bytes < 1024 * 1024)
+            return (bytes / 1024.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " KB";
+
+        return (bytes / (1024.0 * 1024)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " MB";
+    }
+}

@@ -111,7 +111,7 @@ public static class SchemaBuilder
         return GraphDataConverter.UnwrapElement(result);
     }
 
-    private static Dictionary<string, long> ReadCountMap(JsonElement result)
+    public static Dictionary<string, long> ReadCountMap(JsonElement result)
     {
         var map = new Dictionary<string, long>();
         var obj = FirstMap(result);
