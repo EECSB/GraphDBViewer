@@ -368,7 +368,10 @@ FodyWeavers.xsd
 dev-secrets.json
 
 # Claude Code local machine settings (per-developer; keep launch.json etc. shared)
-.claude/settings.local.json
+# The pattern has a slash in it, so it is anchored to the repo root and only ever matched the one
+# there. A copy sits in GraphDBViewerWeb/ carrying permissions from a machine that is not this one,
+# and showed as untracked because nothing covered it. Match them at any depth instead.
+**/.claude/settings.local.json
 
 # Playwright e2e artifacts
 /test-results/
