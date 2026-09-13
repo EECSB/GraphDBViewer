@@ -51,6 +51,7 @@ Graph DB Viewer began as part of another project of mine. While exploring graph 
   - [Connect to any graph](#-connect-to-any-graph)
   - [Write & run queries](#-write--run-queries)
   - [Visualize four ways](#-visualize-four-ways)
+  - [Map and Globe](#-map-and-globe)
   - [Debug traversals step by step](#-debug-traversals-step-by-step)
   - [Edit the graph safely](#-edit-the-graph-safely)
   - [Import & export](#-import--export)
@@ -89,6 +90,7 @@ It's designed for developers who want a fast, private, self-hostable alternative
 |---|---|
 | 🔌 **Six engines, browser-direct** | Gremlin (TinkerPop, Cosmos DB), Cypher (Neo4j, Memgraph), AQL (ArangoDB), DQL (Dgraph), GUN and SPARQL/RDF — straight from the browser, no proxy in between. |
 | 🐳 **Optional server edition** | One container for the databases a browser cannot reach: no CORS headers, a private network, or Bolt. Same app, still no accounts and no server-side storage. |
+| 🌍 **Map and Globe** | Vertices that carry coordinates on a world map or a 3D globe, found by the property names data already uses, with the earth's imagery shipped in the app. |
 | 🎨 **Four view modes** | The same result as **JSON**, an interactive **2D** graph, a **3D** graph, or a sortable **Table**. |
 | 🧭 **Multiple layouts** | 6 layouts in 2D (force, tree, concentric, circle, grid, random) and 6 in 3D (force + five DAG modes). |
 | 🐞 **gdotV-style query debugger** | Step through a traversal and watch the traverser count after every step — see exactly where results vanish. |
@@ -123,7 +125,7 @@ It's designed for developers who want a fast, private, self-hostable alternative
 - **Load DB** — pull the whole graph (vertices **and** edges, including isolated/edgeless vertices) with a configurable vertex limit.
 - **Saved queries** — CRUD, stored locally, one click to reload.
 - **Query history** — the last 20 executed queries, de-duplicated (re-running one moves it to the top), click to restore.
-- **Examples tab** — curated queries grouped into **Inspect**, **Visualize** and **Mutate**, plus one-click **sample graphs** (a table-assembly tree, a social network, flight routes, and 3D objects) that load additively so you always have something to look at.
+- **Examples tab** — curated queries grouped into **Inspect**, **Visualize** and **Mutate**, plus one-click **sample graphs** (a table-assembly tree, a social network, flight routes, 3D objects, and cities on a map) that load additively so you always have something to look at.
 - **✨ Ask AI** — describe what you want in plain English and a **bring-your-own-key** AI model (Anthropic / OpenAI / Gemini / any OpenAI-compatible server) writes the Gremlin / openCypher / SPARQL query into the editor for review — grounded in the connected schema. It is a running conversation, not one shot. Tool-capable models can run queries against the live graph to check themselves, under a per-panel setting: **ask each time** (the default), **auto-run reads**, or **auto-run reads and writes**. A write is always something the model proposes — below the top setting it waits for you, on a card that also offers to hand the query to the editor instead.
 - **Cancellable** — connect, Run Query, Load DB, Schema fetch and Commit all run under a cancellation token with a Cancel button.
 
@@ -146,6 +148,27 @@ Switch any result between **JSON**, **2D**, **3D** and **Table** instantly.
 - **Center / fit** control and **live layout switching** with no graph rebuild.
 - **Graph stats** — a `N vertices · M edges` line under each graph, plus the **last query's execution time** (`… · 12 ms query`).
 - **Multiple query tabs** — each tab is an independent workspace (its own query, results, view mode, layout, search/filter, styling and selection). All open tabs are persisted and restored on reload; double-click a tab to rename it.
+
+### 🌍 Map and Globe
+
+Vertices that carry coordinates can be drawn where they are: hover **2D** and pick **Map** for a world map, or hover **3D** and pick **Globe**. The same cities and routes, both ways:
+
+<table>
+  <tr>
+    <td><img src="docs/img/graph-map.jpg" alt="The Map: cities in North America and Europe placed by their coordinates on a satellite world map, with the routes between them following great circles" width="460" /></td>
+    <td><img src="docs/img/graph-globe.jpg" alt="The Globe: the same cities and routes on a 3D globe, arcing over the Atlantic" width="460" /></td>
+  </tr>
+</table>
+
+- **Nothing to configure** — coordinates are found by convention: `lat` / `latitude` with `lon` / `lng` / `long` / `longitude`, or one property holding both (`"48.2, 16.4"`, a GeoJSON point, WKT `POINT(lon lat)`, a Neo4j point). Vertices without a place are hidden, and the view says how many.
+- **Still the same view** — selecting, editing, styling, filtering, searching and exporting work as they do on the plain 2D and 3D graphs. The map and the globe are layouts, and the layout pickers offer them too.
+- **Two looks** — **Satellite** (NASA Blue Marble) or **Outline** (Natural Earth coastlines and borders).
+- **On the map** — routes follow great circles, grid mode draws latitude and longitude lines with their degrees, and PNG / JPEG / SVG exports keep the earth under the graph.
+- **On the globe** — links arc over the surface, and the labels of vertices on the far side of the earth are hidden.
+- **Small by default, sharp on request** — the satellite earth loads a 0.3 MB image; **High resolution** downloads the 8192 × 4096 one (3.7 MB) only when you choose it.
+- **No tile server** — the imagery ships with the app, so there is no API key and no outside service to reach.
+
+To try it, run **Geospatial map** from *Examples → Sample graphs* (Gremlin or Cypher): eighteen cities and the routes between them.
 
 ### 🐞 Debug traversals step by step
 
