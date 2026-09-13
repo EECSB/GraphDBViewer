@@ -9,33 +9,15 @@
 @inject IJSRuntime JS
 @inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
 @inject GraphDBViewerWeb.Code.LlmConnectionStore LlmConnections
+@inject GraphDBViewerWeb.Code.ShellState Shell
 
 <PageTitle>@HostOptions.AppName</PageTitle>
 
 <div class="container-fluid px-0 gdbv-page @(fullScreen ? "gdbv-fullscreen" : "")" style="padding-bottom: 0.5rem;">
 
-    @* ── Top bar ──────────────────────────────────────────────────────── *@
-    <TopBar IsConnected="isConnected"
-            Offline="offlineMode"
-            Pulse="pulseConnect"
-            Hostname="@DisplayHost"
-            Port="DisplayPort"
-            ConnectionCardExpanded="showConnectionCard"
-            ImportExportExpanded="showImportExport"
-            Theme="@theme"
-            FullScreen="fullScreen"
-            ExpansionLimit="expansionLimit"
-            OnExpansionLimitChanged="SetExpansionLimitAsync"
-            QueryLimit="loadDbLimit"
-            OnQueryLimitChanged="SetQueryLimitAsync"
-            OnToggleConnectionCard="() => showConnectionCard = !showConnectionCard"
-            OnToggleImportExport="() => showImportExport = !showImportExport"
-            OnThemeChanged="SetThemeAsync"
-            OnToggleFullScreen="ToggleFullScreenAsync"
-            OnShowAbout="() => showAbout = true"
-            OnShowShowcase="() => showShowcase = true"
-            OnShowLlmSettings="() => showLlmSettings = true"
-            Account="account" />
+    @* The top bar is the shell's now — MainLayout renders it above this page. What the viewer shows in
+       it (the connection indicator, import/export, the query limits) is contributed through ShellState;
+       the fragment is at the bottom of this file, registered in OnInitialized. *@
 
     @* ── Storage-full warning ──────────────────────────────────────────── *@
     @if (storageFull)
@@ -1781,12 +1763,6 @@
 
 </div>
 
-<AboutModal Visible="showAbout" OnClose="() => showAbout = false" OnOpenShowcase="OpenShowcaseFromAbout" />
-
-<ShowcaseModal Visible="showShowcase" OnClose="() => showShowcase = false" />
-
-<LlmSettingsModal Visible="showLlmSettings" OnClose="() => showLlmSettings = false" />
-
 <NlQueryModal Visible="showNlModal"
               OnClose="() => showNlModal = false"
               Schema="schemaVocab"
@@ -2147,4 +2123,24 @@
             }
         </div>
     </div>
+}
+@code {
+    //The viewer's contribution to the shell's toolbar (application-shell spec): the connection
+    //indicator, the import/export toggle and the query limits. A Razor template rather than markup in
+    //this page's body because the shell's TopBar renders it, not this page — Home hands it over in
+    //OnInitialized and the handle un-contributes it on dispose.
+    private RenderFragment ViewerToolbarFragment =>
+        @<ViewerToolbar IsConnected="isConnected"
+                        Offline="offlineMode"
+                        Pulse="pulseConnect"
+                        Hostname="@DisplayHost"
+                        Port="DisplayPort"
+                        ConnectionCardExpanded="showConnectionCard"
+                        ImportExportExpanded="showImportExport"
+                        ExpansionLimit="expansionLimit"
+                        OnExpansionLimitChanged="SetExpansionLimitAsync"
+                        QueryLimit="loadDbLimit"
+                        OnQueryLimitChanged="SetQueryLimitAsync"
+                        OnToggleConnectionCard="() => showConnectionCard = !showConnectionCard"
+                        OnToggleImportExport="() => showImportExport = !showImportExport" />;
 }

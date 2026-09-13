@@ -50,6 +50,13 @@ public sealed class ViewerHostOptions
     public string ShowcaseUrl { get; set; }
 
     ///<summary>
+    ///Whether this host has the plugin platform — a Plugins page for the Settings menu to link to.
+    ///True in Treeality; false (the default) in the standalone web-only viewer, which must show no
+    ///trace of a plugin system it does not have.
+    ///</summary>
+    public bool HasPlugins { get; set; }
+
+    ///<summary>
     ///Where to look for a developer's local credentials file, or null to not look at all. Only a
     ///Development build sets it: the file is git-ignored and absent everywhere else, and asking for
     ///something that is not there costs a 404 in the console of every user who never had one.

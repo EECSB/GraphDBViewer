@@ -1,5 +1,7 @@
 @using GraphDBViewerWeb.Code
+@implements IDisposable
 @inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+@inject GraphDBViewerWeb.Code.ShellState Shell
 
 <div class="card gdbv-tint d-flex flex-row flex-wrap align-items-center gap-2 mb-2 p-2">
 
@@ -19,28 +21,23 @@
         <h1 class="mb-0 me-5" style="font-size: 1.25rem; line-height: 1;">@HostOptions.AppName</h1>
     }
 
-    <button class="btn @ConnectionButtonClass btn-sm @(Pulse ? "gdbv-pulse" : "")" @onclick="OnToggleConnectionCard" title="@(Offline && !IsConnected ? "Offline drawing mode: open the connection card to exit it or connect" : null)">
-        @ConnectionButtonText
-        <span class="ms-1">@(ConnectionCardExpanded ? "▲" : "▼")</span>
-    </button>
-
-    <button class="btn btn-outline-secondary btn-sm ms-2 text-body-emphasis" @onclick="OnToggleImportExport">
-        Import / Export
-        <span class="ms-1">@(ImportExportExpanded ? "▲" : "▼")</span>
-    </button>
+    @* What the current page contributes to the toolbar — immediately after the logo, the one region a
+       page gets (application-shell spec). The viewer puts its connection indicator, import/export toggle
+       and query settings here; a page contributing nothing leaves just the shell's own controls. *@
+    @Shell.ToolbarContribution
 
     @* Feature showcase — opens the full-screen showcase overlay, for a deployment that bundles one.
        Starts the right-aligned button group when it is here; the full-width toggle does when it is not. *@
     @if (!string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
     {
-        <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis ms-auto" @onclick="OnShowShowcase" title="Open the feature showcase">
+        <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis ms-auto" @onclick="() => showShowcase = true" title="Open the feature showcase">
             Feature showcase ✨
         </button>
     }
 
     @* Full-width toggle: drops the side margins so the layout fills the viewport. *@
-    <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis @(string.IsNullOrEmpty(HostOptions.ShowcaseUrl) ? "ms-auto" : "ms-2") @(FullScreen ? "active" : null)" @onclick="OnToggleFullScreen" aria-pressed="@(FullScreen ? "true" : "false")" title="@(FullScreen ? "Exit full-width: restore the side margins" : "Full-width: remove the side margins")">
-        @if (FullScreen)
+    <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis @(string.IsNullOrEmpty(HostOptions.ShowcaseUrl) ? "ms-auto" : "ms-2") @(Shell.FullScreen ? "active" : null)" @onclick="Shell.ToggleFullScreenAsync" aria-pressed="@(Shell.FullScreen ? "true" : "false")" title="@(Shell.FullScreen ? "Exit full-width: restore the side margins" : "Full-width: remove the side margins")">
+        @if (Shell.FullScreen)
         {
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
                 <path d="M5.5 0a.5.5 0 0 1 .5.5v4A1.5 1.5 0 0 1 4.5 6h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5m5 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 10 4.5v-4a.5.5 0 0 1 .5-.5M0 10.5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 6 11.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5m10 1a1.5 1.5 0 0 1 1.5-1.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0z"/>
@@ -54,7 +51,8 @@
         }
     </button>
 
-    @* Settings dropdown (right side) — holds the theme switch, About, and future options. *@
+    @* Settings dropdown (right side) — holds the theme switch, About, and future options. Shell-only:
+       a page cannot add to it, which is what keeps it the same on every page. *@
     <div class="position-relative ms-2">
         <button class="btn btn-outline-secondary btn-sm text-body-emphasis" @onclick="() => showSettings = !showSettings" title="Settings">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
@@ -89,7 +87,7 @@
                             {
                                 <button class="dropdown-item d-flex align-items-center gap-2 px-3 py-2" @onclick="() => PickThemeAsync(choice.Key)">
                                     @* A fixed-width slot so the labels line up whether or not one is ticked. *@
-                                    <span style="width: 1em;">@(Theme == choice.Key ? "✓" : "")</span>
+                                    <span style="width: 1em;">@(Shell.Theme == choice.Key ? "✓" : "")</span>
                                     <span>@choice.Label</span>
                                 </button>
                             }
@@ -97,31 +95,15 @@
                     }
                 </div>
 
-                @* Query settings, the same shape as Theme above it: the limits open beside the row on
-                   hover instead of lengthening the menu, with the arrow leading the label. *@
-                <div class="position-relative border-bottom" @onmouseenter="() => showQuerySettings = true" @onmouseleave="() => showQuerySettings = false">
-                    <button class="dropdown-item d-flex align-items-center gap-2 px-3 py-2" @onclick="() => showQuerySettings = !showQuerySettings">
-                        <span>◀</span>
-                        <span>Query settings</span>
-                    </button>
-
-                    @if (showQuerySettings)
-                    {
-                        <div class="card position-absolute top-0 end-100 py-1 shadow" style="z-index: 1090; min-width: 230px;">
-                            <label class="d-flex align-items-center justify-content-between px-3 py-2 mb-0" title="Max vertices a query or Load DB pulls from the database (same as the query-limit box by the editor)">
-                                <span>Query limit</span>
-                                <input class="form-control form-control-sm m-0" type="number" min="1" style="width: 5rem;" value="@QueryLimit" @onchange="OnQueryLimitInput" />
-                            </label>
-                            <label class="d-flex align-items-center justify-content-between px-3 py-2 mb-0" title="The most neighbors pulled in when you double-click a node to expand it">
-                                <span>Expand limit</span>
-                                <input class="form-control form-control-sm m-0" type="number" min="1" max="5000" style="width: 5rem;" value="@ExpansionLimit" @onchange="OnExpansionLimitInput" />
-                            </label>
-                        </div>
-                    }
-                </div>
-
                 <button class="dropdown-item px-3 py-2 border-bottom" @onclick="ShowLlmSettingsFromMenu">AI settings</button>
-                <button class="dropdown-item px-3 py-2" @onclick="ShowAboutFromMenu">About</button>
+                <button class="dropdown-item px-3 py-2 @(HostOptions.HasPlugins ? "border-bottom" : null)" @onclick="ShowAboutFromMenu">About</button>
+
+                @* Only a host with the plugin platform gets this — the standalone web-only viewer must
+                   show no trace of it. The page it points at is the plugin-system spec's to build. *@
+                @if (HostOptions.HasPlugins)
+                {
+                    <a class="dropdown-item px-3 py-2 text-decoration-none" href="/plugins">Plugins</a>
+                }
             </div>
         }
     </div>
@@ -166,86 +148,34 @@
 
 </div>
 
-@code {
-    [Parameter] public bool IsConnected { get; set; }
-    [Parameter] public bool Offline { get; set; }
-    [Parameter] public bool Pulse { get; set; }
-    [Parameter] public string Hostname { get; set; }
-    [Parameter] public int Port { get; set; }
-    [Parameter] public bool ConnectionCardExpanded { get; set; }
-    [Parameter] public bool ImportExportExpanded { get; set; }
-    ///<summary>Which theme is on: "dark", "light" (Light 1) or "light-tinted" (Light 2).</summary>
-    [Parameter] public string Theme { get; set; }
-    [Parameter] public bool FullScreen { get; set; }
-    [Parameter] public int ExpansionLimit { get; set; }
-    [Parameter] public EventCallback<int> OnExpansionLimitChanged { get; set; }
-    [Parameter] public int QueryLimit { get; set; }
-    [Parameter] public EventCallback<int> OnQueryLimitChanged { get; set; }
-    [Parameter] public EventCallback OnToggleConnectionCard { get; set; }
-    [Parameter] public EventCallback OnToggleImportExport { get; set; }
-    [Parameter] public EventCallback<string> OnThemeChanged { get; set; }
-    [Parameter] public EventCallback OnToggleFullScreen { get; set; }
-    [Parameter] public EventCallback OnShowAbout { get; set; }
-    [Parameter] public EventCallback OnShowLlmSettings { get; set; }
-    [Parameter] public EventCallback OnShowShowcase { get; set; }
+@* The shell's dialogs, opened from the menu above. They render as fixed-position overlays, so being
+   rendered by the bar rather than by a page changes nothing about where they appear — and it is what
+   lets them open the same way on every page. *@
+<AboutModal Visible="showAbout" OnClose="() => showAbout = false" OnOpenShowcase="OpenShowcaseFromAbout" />
 
+<ShowcaseModal Visible="showShowcase" OnClose="() => showShowcase = false" />
+
+<LlmSettingsModal Visible="showLlmSettings" OnClose="() => showLlmSettings = false" />
+
+@code {
     ///<summary>Who is signed in, or null while that is still being asked / when the host has no accounts.</summary>
     [Parameter] public AccountInfo Account { get; set; }
-
-    //The connection button doubles as the app's mode indicator: green when connected, blue while drawing
-    //offline, gray otherwise. Offline mode used to be invisible here — the bar kept saying "Disconnected"
-    //while the card holding the "Exit offline mode" toggle had closed, leaving no visible way back out.
-    private string ConnectionButtonClass
-    {
-        get
-        {
-            if (IsConnected)
-                return "btn-outline-success";
-
-            if (Offline)
-                return "btn-outline-primary";
-
-            return "btn-outline-secondary";
-        }
-    }
-
-    private string ConnectionButtonText
-    {
-        get
-        {
-            if (IsConnected)
-                return $"Connected: {HostLabel}";
-
-            if (Offline)
-                return "Offline mode";
-
-            return $"Disconnected: {HostLabel}";
-        }
-    }
-
-    private string HostLabel
-    {
-        get
-        {
-            if (string.IsNullOrEmpty(Hostname))
-                return $"No host:{Port}";
-
-            return $"{Hostname}:{Port}";
-        }
-    }
 
     //Whether the Settings dropdown is open. The theme switch keeps it open (a live toggle);
     //About closes it since it opens a modal.
     private bool showSettings;
 
-    //Whether the "Query settings" flyout (query limit + expand limit) is open. Closed until the row
-    //is hovered, like the theme choices above it.
-    private bool showQuerySettings = false;
-
     //Whether the account menu is open. Both of its items leave the page, so nothing closes it by hand.
     private bool showAccount;
 
     private bool showThemes;
+
+    //The shell's own dialogs: About, the full-screen showcase overlay (when the host bundles one), and
+    //the AI models dialog. These were page state on Home once; they moved here with the bar that opens
+    //them, so every page has them (application-shell spec).
+    private bool showAbout;
+    private bool showShowcase;
+    private bool showLlmSettings;
 
     ///<summary>The three themes, in the order the menu lists them.</summary>
     private static readonly (string Key, string Label)[] ThemeChoices =
@@ -255,34 +185,48 @@
         ("light-tinted", "Light 2")
     ];
 
-    private async Task ShowLlmSettingsFromMenu()
+    protected override void OnInitialized()
+    {
+        //Both shell state (the theme tick, the full-width toggle) and the page's contribution render
+        //here, and both change outside this component — re-render when either does.
+        Shell.Changed += OnShellChanged;
+        Shell.ToolbarChanged += OnShellChanged;
+    }
+
+    private void OnShellChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Shell.Changed -= OnShellChanged;
+        Shell.ToolbarChanged -= OnShellChanged;
+    }
+
+    private void ShowLlmSettingsFromMenu()
     {
         showSettings = false;
-        await OnShowLlmSettings.InvokeAsync();
+        showLlmSettings = true;
     }
 
     private async Task PickThemeAsync(string key)
     {
         showSettings = false;
         showThemes = false;
-        await OnThemeChanged.InvokeAsync(key);
+        await Shell.SetThemeAsync(key);
     }
 
-    private async Task ShowAboutFromMenu()
+    private void ShowAboutFromMenu()
     {
         showSettings = false;
-        await OnShowAbout.InvokeAsync();
+        showAbout = true;
     }
 
-    private async Task OnExpansionLimitInput(ChangeEventArgs e)
+    //Opening the showcase from the About dialog closes About first, so the two overlays do not stack.
+    private void OpenShowcaseFromAbout()
     {
-        if (int.TryParse(e.Value?.ToString(), out var value))
-            await OnExpansionLimitChanged.InvokeAsync(value);
-    }
-
-    private async Task OnQueryLimitInput(ChangeEventArgs e)
-    {
-        if (int.TryParse(e.Value?.ToString(), out var value))
-            await OnQueryLimitChanged.InvokeAsync(value);
+        showAbout = false;
+        showShowcase = true;
     }
 }

@@ -1,7 +1,9 @@
 ﻿using Bunit;
 using GraphDBViewerWeb.Code;
 using GraphDBViewerWeb.Components;
+using GraphDBViewerWeb.Layout;
 using GraphDBViewerWeb.Pages;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace GraphDBViewerWeb.Tests;
@@ -53,20 +55,31 @@ public class HomeMarkupTests : BunitContext
         }
     }
 
-    private IRenderedComponent<Home> RenderHome(IAppStorage storage = null)
+    //Home renders inside its real layout, the way the router composes it, because the top bar is the
+    //shell's now rather than page content: several of these walk bar controls (Import / Export, the
+    //offline indicator), and rendering the page alone would render a viewer with no bar at all.
+    private IRenderedComponent<MainLayout> RenderHome(IAppStorage storage = null)
     {
         Services.AddSingleton<IAppStorage>(storage ?? new NullStorage());
         Services.AddSingleton(new HttpClient());
         Services.AddScoped<WorkspaceStore>();
         Services.AddScoped<LlmConnectionStore>();
+        Services.AddScoped<ShellState>();
         Services.AddSingleton(new ViewerHostOptions { AppName = "Treeality", HasServerRoute = true });
 
         //Home drives Monaco and Cytoscape on render. Loose mode returns default for anything unconfigured
         //rather than throwing, which is all these need — the assertions are about markup, not interop.
         JSInterop.Mode = JSRuntimeMode.Loose;
 
-        return Render<Home>();
+        return Render<MainLayout>(p => p.Add(l => l.Body, HomeBody));
     }
+
+    //The layout's Body, built by hand since a .cs file cannot hold markup: just <Home />.
+    private static readonly RenderFragment HomeBody = builder =>
+    {
+        builder.OpenComponent<Home>(0);
+        builder.CloseComponent();
+    };
 
     ///<summary>
     ///Enters offline mode and waits for it to actually land.
@@ -82,7 +95,7 @@ public class HomeMarkupTests : BunitContext
     ///text is exactly "Offline mode" lives in the connection card; the top bar's copy of the label
     ///carries an arrow beside it, so it never matches this and the two cannot be confused.
     ///</summary>
-    private void EnterOfflineMode(IRenderedComponent<Home> cut)
+    private void EnterOfflineMode(IRenderedComponent<MainLayout> cut)
     {
         cut.FindAll("button").First(b => b.TextContent.Trim() == "Offline mode").Click();
 
@@ -93,12 +106,12 @@ public class HomeMarkupTests : BunitContext
             TimeSpan.FromSeconds(5));
     }
 
-    private List<string> OptionValues(IRenderedComponent<Home> cut)
+    private List<string> OptionValues(IRenderedComponent<MainLayout> cut)
     {
         return cut.FindAll("option").Select(o => o.GetAttribute("value")).ToList();
     }
 
-    private void OpenImportPanel(IRenderedComponent<Home> cut)
+    private void OpenImportPanel(IRenderedComponent<MainLayout> cut)
     {
         //The panel is open at boot (showImportExport starts true), so an unconditional click would
         //toggle it shut — the e2e helper's retry loop hides the same trap. Click only when it's closed.
@@ -106,7 +119,7 @@ public class HomeMarkupTests : BunitContext
             cut.FindAll("button").First(b => b.TextContent.Contains("Import / Export")).Click();
     }
 
-    private void PasteAndGenerate(IRenderedComponent<Home> cut, string dot)
+    private void PasteAndGenerate(IRenderedComponent<MainLayout> cut, string dot)
     {
         cut.Find("textarea[placeholder^='GraphSON']").Input(dot);
         cut.FindAll("button").First(b => b.TextContent.Trim() == "Generate queries").Click();
@@ -114,7 +127,7 @@ public class HomeMarkupTests : BunitContext
 
     //The staged Generated queries, read off the Generated tab's Monaco component — the markup itself
     //doesn't carry the text (Monaco draws it via JS), but the component's Value parameter is the buffer.
-    private string GeneratedBuffer(IRenderedComponent<Home> cut)
+    private string GeneratedBuffer(IRenderedComponent<MainLayout> cut)
     {
         return cut.FindComponent<MonacoEditor>().Instance.Value;
     }
@@ -360,7 +373,7 @@ public class HomeMarkupTests : BunitContext
     //content runs the two together ("Cosmos DBGremlin"). Matching on the database name alone, and
     //only within that group, keeps these tests about which database was chosen rather than about
     //how its button is laid out.
-    private static void ClickDatabaseType(IRenderedComponent<Home> cut, string name)
+    private static void ClickDatabaseType(IRenderedComponent<MainLayout> cut, string name)
     {
         //The group is only in the markup while the connection card is open, and the card is often opened
         //by the click immediately before this one. Wait for it rather than reaching into a tree that is
@@ -373,7 +386,7 @@ public class HomeMarkupTests : BunitContext
             .Click();
     }
 
-    private IRenderedComponent<Home> RenderHomeWithQueryPanel(string databaseButton = null)
+    private IRenderedComponent<MainLayout> RenderHomeWithQueryPanel(string databaseButton = null)
     {
         var cut = RenderHome();
 

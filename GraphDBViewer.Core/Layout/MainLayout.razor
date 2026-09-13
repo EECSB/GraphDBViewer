@@ -1,8 +1,77 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
+@implements IDisposable
+@using GraphDBViewerWeb.Code
+@inject GraphDBViewerWeb.Code.ShellState Shell
+@inject HttpClient Http
+
 <div class="page">
     <main>
         <article class="content px-4" style="padding-top: 0.5rem;">
+            @* The application shell: the top bar renders here, on every page, rather than as page
+               content (application-shell spec). It sits in the same width-capped container the pages
+               use, so the bar and the content share their side margins — and the full-width toggle
+               drops both together. *@
+            <div class="container-fluid px-0 gdbv-page @(Shell.FullScreen ? "gdbv-fullscreen" : "")">
+                <TopBar Account="account" />
+            </div>
             @Body
         </article>
     </main>
 </div>
+
+@code {
+    ///<summary>
+    ///Who the browser is signed in as, for the bar's account menu. Null until the host answers, and left
+    ///null when it has no accounts at all — the menu is then absent rather than empty.
+    ///</summary>
+    private AccountInfo account;
+
+    protected override void OnInitialized()
+    {
+        //The full-width class above is read from ShellState, which changes from inside the bar.
+        Shell.Changed += OnShellChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            //The shell's persisted choices — theme and full-width — loaded once for the whole app. This
+            //ran in Home's startup while Home rendered the bar, which meant only Home had a theme.
+            await Shell.LoadAsync();
+            await LoadAccountAsync();
+        }
+    }
+
+    //Asks the host who this browser is signed in as. The app runs in WebAssembly and the sign-in is a
+    //cookie the *server* reads, so it cannot be worked out here — it has to be asked for. A deployment
+    //running without accounts does not serve this at all, and the menu simply never appears.
+    private async Task LoadAccountAsync()
+    {
+        try
+        {
+            var response = await Http.GetAsync(AccountInfo.Path);
+
+            if (!response.IsSuccessStatusCode)
+                return;
+
+            account = await response.Content.ReadFromJsonAsync<AccountInfo>();
+            StateHasChanged();
+        }
+        catch
+        {
+            //No accounts, or the host cannot be reached. Either way there is no menu to show, and the
+            //app works the same — everything else it needs is already in the browser.
+        }
+    }
+
+    private void OnShellChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Shell.Changed -= OnShellChanged;
+    }
+}

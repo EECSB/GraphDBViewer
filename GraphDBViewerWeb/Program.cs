@@ -18,6 +18,12 @@ builder.Services.AddScoped<IAppStorage, IndexedDbAppStorage>();
 builder.Services.AddScoped<WorkspaceStore>();
 builder.Services.AddScoped<LlmConnectionStore>();
 
+//The shell's own state, and it is not optional: the application shell moved the top bar out of Home into
+//MainLayout, which injects this. Without the registration the synced core fails DI resolution on the
+//first render and this app does not boot at all — which is why SYNCING.md names it as the one edit the
+//script cannot make. Theme and full-width live here now instead of in Home.
+builder.Services.AddScoped<ShellState>();
+
 //The PDF reader is fetched on first use rather than at boot: it is the single largest thing this app
 //ships, and a session that never opens a PDF should never pay for it. The assemblies are set aside as
 //BlazorWebAssemblyLazyLoad items in this project's file.

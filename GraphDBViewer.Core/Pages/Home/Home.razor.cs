@@ -5,8 +5,8 @@ using GraphDBViewerWeb.Code;
 
 namespace GraphDBViewerWeb.Pages;
 
-//The viewer's single page. This root file holds the component lifecycle, the theme / layout
-//preferences and the page-shell toggles; the feature areas live in the sibling Home.*.cs partials:
+//The viewer's single page. This root file holds the component lifecycle, the shell handoff (the
+//toolbar contribution) and the page-shell toggles; the feature areas live in the sibling Home.*.cs partials:
 //  Home.State.cs          — the query tabs + the active-tab delegating properties
 //  Home.Connections.cs    — saved connections + connect / disconnect
 //  Home.Persistence.cs    — localStorage (tabs, history, saved queries, editor text)
@@ -23,42 +23,25 @@ public partial class Home : IAsyncDisposable
     [Inject]
     private NavigationManager Nav { get; set; }
 
-    private const string DarkModeKey = "graphdbviewer:darkMode";
-    private const string ThemeKey = "graphdbviewer:theme";
-
-    private const string ThemeDark = "dark";
-    private const string ThemeLight = "light";
-    private const string ThemeLightTinted = "light-tinted";
-    private const string FullScreenKey = "graphdbviewer:fullScreen";
     private const string ExpansionLimitKey = "graphdbviewer:expansionLimit";
 
-    //Theme
-    ///<summary>Which of the three themes is on: Dark, Light 1 (ThemeLight) or Light 2 (tinted).</summary>
-    private string theme = ThemeDark;
+    //Full-width belongs to the shell now (ShellState, application-shell spec); this delegates so the
+    //markup keeps reading the plain name it always has. The theme moved out entirely with the top bar.
+    private bool fullScreen => Shell.FullScreen;
 
-    ///<summary>Everything that only cares whether it is dark reads this rather than the theme name.</summary>
-    private bool darkMode
-    {
-        get
-        {
-            return theme == ThemeDark;
-        }
-    }
-
-    //Whether the layout fills the viewport (side margins dropped). Persisted; toggled from the top bar.
-    private bool fullScreen;
+    //The handle for this page's toolbar contribution — the connection indicator, import/export and the
+    //query limits, rendered by the shell's TopBar. Disposing it empties the region again.
+    private IDisposable toolbarContribution;
 
     //The most neighbors (incident edges) a double-click node-expansion pulls in, so a high-degree node
     //doesn't flood the canvas. Persisted; set from the Settings menu. 0 or less means uncapped.
     private const int DefaultExpansionLimit = 50;
     private int expansionLimit = DefaultExpansionLimit;
 
-    //Page-shell toggles.
+    //Page-shell toggles. About, the showcase and AI settings are the shell's own dialogs now — they
+    //moved into TopBar with the menu that opens them.
     private bool showConnectionCard = true;
     private bool showImportExport = true;
-    private bool showAbout;
-    private bool showShowcase;//full-screen showcase (the landing page) overlay, when the host bundles one
-    private bool showLlmSettings;//the AI models dialog, opened from the settings menu
     private bool showNlModal;//"Ask AI" (natural-language query) popup
     private bool showKgModal;//"Generate with AI" (knowledge-graph generation) popup
 
@@ -87,39 +70,25 @@ public partial class Home : IAsyncDisposable
         return selfRef;
     }
 
-    ///<summary>
-    ///Who is signed in, for the top bar's account menu. Null until the host answers, and left null when it
-    ///has no accounts at all — the menu is then absent rather than empty.
-    ///</summary>
-    private AccountInfo account;
-
     protected override void OnInitialized()
     {
         //Warn — rather than crash — when the browser's storage quota fills up mid-session. A full quota
         //makes every localStorage write throw QuotaExceededError; without this the first such write during
         //a render (e.g. saving the last query) takes the whole component down.
         Storage.StorageQuotaExceeded += OnStorageQuotaExceeded;
+
+        //Hand the shell this page's third of the toolbar. Registered before the first render so the bar
+        //never paints without it.
+        toolbarContribution = Shell.Contribute(ViewerToolbarFragment);
+
+        //The container below reads the shell's full-width flag, and the toggle for it lives in the bar
+        //now — re-render when the shell's state changes so the class applies.
+        Shell.Changed += OnShellStateChanged;
     }
 
-    //Asks the host who this browser is signed in as. The viewer runs in WebAssembly and the sign-in is a
-    //cookie the *server* reads, so it cannot be worked out here — it has to be asked for. A deployment
-    //running without accounts does not serve this at all, and the menu simply never appears.
-    private async Task LoadAccountAsync()
+    private void OnShellStateChanged()
     {
-        try
-        {
-            var response = await Http.GetAsync(AccountInfo.Path);
-
-            if (!response.IsSuccessStatusCode)
-                return;
-
-            account = await response.Content.ReadFromJsonAsync<AccountInfo>();
-        }
-        catch
-        {
-            //No accounts, or the host cannot be reached. Either way there is no menu to show, and the
-            //viewer works the same — everything else it needs is already in the browser.
-        }
+        _ = InvokeAsync(StateHasChanged);
     }
 
     //A persistence write hit the storage quota: raise the banner once (later failures are no-ops until dismissed).
@@ -172,15 +141,7 @@ public partial class Home : IAsyncDisposable
             await LoadHistoryAsync();
             await LoadTabsAsync();
             await LoadStylesheetsAsync();
-            await LoadThemeAsync();
-            fullScreen = await Storage.GetAsync<bool>(FullScreenKey);
             expansionLimit = await Storage.GetAsync<int?>(ExpansionLimitKey) ?? DefaultExpansionLimit;
-
-            //Awaited, in sequence with the rest of startup, and it has to be: fired and forgotten it
-            //re-renders at an unpredictable moment shortly after boot, and one that lands while the canvas
-            //is being set up leaves a graph that draws but does not respond. It is a same-origin request
-            //that has usually already resolved by the time the restored workspace has finished drawing.
-            await LoadAccountAsync();
 
             //Wire up the global keyboard shortcut listener (Delete key)
             await JS.InvokeVoidAsync("keyboardInterop.attach", SelfRef());
@@ -208,6 +169,11 @@ public partial class Home : IAsyncDisposable
             }
             catch { }
         }
+
+        //The toolbar contribution renders inside the shell's bar, not inside this page, so the shell
+        //never sees this page render. Nudge it after every render: the fragment reads live fields (the
+        //connection state, the pulse, the panel arrows), and this is what keeps the bar current.
+        Shell.RefreshToolbar();
     }
 
     //Applies settings passed in the page URL's query string, used when the viewer is embedded (e.g. in an
@@ -264,87 +230,23 @@ public partial class Home : IAsyncDisposable
         StateHasChanged();
     }
 
-    #region Theme & layout preferences
+    #region Query limits
 
-    private async Task LoadThemeAsync()
-    {
-        theme = await Storage.GetStringAsync(ThemeKey);
-
-        //Nothing stored under the new key: carry across the boolean it replaced, so a choice made
-        //before there were three themes survives instead of quietly reverting to the default.
-        if (string.IsNullOrEmpty(theme))
-        {
-            var wasDark = await Storage.GetAsync<bool?>(DarkModeKey);
-
-            if (wasDark == false)
-                theme = ThemeLight;
-            else
-                theme = ThemeDark;
-        }
-
-        await ApplyThemeAsync();
-    }
-
-    private async Task SetThemeAsync(string value)
-    {
-        theme = value;
-        await Storage.SetStringAsync(ThemeKey, theme);
-        await ApplyThemeAsync();
-    }
-
-    private async Task ToggleFullScreenAsync()
-    {
-        fullScreen = !fullScreen;
-        await Storage.SetAsync(FullScreenKey, fullScreen);
-    }
-
-    //Opening the showcase from the About dialog closes About first, so the two overlays do not stack.
-    private void OpenShowcaseFromAbout()
-    {
-        showAbout = false;
-        showShowcase = true;
-    }
-
-    //Sets the node-expansion neighbor cap (from the Settings menu), clamped to a sane range and persisted.
+    //Sets the node-expansion neighbor cap (from the toolbar's Query settings), clamped to a sane range
+    //and persisted.
     private async Task SetExpansionLimitAsync(int value)
     {
         expansionLimit = Math.Clamp(value, 1, 5000);
         await Storage.SetAsync(ExpansionLimitKey, expansionLimit);
     }
 
-    //Sets the query / Load DB result limit from the Settings menu — the same per-tab value the sidebar's
-    //query-limit box binds (activeTab.LoadDbLimit), so the two controls stay in sync; persisted with the tab.
+    //Sets the query / Load DB result limit from the toolbar's Query settings — the same per-tab value the
+    //sidebar's query-limit box binds (activeTab.LoadDbLimit), so the two controls stay in sync; persisted
+    //with the tab.
     private async Task SetQueryLimitAsync(int value)
     {
         loadDbLimit = Math.Max(1, value);
         await SaveTabsAsync();
-    }
-
-    private async Task ApplyThemeAsync()
-    {
-        string bsTheme;
-        if (darkMode)
-            bsTheme = "dark";
-        else
-            bsTheme = "light";
-
-        await JS.InvokeVoidAsync("document.documentElement.setAttribute", "data-bs-theme", bsTheme);
-
-        //Light 2 is Light 1 with a tint, so it rides on an attribute of its own rather than a third
-        //value of the light/dark one, which Bootstrap owns and reads.
-        string tint;
-        if (theme == ThemeLightTinted)
-            tint = "on";
-        else
-            tint = "off";
-
-        await JS.InvokeVoidAsync("document.documentElement.setAttribute", "data-gdbv-tint", tint);
-
-        try
-        {
-            await JS.InvokeVoidAsync("monacoInterop.setTheme", darkMode);
-        }
-        catch { }
     }
 
     #endregion
@@ -355,6 +257,11 @@ public partial class Home : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Storage.StorageQuotaExceeded -= OnStorageQuotaExceeded;
+        Shell.Changed -= OnShellStateChanged;
+
+        //Take this page's controls back out of the shell's bar. The handle is owner-checked, so a late
+        //dispose after another page has contributed cannot blank that page's bar.
+        toolbarContribution?.Dispose();
         textSaveCts?.Cancel();
         textSaveCts?.Dispose();
         queryCts?.Cancel();
