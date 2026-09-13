@@ -30,7 +30,7 @@ public class SparqlDb : IGraphDb
 
     ///<summary>
     ///Maps a parsed SPARQL response onto the shared result type. A CONSTRUCT/DESCRIBE graph joins the
-    ///same pipeline a Gremlin result does; SELECT / ASK become a table instead. An unrecognised body
+    ///same pipeline a Gremlin result does; SELECT / ASK become a table instead. An unrecognized body
     ///maps to an empty table, which is what the bindings pane already showed for it.
     ///</summary>
     public static GraphDbResult ToGraphDbResult(SparqlResult result)

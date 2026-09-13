@@ -674,7 +674,7 @@ public class GraphEdit
 ///</summary>
 public static class GremlinEditParser
 {
-    ///<summary>Parses every recognized mutation in the buffer, in order. Unrecognised statements are skipped.</summary>
+    ///<summary>Parses every recognized mutation in the buffer, in order. Unrecognized statements are skipped.</summary>
     public static List<GraphEdit> Parse(string buffer)
     {
         var edits = new List<GraphEdit>();

@@ -14,7 +14,7 @@ namespace GraphDBViewerWeb.Code;
 ///<c>knows</c>, and a second node. So the reading is a tree walk: any object carrying a <c>uid</c> is a
 ///node, and finding one nested under a key means an edge from the enclosing node to it, named by that key.
 ///
-///An edge therefore has no id of its own. One is synthesised from the triple it is —
+///An edge therefore has no id of its own. One is synthesized from the triple it is —
 ///<c>"0x1-knows-&gt;0x2"</c> — which is the same shape the schema meta-graph already uses for a relationship.
 ///</summary>
 public static class DgraphConverter
@@ -185,7 +185,7 @@ public static class DgraphConverter
     private static void AddNode(JsonElement node, string uid, Dictionary<string, object> nodes)
     {
         //The same node routinely appears more than once in one answer — as a result in its own right, and
-        //again as somebody's neighbour — and the two rarely carry the same fields, a query asking for
+        //again as somebody's neighbor — and the two rarely carry the same fields, a query asking for
         //different predicates at each level. So they are merged rather than one replacing the other: the
         //union of properties, and a declared dgraph.type always beating the generic label, whichever
         //appearance happened to come first.
@@ -222,7 +222,7 @@ public static class DgraphConverter
     ///<summary>
     ///The id an edge gets. Dgraph gives an edge none of its own — it is a predicate holding a node — so the
     ///id is the triple it is, in the shape <see cref="GraphWireText"/> writes for every engine that has to
-    ///synthesise one.
+    ///synthesize one.
     ///</summary>
     public static string EdgeId(string source, string predicate, string target)
     {

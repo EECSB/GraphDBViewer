@@ -503,7 +503,11 @@ public partial class Home
 
             //Only the user-saved layout places nodes at the stored browser arrangement; committed gdbv
             //positions are placed by the draw itself (drawCytoscapeGraph / the 3D fx/fy/fz) when active.
-            var activeLayout = visualizationMode == 2 ? cy2dLayout : g3dLayout;
+            var activeLayout = g3dLayout;
+
+            if (visualizationMode == 2)
+                activeLayout = cy2dLayout;
+
             if (activeLayout == UserSavedLayout)
                 await ApplySavedPositionsAsync();
         }

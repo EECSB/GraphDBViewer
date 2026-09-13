@@ -57,12 +57,20 @@ public sealed class Neo4jBrowserDb : IGraphDb
     {
         //In the browser the driver rides WebSocket: bolt → ws, bolt+s → wss. Neo4j's default user is
         //"neo4j"; a blank database name leaves the driver on its own default.
-        string scheme = _connection.UseSSL ? "bolt+s" : "bolt";
+        var scheme = "bolt";
+
+        if (_connection.UseSSL)
+            scheme = "bolt+s";
+
+        var username = _connection.Username;
+
+        if (string.IsNullOrEmpty(username))
+            username = "neo4j";
 
         return new
         {
             uri = $"{scheme}://{_connection.Hostname}:{_connection.Port}",
-            username = string.IsNullOrEmpty(_connection.Username) ? "neo4j" : _connection.Username,
+            username,
             password = _connection.AuthKey ?? "",
             database = _connection.Database ?? ""
         };

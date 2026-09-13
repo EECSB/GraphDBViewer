@@ -549,7 +549,11 @@ public partial class Home
         if (!CanCreatePickedEdge)
             return;
 
-        var label = string.IsNullOrWhiteSpace(pickEdgeLabel) ? DefaultEdgeLabel : pickEdgeLabel.Trim();
+        var label = pickEdgeLabel?.Trim();
+
+        if (string.IsNullOrWhiteSpace(label))
+            label = DefaultEdgeLabel;
+
         AppendGeneratedQuery(Qb.AddEdge(pickFirstNodeId, label, pickSecondNodeId));
         queryEditorTab = 2;
 

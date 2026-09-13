@@ -241,7 +241,10 @@ public partial class Home
     //The next navigable step at the same or a shallower depth (the following sibling, or a step-out at a block's end).
     private int StepOverTarget(int cursor)
     {
-        int depth = cursor < 0 ? int.MaxValue : debugTree[cursor].Depth;
+        var depth = int.MaxValue;
+
+        if (cursor >= 0)
+            depth = debugTree[cursor].Depth;
 
         for (int j = cursor + 1; j < debugTree.Count; j++)
             if (debugTree[j].Depth <= depth && DebugStepNavigable(j))

@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace GraphDBViewerWeb.Code;
 
-///<summary>The shape of a SPARQL response: a SELECT table, an ASK boolean, a CONSTRUCT/DESCRIBE graph, or unrecognised.</summary>
+///<summary>The shape of a SPARQL response: a SELECT table, an ASK boolean, a CONSTRUCT/DESCRIBE graph, or unrecognized.</summary>
 public enum SparqlKind { Select, Ask, Graph, Unknown }
 
 ///<summary>A parsed SPARQL response, normalized for the UI (a bindings table, a boolean, or a graph in the app's node/edge shape).</summary>

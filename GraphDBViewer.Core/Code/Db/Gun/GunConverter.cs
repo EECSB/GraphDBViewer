@@ -13,7 +13,7 @@ namespace GraphDBViewerWeb.Code;
 ///<code>{"alice": {"_": {...}, "name": "Alice", "knows": {"#": "bob"}}}</code>
 ///is one node, one property and one <c>knows</c> edge.
 ///
-///Like Dgraph, GUN gives an edge no identity of its own, so one is synthesised from the triple it is. And
+///Like Dgraph, GUN gives an edge no identity of its own, so one is synthesized from the triple it is. And
 ///like Dgraph it has no notion of a type: a node's label falls back to a <c>type</c> property when the data
 ///happens to carry one, since nothing in GUN itself supplies one.
 ///</summary>
@@ -150,7 +150,7 @@ public static class GunConverter
     ///<summary>
     ///The id an edge gets. GUN gives an edge none of its own — it is a key on a node holding a link — so
     ///the id is the triple it is, in the shape <see cref="GraphWireText"/> writes for every engine that has
-    ///to synthesise one.
+    ///to synthesize one.
     ///</summary>
     public static string EdgeId(string source, string label, string target)
     {

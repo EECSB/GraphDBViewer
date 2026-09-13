@@ -101,11 +101,20 @@ public sealed class GunQueryBuilder : IGraphQueryBuilder
                 EdgeIdType = null,
                 Label = edge.Label,
                 OtherNodeId = edge.Target,
-                OtherNodeLabel = names.TryGetValue(edge.Target, out var label) ? label : edge.Target
+                OtherNodeLabel = NameOf(names, edge.Target)
             });
         }
 
         return edges;
+    }
+
+    ///<summary>What a node is called, or its id when nothing in the answer named it.</summary>
+    private static string NameOf(Dictionary<string, string> names, string id)
+    {
+        if (names.TryGetValue(id, out var label))
+            return label;
+
+        return id;
     }
 
     public string ParseDisplayLabel(GraphDbResult result)
@@ -195,7 +204,7 @@ public sealed class GunQueryBuilder : IGraphQueryBuilder
     }
 
     ///<summary>
-    ///Nulls the key holding the link. The edge id is the triple it was synthesised from, so the node and
+    ///Nulls the key holding the link. The edge id is the triple it was synthesized from, so the node and
     ///the key come straight back out of it.
     ///</summary>
     public string DropEdge(string id, string idType)

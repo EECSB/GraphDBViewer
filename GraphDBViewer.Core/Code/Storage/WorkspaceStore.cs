@@ -132,37 +132,60 @@ public class WorkspaceStore
     {
         return new QueryTab
         {
-            Id = string.IsNullOrEmpty(s.Id) ? Guid.NewGuid().ToString() : s.Id,
-            Name = string.IsNullOrEmpty(s.Name) ? "Query" : s.Name,
+            Id = Or(s.Id, Guid.NewGuid().ToString()),
+            Name = Or(s.Name, "Query"),
             QueryText = s.QueryText,
             EditorLanguage = NormalizeEditorLanguage(s.EditorLanguage),
             GeneratedQueryText = s.GeneratedQueryText,
-            QueryEditorTab = s.QueryEditorTab == 0 ? 1 : s.QueryEditorTab,
+            QueryEditorTab = Or(s.QueryEditorTab, 1),
             QueryResults = s.QueryResults,
-            VisualizationMode = s.VisualizationMode == 0 ? 2 : s.VisualizationMode,
+            VisualizationMode = Or(s.VisualizationMode, 2),
             SearchTerm = s.SearchTerm,
-            HiddenLabels = s.HiddenLabels == null ? new HashSet<string>() : new HashSet<string>(s.HiddenLabels),
+            HiddenLabels = new HashSet<string>(s.HiddenLabels ?? []),
             LastResultData = JsonToElement(s.LastResultJson),
             GraphResultData = JsonToElement(s.GraphResultJson),
             ResultsCleared = s.ResultsCleared,
-            LoadDbLimit = s.LoadDbLimit == 0 ? 100 : s.LoadDbLimit,
+            LoadDbLimit = Or(s.LoadDbLimit, 100),
             AutoReloadAfterCommit = s.AutoReloadAfterCommit,
             ReflectDbState = s.ReflectDbState,
-            Cy2dLayout = string.IsNullOrEmpty(s.Cy2dLayout) ? "cose" : s.Cy2dLayout,
-            G3dLayout = string.IsNullOrEmpty(s.G3dLayout) ? "force" : s.G3dLayout,
-            MapStyle = string.IsNullOrEmpty(s.MapStyle) ? "satellite" : s.MapStyle,
+            Cy2dLayout = Or(s.Cy2dLayout, "cose"),
+            G3dLayout = Or(s.G3dLayout, "force"),
+            MapStyle = Or(s.MapStyle, "satellite"),
             Saved2dPositionsJson = s.Saved2dPositionsJson,
             Saved3dPositionsJson = s.Saved3dPositionsJson,
             Show3dVertexLabels = s.Show3dVertexLabels,
             Show3dEdgeLabels = s.Show3dEdgeLabels,
             Show3dProps = s.Show3dProps ?? true,
-            G3dExportFormat = string.IsNullOrEmpty(s.G3dExportFormat) ? "obj" : s.G3dExportFormat,
+            G3dExportFormat = Or(s.G3dExportFormat, "obj"),
             ImageExportFormat = "png",//always default the image-download format to PNG on load
-            TableExportFormat = string.IsNullOrEmpty(s.TableExportFormat) ? "csv" : s.TableExportFormat,
+            TableExportFormat = Or(s.TableExportFormat, "csv"),
             LabelStyles = s.LabelStyles ?? new Dictionary<string, LabelStyle>(),
             EdgeColorMode = s.EdgeColorMode,
             EdgeColors = s.EdgeColors ?? new Dictionary<string, string>()
         };
+    }
+
+    ///<summary>
+    ///The saved value, or what a legacy or zeroed snapshot should get instead. A snapshot written by an
+    ///older build is missing fields, and a field a newer build added reads back as the type's zero — so
+    ///"empty means the default" is the rule for nearly every one of them, and naming it once keeps
+    ///<see cref="FromSnapshot"/> a list of what a tab is rather than a list of what it is not.
+    ///</summary>
+    private static string Or(string saved, string fallback)
+    {
+        if (string.IsNullOrEmpty(saved))
+            return fallback;
+
+        return saved;
+    }
+
+    ///<summary>The saved number, or the default — zero is what a snapshot that never had the field reads back as.</summary>
+    private static int Or(int saved, int fallback)
+    {
+        if (saved == 0)
+            return fallback;
+
+        return saved;
     }
 
     //Coerces a saved / embedded editor language to one the dropdown can actually select — Gremlin, Cypher,

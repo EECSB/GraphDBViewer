@@ -73,8 +73,7 @@ public sealed class ToolRunRequest
 public sealed class ApprovingToolRunner : ILlmToolRunner
 {
     ///<summary>What the model is told when a person declines. Phrased as a result, since that is what it is.</summary>
-    public const string DeclinedMessage = "The user did not approve running that query, so it was not run. "
-        + "Do not run it again. Answer with what you already know, or ask what to do instead.";
+    public const string DeclinedMessage = "The user did not approve running that query, so it was not run. Do not run it again. Answer with what you already know, or ask what to do instead.";
 
     private readonly ILlmToolRunner _inner;
     private readonly Func<ToolRunRequest, CancellationToken, Task<bool>> _approve;

@@ -107,7 +107,10 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
             return "";
 
         int slash = id.IndexOf('/');
-        var key = slash >= 0 ? id.Substring(slash + 1) : id;
+        var key = id;
+
+        if (slash >= 0)
+            key = id.Substring(slash + 1);
 
         var sb = new StringBuilder(key.Length);
 
@@ -201,8 +204,8 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
         if (limit > 0)
             cap = $" LIMIT {limit}";
 
-        return $"LET start = DOCUMENT({Literal(id)}) "
-            + $"FOR d IN APPEND([start], FLATTEN(FOR v, e IN 1..1 ANY start {EdgeCollectionList()}{cap} RETURN [v, e])) RETURN d";
+        return $@"LET start = DOCUMENT({Literal(id)})
+            FOR d IN APPEND([start], FLATTEN(FOR v, e IN 1..1 ANY start {EdgeCollectionList()}{cap} RETURN [v, e])) RETURN d";
     }
 
     public string InEdges(string vertexId)

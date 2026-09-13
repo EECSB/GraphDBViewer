@@ -151,9 +151,9 @@ RETURN c.name";
             var c = AqlQueryBuilder.QuoteIdentifier(name);
             var literal = "'" + AqlQueryBuilder.Escape(name) + "'";
 
-            entries.Add($@"{{ name: {literal}, count: LENGTH({c}), "
-                + $@"isEdge: LENGTH((FOR d IN {c} FILTER HAS(d, '_from') LIMIT 1 RETURN 1)) > 0, "
-                + $@"keys: UNIQUE(FLATTEN((FOR d IN {c} LIMIT {SampleSize} RETURN ATTRIBUTES(d, true)))) }}");
+            entries.Add($@"{{ name: {literal}, count: LENGTH({c}),
+                isEdge: LENGTH((FOR d IN {c} FILTER HAS(d, '_from') LIMIT 1 RETURN 1)) > 0,
+                keys: UNIQUE(FLATTEN((FOR d IN {c} LIMIT {SampleSize} RETURN ATTRIBUTES(d, true)))) }}");
         }
 
         return $"FOR info IN [{string.Join(", ", entries)}] RETURN info";
@@ -222,9 +222,9 @@ RETURN c.name";
 
             //The keys are quoted because "in" is an AQL keyword — bare, it is a syntax error, and the
             //triples would silently come back empty.
-            parts.Add($@"(FOR e IN {c} LIMIT {SampleSize} "
-                + "COLLECT o = PARSE_IDENTIFIER(e._from).collection, i = PARSE_IDENTIFIER(e._to).collection "
-                + $"RETURN {{ \"out\": o, \"edge\": {literal}, \"in\": i }})");
+            parts.Add($@"(FOR e IN {c} LIMIT {SampleSize}
+                COLLECT o = PARSE_IDENTIFIER(e._from).collection, i = PARSE_IDENTIFIER(e._to).collection
+                RETURN {{ ""out"": o, ""edge"": {literal}, ""in"": i }})");
         }
 
         if (parts.Count == 1)

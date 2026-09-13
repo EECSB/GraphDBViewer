@@ -211,14 +211,14 @@ html, body {
 /* A disabled button and an enabled one were telling the same story. Bootstrap fades a disabled
    control to 65% opacity, which against the dark theme's low-contrast surfaces lands close enough to
    the enabled rendering that the query debugger's arrows and its simulate button were both being
-   taken for clickable when they were not. Fade further and drain the colour, in both themes. */
+   taken for clickable when they were not. Fade further and drain the color, in both themes. */
 .btn:disabled,
 .btn.disabled,
 fieldset:disabled .btn {
     opacity: 0.55;
 }
 
-/* Draining the colour as well is for outline buttons only. An outline button is almost entirely its
+/* Draining the color as well is for outline buttons only. An outline button is almost entirely its
    label, so a muted label is what makes it look unavailable — but a solid button already reads as
    disabled from the fade alone, and muting its label on top of that left "Commit Changes" as pale
    text on a yellow block, unreadable rather than unavailable. */
@@ -230,10 +230,10 @@ fieldset:disabled .btn[class*="btn-outline-"] {
     --bs-btn-disabled-border-color: var(--bs-border-color);
 }
 
-/* And the other half of the same problem: the step arrows resting in the muted grey outline-secondary
-   gives them. --bs-emphasis-color is the theme's strongest text colour, so this lightens them on dark
-   and darkens them on light without either being spelled out. Only the resting colour is set, leaving
-   the disabled colour above to do its job. */
+/* And the other half of the same problem: the step arrows resting in the muted gray outline-secondary
+   gives them. --bs-emphasis-color is the theme's strongest text color, so this lightens them on dark
+   and darkens them on light without either being spelled out. Only the resting color is set, leaving
+   the disabled color above to do its job. */
 .debug-step-btn {
     --bs-btn-color: var(--bs-emphasis-color);
     --bs-btn-border-color: var(--bs-border-color);

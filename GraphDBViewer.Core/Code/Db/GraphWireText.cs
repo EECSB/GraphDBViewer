@@ -52,7 +52,7 @@ public static class GraphWireText
         return text.Substring(0, max) + "…";
     }
 
-    ///<summary>Separates an edge's label from the node it points at, in the id synthesised for one.</summary>
+    ///<summary>Separates an edge's label from the node it points at, in the id synthesized for one.</summary>
     public const string EdgeArrow = "->";
 
     ///<summary>

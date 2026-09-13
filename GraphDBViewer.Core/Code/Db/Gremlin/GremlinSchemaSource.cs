@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,10 +20,7 @@ public sealed class GremlinSchemaSource : IGraphSchemaSource
         var eLabels = await db.ExecuteAsync(GremlinQueryBuilder.SchemaEdgeLabels, cancellationToken);
         var vKeys = await db.ExecuteAsync(GremlinQueryBuilder.SchemaVertexKeys, cancellationToken);
 
-        var vocabulary = SchemaBuilder.ExtractVocabulary(
-            vLabels.IsError ? default : vLabels.Data,
-            eLabels.IsError ? default : eLabels.Data,
-            vKeys.IsError ? default : vKeys.Data);
+        var vocabulary = SchemaBuilder.ExtractVocabulary(Answered(vLabels), Answered(eLabels), Answered(vKeys));
 
         return new SchemaReadResult
         {
@@ -38,10 +36,19 @@ public sealed class GremlinSchemaSource : IGraphSchemaSource
         var vKeys = await db.ExecuteAsync(GremlinQueryBuilder.SchemaVertexKeys, cancellationToken);
         var triples = await db.ExecuteAsync(GremlinQueryBuilder.SchemaEdgeTriples, cancellationToken);
 
-        return SchemaBuilder.BuildSchemaGraphJson(
-            vLabels.IsError ? default : vLabels.Data,
-            eLabels.IsError ? default : eLabels.Data,
-            vKeys.IsError ? default : vKeys.Data,
-            triples.IsError ? default : triples.Data);
+        return SchemaBuilder.BuildSchemaGraphJson(Answered(vLabels), Answered(eLabels), Answered(vKeys), Answered(triples));
+    }
+
+    ///<summary>
+    ///What a query answered, and nothing when it failed. Each of the four is asked separately and a
+    ///schema built from three of them is worth more than none, so a failure contributes an empty
+    ///element rather than stopping the read — which is why <c>HasErrors</c> is reported beside it.
+    ///</summary>
+    private static JsonElement Answered(GraphDbResult result)
+    {
+        if (result.IsError)
+            return default;
+
+        return result.Data;
     }
 }

@@ -96,11 +96,10 @@ public class GremlinToolRunner : ILlmToolRunner, IWriteCapableToolRunner
             new LlmTool
             {
                 Name = ReadToolName,
-                Description = $"Run a READ-ONLY {language} query against the connected graph and get the JSON result. "
-                    + "Use it to explore the data (labels, property values, counts) and to verify your query returns "
-                    + $"what the user wants before giving your final answer. Mutations ({mutations}) are rejected.",
-                InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\""
-                    + $"The read-only {language} query to run, e.g. {example}" + "\"}},\"required\":[\"query\"]}"
+                Description = $@"Run a READ-ONLY {language} query against the connected graph and get the JSON result.
+Use it to explore the data (labels, property values, counts) and to verify your query returns
+what the user wants before giving your final answer. Mutations ({mutations}) are rejected.",
+                InputSchemaJson = QuerySchema($"The read-only {language} query to run, e.g. {example}")
             }
         };
 
@@ -110,15 +109,20 @@ public class GremlinToolRunner : ILlmToolRunner, IWriteCapableToolRunner
         tools.Add(new LlmTool
         {
             Name = WriteToolName,
-            Description = $"Run a {language} query that CHANGES the connected graph ({mutations}) and get the JSON result. "
-                + "This is not undoable. Use it only when the user has asked for the data to change, make the smallest "
-                + "change that does what they asked, read first with run_read_query when you are unsure what is there, "
-                + "and never delete more than was asked for. Say plainly what you changed.",
-            InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\""
-                + $"The {language} query to run, e.g. {writeExample}" + "\"}},\"required\":[\"query\"]}"
+            Description = $@"Run a {language} query that CHANGES the connected graph ({mutations}) and get the JSON result.
+This is not undoable. Use it only when the user has asked for the data to change, make the smallest
+change that does what they asked, read first with run_read_query when you are unsure what is there,
+and never delete more than was asked for. Say plainly what you changed.",
+            InputSchemaJson = QuerySchema($"The {language} query to run, e.g. {writeExample}")
         });
 
         return tools;
+    }
+
+    ///<summary>Both tools take the same one argument; only the sentence describing it differs.</summary>
+    private static string QuerySchema(string description)
+    {
+        return $$$"""{"type":"object","properties":{"query":{"type":"string","description":"{{{description}}}"}},"required":["query"]}""";
     }
 
     public async Task<string> RunToolAsync(string name, string argumentsJson, CancellationToken ct)

@@ -193,11 +193,20 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
                 EdgeIdType = null,
                 Label = edge.Label,
                 OtherNodeId = OtherEnd(edge, table),
-                OtherNodeLabel = names.TryGetValue(OtherEnd(edge, table), out var label) ? label : OtherEnd(edge, table)
+                OtherNodeLabel = NameOf(names, OtherEnd(edge, table))
             });
         }
 
         return edges;
+    }
+
+    //What a node is called, or its uid when the answer named nothing for it.
+    private static string NameOf(Dictionary<string, string> names, string id)
+    {
+        if (names.TryGetValue(id, out var label))
+            return label;
+
+        return id;
     }
 
     //The end of the edge that is not the node every row has in common — the one the query was about.
@@ -525,7 +534,7 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
     ///<summary>
     ///A filter meaning "this node is really there". Dgraph <b>echoes any uid you name</b> — asking for one
     ///that was never used answers with the uid and nothing else — so without this, expanding a node that
-    ///had been emptied, or one whose neighbour has since gone, draws a nameless ghost that looks like a
+    ///had been emptied, or one whose neighbor has since gone, draws a nameless ghost that looks like a
     ///failed delete. Dgraph has no "has anything", so the test is "has any predicate the schema knows of".
     ///</summary>
     private string Exists()
