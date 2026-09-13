@@ -69,6 +69,7 @@ public partial class Home
     private string cy2dLayout { get => activeTab.Cy2dLayout; set => activeTab.Cy2dLayout = value; }//selected Cytoscape layout for 2D mode
     private string g3dLayout { get => activeTab.G3dLayout; set => activeTab.G3dLayout = value; }//selected 3d-force-graph dagMode for 3D mode
     private string mapStyle { get => activeTab.MapStyle; set => activeTab.MapStyle = value; }//which earth the Map and the Globe draw: satellite or outline
+    private string mapDetail { get => activeTab.MapDetail; set => activeTab.MapDetail = value; }//how sharp the satellite earth is: standard or high
     private string saved2dPositionsJson { get => activeTab.Saved2dPositionsJson; set => activeTab.Saved2dPositionsJson = value; }//hand-pinned 2D arrangement (browser-stored)
     private string saved3dPositionsJson { get => activeTab.Saved3dPositionsJson; set => activeTab.Saved3dPositionsJson = value; }//hand-pinned 3D arrangement (browser-stored)
 

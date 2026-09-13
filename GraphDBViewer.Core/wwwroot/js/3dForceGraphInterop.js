@@ -82,17 +82,24 @@ window.graph3DInterop = {
     //module the interop builds these objects with (tools/vendor-three.mjs). It once had a private
     //copy, and a texture made by one three.js uploaded by another samples black — the globe was
     //black until the two became one.
+    //
+    //The image comes in the Map's two sizes, for the reason CytoscapeInterop.js gives: the standard
+    //2048 × 1024 one with the globe, the detailed 8192 × 4096 one only once the tab asks for high
+    //resolution (setGlobeDetail), with the standard one on the sphere until it arrives.
     GLOBE_RADIUS: 220,
     GLOBE_FRAMING: 3.4,//the camera's distance from the center, in radii, when the globe is framed whole
     globeNodeFactor: 1,//how far the nodes are scaled down as the camera closes in (applyGlobeNodeScale)
-    GLOBE_TEXTURE_WIDTH: 4096,//the image is 8192 wide, for the 2D map's zoom; the globe never shows
-    //more than half of it at once, and a texture that size is a fair share of a GPU
-    EARTH_IMAGE_URL: '_content/GraphDBViewer.Core/img/earth.jpg',
+    GLOBE_TEXTURE_WIDTH: 4096,//the detailed image is 8192 wide, for the 2D map's zoom; the globe never
+    //shows more than half of it at once, and a texture that size is a fair share of a GPU
+    EARTH_IMAGE_URL: '_content/GraphDBViewer.Core/img/earth-2048.jpg',
+    EARTH_DETAILED_URL: '_content/GraphDBViewer.Core/img/earth-8192.jpg',
     EARTH_OUTLINE_URL: '_content/GraphDBViewer.Core/img/earth-outline.json',
     globeOn: false,
     globeStyle: 'satellite',//'satellite' or 'outline' — setGlobeStyle
+    globeDetail: 'standard',//'standard' or 'high' — setGlobeDetail
     globeMesh: null,
-    earthTexture: null,//the world image as a texture, once it has loaded
+    earthTextures: {},//url → the world image at that size as a texture, once it has loaded
+    earthDetailedFailed: false,//the detailed image's download failed; asked for again only by choosing it again
     earthOutline: null,//the coastline rings [[[lon, lat], ...], ...], once fetched
     earthLoading: {},
 
@@ -247,6 +254,22 @@ window.graph3DInterop = {
             this.ensureGlobeMesh(this.instance);
     },
 
+    //How sharp the satellite earth is; rebuilt in place when one is showing. `retry` is true when the user
+    //chose it, which is what tries a failed download of the detailed image again — as on the map, the
+    //same value told again before a draw is not.
+    setGlobeDetail: function (detail, retry) {
+        if (detail === 'high')
+            this.globeDetail = 'high';
+        else
+            this.globeDetail = 'standard';
+
+        if (retry)
+            this.earthDetailedFailed = false;
+
+        if (this.globeOn && this.instance && this.globeStyle === 'satellite')
+            this.ensureGlobeMesh(this.instance);
+    },
+
     ensureGlobeMesh: function (graph) {
         const THREE = window.THREE;
 
@@ -285,14 +308,14 @@ window.graph3DInterop = {
         } else {
             const geometry = new THREE.SphereGeometry(radius, 128, 64);
             const material = new THREE.MeshBasicMaterial({ color: ocean });
+            const texture = this.currentEarthTexture();
 
-            if (this.earthTexture) {
-                material.map = this.earthTexture;
+            if (texture) {
+                material.map = texture;
                 material.color.setHex(tint);
-            } else {
-                this.loadEarthTexture();
             }
 
+            this.loadEarthTextures();
             mesh = new THREE.Mesh(geometry, material);
         }
 
@@ -325,20 +348,43 @@ window.graph3DInterop = {
         this.globeMesh = null;
     },
 
-    //The image is the same equirectangular one the 2D map draws, halved for the GPU. Loaded once; when
-    //it arrives the globe that asked for it is rebuilt with the earth on. A new renderer uploads the
-    //kept texture again on its own.
-    loadEarthTexture: function () {
-        if (this.earthLoading[this.EARTH_IMAGE_URL])
+    //The texture to draw: the detailed one when the tab wants it and it has arrived, else the standard one,
+    //which is also what shows while the detailed one is on its way or if it never comes.
+    currentEarthTexture: function () {
+        if (this.globeDetail === 'high' && this.earthTextures[this.EARTH_DETAILED_URL])
+            return this.earthTextures[this.EARTH_DETAILED_URL];
+
+        return this.earthTextures[this.EARTH_IMAGE_URL] || null;
+    },
+
+    //What the satellite earth needs and does not have yet: the standard image always, the detailed one as
+    //well when the tab wants it and its download has not failed.
+    loadEarthTextures: function () {
+        this.loadEarthTexture(this.EARTH_IMAGE_URL);
+
+        if (this.globeDetail === 'high' && !this.earthDetailedFailed)
+            this.loadEarthTexture(this.EARTH_DETAILED_URL);
+    },
+
+    //The image is the same equirectangular one the 2D map draws, no wider than GLOBE_TEXTURE_WIDTH for the
+    //GPU. Loaded once per size; when it arrives the globe that asked for it is rebuilt with it on. A new
+    //renderer uploads the kept texture again on its own. The detailed one tells Home how its download is
+    //going, as it does from the map.
+    loadEarthTexture: function (url) {
+        if (this.earthTextures[url] || this.earthLoading[url])
             return;
 
         const self = this;
-        this.earthLoading[this.EARTH_IMAGE_URL] = true;
+        const detailed = url === this.EARTH_DETAILED_URL;
+        this.earthLoading[url] = true;
+
+        if (detailed)
+            this.reportDetailedEarth('loading');
 
         const image = new Image();
         image.onload = function () {
             const THREE = window.THREE;
-            const width = self.GLOBE_TEXTURE_WIDTH;
+            const width = Math.min(image.naturalWidth, self.GLOBE_TEXTURE_WIDTH);
             const canvas = document.createElement('canvas');
             canvas.width = width;
             canvas.height = width / 2;
@@ -355,16 +401,33 @@ window.graph3DInterop = {
             if (self.instance)
                 texture.anisotropy = self.instance.renderer().capabilities.getMaxAnisotropy();
 
-            self.earthTexture = texture;
-            self.earthLoading[self.EARTH_IMAGE_URL] = false;
+            self.earthTextures[url] = texture;
+            self.earthLoading[url] = false;
+
+            if (detailed)
+                self.reportDetailedEarth('ready');
 
             if (self.globeOn && self.instance && self.globeStyle === 'satellite')
                 self.ensureGlobeMesh(self.instance);
         };
         image.onerror = function () {
-            self.earthLoading[self.EARTH_IMAGE_URL] = false;
+            self.earthLoading[url] = false;
+
+            if (detailed) {
+                self.earthDetailedFailed = true;
+                self.reportDetailedEarth('failed');
+            }
         };
-        image.src = this.EARTH_IMAGE_URL;
+        image.src = url;
+    },
+
+    //'loading', 'ready' or 'failed', to Home. By the time 3.7 MB arrives the page may have moved on and
+    //disposed the reference, which rejects rather than throws.
+    reportDetailedEarth: function (state) {
+        if (!this.dotNetRef)
+            return;
+
+        this.dotNetRef.invokeMethodAsync('OnDetailedEarth', state).catch(() => { });
     },
 
     loadEarthOutline: function () {

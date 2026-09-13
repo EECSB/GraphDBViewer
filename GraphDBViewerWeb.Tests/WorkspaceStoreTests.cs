@@ -86,6 +86,8 @@ public class WorkspaceStoreTests
             ReflectDbState = false,
             Cy2dLayout = "grid",
             G3dLayout = "td",
+            MapStyle = "outline",
+            MapDetail = "high",
             Saved2dPositionsJson = @"[{""id"":""v1"",""x"":1,""y"":2}]",
             Saved3dPositionsJson = @"[{""id"":""v1"",""x"":3,""y"":4,""z"":5}]",
             Show3dVertexLabels = false,
@@ -120,6 +122,8 @@ public class WorkspaceStoreTests
         Assert.False(r.ReflectDbState);
         Assert.Equal("grid", r.Cy2dLayout);
         Assert.Equal("td", r.G3dLayout);
+        Assert.Equal("outline", r.MapStyle);
+        Assert.Equal("high", r.MapDetail);
         Assert.Equal(tab.Saved2dPositionsJson, r.Saved2dPositionsJson);
         Assert.Equal(tab.Saved3dPositionsJson, r.Saved3dPositionsJson);
         Assert.False(r.Show3dVertexLabels);
@@ -179,6 +183,10 @@ public class WorkspaceStoreTests
         Assert.NotNull(tab.EdgeColors);
         //A tab saved before the 3D "Properties" toggle existed restores with it ON (the default).
         Assert.True(tab.Show3dProps);
+        //And one saved before the earth had two sizes restores on the standard one: the detailed image is
+        //3.7 MB, and only a choice made since fetches it.
+        Assert.Equal("satellite", tab.MapStyle);
+        Assert.Equal("standard", tab.MapDetail);
     }
 
     [Fact]

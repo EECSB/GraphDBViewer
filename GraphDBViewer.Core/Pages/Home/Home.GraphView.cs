@@ -315,6 +315,37 @@ public partial class Home
         await GraphView.SetMapStyleAsync(style);
     }
 
+    //How sharp the satellite earth is. The standard image comes with the map; the detailed one is 3.7 MB
+    //and fetched only once chosen here, so nobody downloads it who never asks (the user's call,
+    //2026-09-13). One setting for both views, kept with the tab, as the style is.
+    public const string StandardDetail = "standard";
+    public const string HighDetail = "high";
+
+    //How the detailed earth's download is going, as the canvases report it: null until one is asked for,
+    //then "loading", "ready" or "failed". The image belongs to the page rather than to a tab, so this is a
+    //plain field rather than a tab setting.
+    private string detailedEarth;
+
+    private async Task SetMapDetail(string detail)
+    {
+        //Choosing high resolution again after its download failed is how it is tried again.
+        var retrying = detail == HighDetail && detailedEarth == "failed";
+
+        if (mapDetail == detail && !retrying)
+            return;
+
+        mapDetail = detail;
+        await SaveTabsAsync();
+        await GraphView.SetMapDetailAsync(detail, true);
+    }
+
+    [JSInvokable]
+    public void OnDetailedEarth(string state)
+    {
+        detailedEarth = state;
+        StateHasChanged();
+    }
+
     //What the geographic layout found in the loaded graph: how many vertices it could place, out of how
     //many there are. Refreshed by the render, for the sentence beside the layout picker.
     private (int Located, int Total) geoCoverage;
@@ -330,6 +361,26 @@ public partial class Home
                 return $"{geoCoverage.Located} of {geoCoverage.Total} vertices carry coordinates; the rest are hidden here.";
 
             return $"All {geoCoverage.Total} vertices placed by their coordinates.";
+        }
+    }
+
+    //What the detailed earth is doing while the tab wants it and it is not simply there: on its way, or not
+    //coming. Beneath the coverage line, in the same corner, because the toggle that asked for it closes as
+    //soon as the pointer leaves.
+    private string EarthStatus
+    {
+        get
+        {
+            if (mapStyle == OutlineStyle || mapDetail != HighDetail)
+                return null;
+
+            if (detailedEarth == "loading")
+                return "Downloading the high-resolution earth (3.7 MB); the standard one shows until it arrives.";
+
+            if (detailedEarth == "failed")
+                return "The high-resolution earth could not be downloaded, so this is the standard one. Choose High resolution again to retry.";
+
+            return null;
         }
     }
 
@@ -472,6 +523,7 @@ public partial class Home
                 await JS.InvokeVoidAsync("setCytoscapeDotNetRef", SelfRef());
                 var elementsJson = GraphDataConverter.ToCytoscapeJson(data, labelStyles, edgeColorMode, edgeColors);
                 await JS.InvokeVoidAsync("setCytoscapeMapStyle", mapStyle);
+                await JS.InvokeVoidAsync("setCytoscapeMapDetail", mapDetail, false);
                 await JS.InvokeVoidAsync("drawCytoscapeGraph", elementsJson, "cyGraph", cy2dLayout);
 
                 //A redraw builds a fresh Cytoscape instance, so re-apply grid mode if it's on.
@@ -483,6 +535,7 @@ public partial class Home
                 await JS.InvokeVoidAsync("graph3DInterop.setDotNetRef", SelfRef());
                 var graphJson = GraphDataConverter.ToForceGraphJson(data, labelStyles, edgeColorMode, edgeColors);
                 await JS.InvokeVoidAsync("graph3DInterop.setGlobeStyle", mapStyle);
+                await JS.InvokeVoidAsync("graph3DInterop.setGlobeDetail", mapDetail, false);
                 await JS.InvokeVoidAsync("graph3DInterop.drawGraph", "graph3d", graphJson, g3dLayout);
                 await JS.InvokeVoidAsync("graph3DInterop.setLabelVisibility", show3dVertexLabels, show3dEdgeLabels, show3dProps);
                 await JS.InvokeVoidAsync("graph3DInterop.setLabelDrawDistance", draw3dLabelDistance);

@@ -24,6 +24,7 @@ public class TabSnapshot
     public string Cy2dLayout { get; set; }
     public string G3dLayout { get; set; }
     public string MapStyle { get; set; }
+    public string MapDetail { get; set; }
     public string Saved2dPositionsJson { get; set; }
     public string Saved3dPositionsJson { get; set; }
     public bool Show3dVertexLabels { get; set; }

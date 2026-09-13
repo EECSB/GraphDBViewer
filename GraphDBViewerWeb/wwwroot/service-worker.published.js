@@ -9,7 +9,11 @@ self.addEventListener('fetch', event => event.respondWith(onFetch(event)));
 const cacheNamePrefix = 'offline-cache-';
 const cacheName = `${cacheNamePrefix}${self.assetsManifest.version}`;
 const offlineAssetsInclude = [ /\.dll$/, /\.pdb$/, /\.wasm/, /\.html/, /\.js$/, /\.json$/, /\.css$/, /\.woff$/, /\.png$/, /\.jpe?g$/, /\.gif$/, /\.ico$/, /\.blat$/, /\.dat$/, /\.webmanifest$/ ];
-const offlineAssetsExclude = [ /^service-worker\.js$/ ];
+//The detailed earth (earth-8192.jpg, 3.7 MB) is not precached: the Map and the Globe fetch it only when
+//someone chooses High resolution, and precaching would download it for every visitor at install — the
+//cost that choice exists to spare (the user's call, 2026-09-13). The standard earth-2048.jpg, 0.3 MB, is
+//precached with everything else, so a map opened offline still has an earth under it.
+const offlineAssetsExclude = [ /^service-worker\.js$/, /earth-8192\.jpg$/ ];
 
 // Replace with your base path if you are hosting on a subfolder. Ensure there is a trailing '/'.
 const base = "/";

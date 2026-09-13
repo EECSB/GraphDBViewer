@@ -26,7 +26,8 @@ full text follows the lists; the imagery in the second is in the public domain.
 
 | Asset | Source | Terms |
 |---|---|---|
-| `GraphDBViewer.Core/wwwroot/img/earth.jpg` — the world image behind the Map and on the Globe (satellite style) | NASA Visible Earth, *Blue Marble* (downscaled to 8192 × 4096) | NASA imagery is in the public domain; credit: NASA |
+| `GraphDBViewer.Core/wwwroot/img/earth-2048.jpg` — the world image behind the Map and on the Globe (satellite style), at the standard resolution they load | NASA Visible Earth, *Blue Marble* (downscaled to 2048 × 1024) | NASA imagery is in the public domain; credit: NASA |
+| `GraphDBViewer.Core/wwwroot/img/earth-8192.jpg` — the same image at high resolution, fetched only when *High resolution* is chosen | NASA Visible Earth, *Blue Marble* (downscaled to 8192 × 4096) | NASA imagery is in the public domain; credit: NASA |
 | `GraphDBViewer.Core/wwwroot/img/earth-outline.json` — the coastlines and borders of the Map's and the Globe's outline style | Natural Earth, *1:110m Admin 0 – Countries* (reduced to a ring list, two decimals) | Natural Earth data is in the public domain |
 
 ## Development / test only (not distributed with the application)

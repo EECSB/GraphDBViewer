@@ -481,8 +481,15 @@ function runTrackedLayout(layout) {
 //satellite image, or the coastlines of Natural Earth's 1:110m countries as lines on the theme's own
 //background — and grid mode, which on a plain graph is a square grid on the container's CSS
 //background, becomes here a graticule: meridians and parallels at a spacing that suits the zoom, with
-//their degrees along the edges. Both assets load on first use.
-const GEO_MAP_URL = '_content/GraphDBViewer.Core/img/earth.jpg';
+//their degrees along the edges. Every asset loads on first use.
+//
+//The satellite image comes in two sizes. The standard one, 2048 × 1024 and 0.3 MB, is all a map fetches
+//by itself: sharp at the zoom a world fits in, soft on a country. The detailed one, 8192 × 4096 and
+//3.7 MB, is fetched only once the tab asks for high resolution (setCytoscapeMapDetail), with the standard
+//one painted until it arrives — the user's call, 2026-09-13, so that nobody downloads 3.7 MB for a map
+//they never zoom into. The PWA's service worker leaves it out of its precache for the same reason.
+const GEO_MAP_URL = '_content/GraphDBViewer.Core/img/earth-2048.jpg';
+const GEO_MAP_DETAILED_URL = '_content/GraphDBViewer.Core/img/earth-8192.jpg';
 const GEO_OUTLINE_URL = '_content/GraphDBViewer.Core/img/earth-outline.json';
 const GEO_MAP_WIDTH = 2048;
 const GEO_MAP_HEIGHT = 1024;
@@ -492,7 +499,9 @@ const GEO_MARKER_EDGE_PROPS = 'font-size width arrow-scale';//and on an edge
 let geoLayerOn = false;
 let geoLayer = null;//the canvas behind the graph while the map is on
 let geoStyle = 'satellite';//'satellite' or 'outline' — setCytoscapeMapStyle
-let geoImage = null;//the world image, once loaded
+let geoDetail = 'standard';//'standard' or 'high' — setCytoscapeMapDetail
+let geoImages = {};//url → the world image at that size, once loaded
+let geoDetailedFailed = false;//the detailed image's download failed; asked for again only by choosing it again
 let geoOutline = null;//the coastline rings [[[lon, lat], ...], ...], once loaded
 let geoLoading = {};//url → true while a fetch is in flight, so a redraw never starts a second one
 
@@ -682,20 +691,48 @@ function setCytoscapeMapStyle(style) {
     }
 }
 
-//What the layer is doing, for tests: whether it is on, its style, whether the graticule is drawn and
-//at what spacing, and which assets have arrived.
+//How sharp the satellite earth is: 'standard' (the 2048 image, fetched with the map) or 'high' (the 8192
+//one, fetched only now). Remembered for the next map even when none is showing, as the style is. `retry`
+//is true when the user chose it, which is what tries a failed download again; the same value told again
+//before a draw is not, or every redraw of a map without a network would ask for 3.7 MB once more.
+function setCytoscapeMapDetail(detail, retry) {
+    if (detail === 'high')
+        geoDetail = 'high';
+    else
+        geoDetail = 'standard';
+
+    if (retry)
+        geoDetailedFailed = false;
+
+    if (geoLayerOn) {
+        loadGeoAssets();
+        drawGeoLayer();
+    }
+}
+
+//What the layer is doing, for tests: whether it is on, its style and detail, whether the graticule is
+//drawn and at what spacing, and which assets have arrived — imageWidth being the width of the image it
+//paints, so 2048 until a detailed one has arrived.
 function getCytoscapeGeoState() {
     let step = null;
 
     if (geoLayerOn && gridEnabled && cy)
         step = window.graphGeometry.geoGraticuleStep(GEO_MAP_WIDTH * cy.zoom() / 360, GEO_GRATICULE_MIN_SPACING);
 
+    const image = geoEarthImage();
+    let imageWidth = 0;
+
+    if (image)
+        imageWidth = image.naturalWidth;
+
     return {
         on: geoLayerOn,
         style: geoStyle,
+        detail: geoDetail,
         graticule: geoLayerOn && gridEnabled,
         graticuleStep: step,
-        imageReady: !!geoImage,
+        imageReady: !!image,
+        imageWidth: imageWidth,
         outlineReady: !!geoOutline
     };
 }
@@ -743,20 +780,14 @@ function disableGeoLayer() {
         updateGridOverlay();
 }
 
-//Fetches what the current style needs, once; the layer redraws itself when it arrives.
+//Fetches what the current style needs, once; the layer redraws itself when it arrives. The satellite look
+//always takes the standard image, the quick one, and the detailed one as well when the tab wants it.
 function loadGeoAssets() {
-    if (geoStyle === 'satellite' && !geoImage && !geoLoading[GEO_MAP_URL]) {
-        geoLoading[GEO_MAP_URL] = true;
-        const image = new Image();
-        image.onload = function () {
-            geoImage = image;
-            geoLoading[GEO_MAP_URL] = false;
-            drawGeoLayer();
-        };
-        image.onerror = function () {
-            geoLoading[GEO_MAP_URL] = false;
-        };
-        image.src = GEO_MAP_URL;
+    if (geoStyle === 'satellite') {
+        loadGeoImage(GEO_MAP_URL);
+
+        if (geoDetail === 'high' && !geoDetailedFailed)
+            loadGeoImage(GEO_MAP_DETAILED_URL);
     }
 
     if (geoStyle === 'outline' && !geoOutline && !geoLoading[GEO_OUTLINE_URL]) {
@@ -772,6 +803,58 @@ function loadGeoAssets() {
                 geoLoading[GEO_OUTLINE_URL] = false;
             });
     }
+}
+
+//One size of the world image, fetched once. The detailed one also tells Home how its download is going,
+//for the line in the canvas corner: 3.7 MB takes long enough on a slow link to need saying, and an
+//offline one never arrives at all.
+function loadGeoImage(url) {
+    if (geoImages[url] || geoLoading[url])
+        return;
+
+    const detailed = url === GEO_MAP_DETAILED_URL;
+    geoLoading[url] = true;
+
+    if (detailed)
+        reportDetailedEarth('loading');
+
+    const image = new Image();
+    image.onload = function () {
+        geoImages[url] = image;
+        geoLoading[url] = false;
+
+        if (detailed)
+            reportDetailedEarth('ready');
+
+        drawGeoLayer();
+    };
+    image.onerror = function () {
+        geoLoading[url] = false;
+
+        if (detailed) {
+            geoDetailedFailed = true;
+            reportDetailedEarth('failed');
+        }
+    };
+    image.src = url;
+}
+
+//'loading', 'ready' or 'failed', to Home. By the time 3.7 MB arrives the page may have moved on and
+//disposed the reference, which rejects rather than throws.
+function reportDetailedEarth(state) {
+    if (!dotNetRef)
+        return;
+
+    dotNetRef.invokeMethodAsync('OnDetailedEarth', state).catch(() => { });
+}
+
+//The world image to paint: the detailed one when the tab wants it and it has arrived, else the standard
+//one, which is also what shows while the detailed one is on its way or if it never comes.
+function geoEarthImage() {
+    if (geoDetail === 'high' && geoImages[GEO_MAP_DETAILED_URL])
+        return geoImages[GEO_MAP_DETAILED_URL];
+
+    return geoImages[GEO_MAP_URL] || null;
 }
 
 //The colors the layer paints with, by theme. The image gets a veil so nodes read against it; the
@@ -836,8 +919,10 @@ function paintGeoScene(ctx, world, width, height, graticule) {
     ctx.rect(world.x, world.y, world.w, world.h);
     ctx.clip();
 
-    if (geoStyle === 'satellite' && geoImage) {
-        ctx.drawImage(geoImage, world.x, world.y, world.w, world.h);
+    const image = geoEarthImage();
+
+    if (geoStyle === 'satellite' && image) {
+        ctx.drawImage(image, world.x, world.y, world.w, world.h);
         ctx.fillStyle = colors.veil;
         ctx.fillRect(world.x, world.y, world.w, world.h);
     } else if (geoStyle === 'outline') {

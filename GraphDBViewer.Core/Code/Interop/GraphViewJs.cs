@@ -140,6 +140,26 @@ public class GraphViewJs
         catch { }
     }
 
+    ///<summary>
+    ///How sharp the satellite earth is — "standard" or "high" — told to both views as the style is. True for
+    ///<paramref name="retry"/> when the user chose it, which is what tries a failed download again; a
+    ///redraw telling the same value again passes false, or every redraw offline would ask for 3.7 MB.
+    ///</summary>
+    public async Task SetMapDetailAsync(string detail, bool retry)
+    {
+        try
+        {
+            await _js.InvokeVoidAsync("setCytoscapeMapDetail", detail, retry);
+        }
+        catch { }
+
+        try
+        {
+            await _js.InvokeVoidAsync("graph3DInterop.setGlobeDetail", detail, retry);
+        }
+        catch { }
+    }
+
     ///<summary>Toggles always-on vertex/edge labels and the shown-properties overlay in the 3D view.</summary>
     public async Task Set3dLabelVisibilityAsync(bool vertexLabels, bool edgeLabels, bool props)
     {

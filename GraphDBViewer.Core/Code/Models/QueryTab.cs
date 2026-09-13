@@ -61,6 +61,9 @@ public class QueryTab
     public string G3dLayout { get; set; } = "force";
     //Which earth the Map and the Globe draw: "satellite" (the image) or "outline" (coastlines).
     public string MapStyle { get; set; } = "satellite";
+    //How sharp the satellite earth is: "standard" (the 2048 × 1024 image, which comes with the map) or
+    //"high" (the 8192 × 4096 one, 3.7 MB, fetched only once chosen).
+    public string MapDetail { get; set; } = "standard";
     //Hand-pinned node arrangements captured by "Save positions", stored in the browser (JSON
     //[{id,x,y(,z)}]). Kept separately per viewer so a 2D arrangement never disturbs a 3D one; drives the
     //"user saved positions" layout even before the changes are committed.
