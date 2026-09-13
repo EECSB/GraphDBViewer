@@ -59,10 +59,12 @@ public class SparqlDb : IGraphDb
             request.Content = new FormUrlEncodedContent(new[] { new System.Collections.Generic.KeyValuePair<string, string>("query", query ?? "") });
 
             //CONSTRUCT/DESCRIBE return RDF (ask for RDF/JSON so it renders as a graph); SELECT/ASK return a bindings table.
+            //JSON-LD is weighted below RDF/JSON, not beside it: offered both at once, Fuseki answers JSON-LD, which
+            //SparqlConverter does not read, and every CONSTRUCT drew nothing until the live database check saw it.
             if (IsGraphQuery(query))
             {
                 request.Headers.Accept.ParseAdd("application/rdf+json");
-                request.Headers.Accept.ParseAdd("application/ld+json");
+                request.Headers.Accept.ParseAdd("application/ld+json;q=0.9");
             }
             else
             {

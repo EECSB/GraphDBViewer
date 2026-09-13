@@ -23,6 +23,10 @@ window.gunInterop = (function () {
     //A cap, so a "~depth" on a densely linked graph cannot walk the whole peer into the browser.
     const MAX_NODES = 2000;
 
+    //How long a peer has to answer before connecting fails. GUN keeps retrying a socket that did not open, so
+    //waiting longer would only make a wrong address slower to report.
+    const PEER_TIMEOUT_MS = 5000;
+
     function instanceFor(handle, config) {
         let gun = instances.get(handle);
 
@@ -192,6 +196,48 @@ window.gunInterop = (function () {
                 message = e.message;
 
             return JSON.stringify({ error: message });
+        }
+    }
+
+    //Whether any peer's socket is open. GUN keeps its peers under opt.peers, keyed by URL, and marks one met
+    //when its socket opens (see close for the wire).
+    function peerReached(gun) {
+        const peers = gun.back('opt.peers') || {};
+
+        return Object.keys(peers).some(function (url) {
+            const peer = peers[url];
+
+            return !!(peer && (peer.met || (peer.wire && peer.wire.readyState === 1)));
+        });
+    }
+
+    ///What connecting to GUN proves: that the page reached a peer. No read can prove it, since GUN says nothing
+    ///about a key it does not hold, and reading the example's key failed every peer without an "alice". Returns
+    ///an error message, or "" once a peer's socket is open, or at once with no peer, which is an in-browser graph.
+    async function probe(handle, config) {
+        try {
+            const gun = instanceFor(handle, config);
+
+            if (!config.peers || !config.peers.length)
+                return '';
+
+            const deadline = Date.now() + PEER_TIMEOUT_MS;
+
+            while (!peerReached(gun)) {
+                if (Date.now() >= deadline)
+                    return 'No GUN peer answered at ' + config.peers.join(', ') + ' within ' + (PEER_TIMEOUT_MS / 1000) + ' seconds.';
+
+                await new Promise(function (resolve) { setTimeout(resolve, 100); });
+            }
+
+            return '';
+        }
+        catch (e) {
+            let message = String(e);
+            if (e && e.message)
+                message = e.message;
+
+            return message;
         }
     }
 
@@ -460,5 +506,5 @@ window.gunInterop = (function () {
         catch (e) { }
     }
 
-    return { run: run, apply: apply, watch: watch, unwatch: unwatch, close: close, parseQuery: parseQuery };
+    return { run: run, probe: probe, apply: apply, watch: watch, unwatch: unwatch, close: close, parseQuery: parseQuery };
 })();

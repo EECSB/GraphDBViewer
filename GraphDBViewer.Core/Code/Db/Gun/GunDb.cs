@@ -49,6 +49,10 @@ public sealed class GunDb : IGraphDb, ILiveGraphDb
         if ((query ?? "").Trim() == GunQuery.Nothing)
             return GunConverter.ToGraphDbResult("{}");
 
+        //Connecting asks whether a peer answered the page, not what the peer holds.
+        if ((query ?? "").Trim() == GunQuery.Probe)
+            return await ProbeAsync(cancellationToken);
+
         //A staged edit is a statement rather than a key path. It is parsed here and applied as an
         //operation — the text is never evaluated, so nothing typed into the Generated tab runs as code.
         if (GunWrite.IsWrite(query))
@@ -63,6 +67,31 @@ public sealed class GunDb : IGraphDb, ILiveGraphDb
         catch (OperationCanceledException)
         {
             //Re-thrown like the other browser-direct drivers so callers can tell a cancel from a failure.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return GraphDbResult.Failure(ex.Message);
+        }
+    }
+
+    ///<summary>
+    ///Whether the page reached a peer: an empty graph when one answered, or when there is none to reach, and a
+    ///failure saying which peers were silent otherwise. See <see cref="GunQuery.Probe"/>.
+    ///</summary>
+    private async Task<GraphDbResult> ProbeAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            string error = await _js.InvokeAsync<string>("gunInterop.probe", cancellationToken, _handle, Config());
+
+            if (!string.IsNullOrEmpty(error))
+                return GraphDbResult.Failure(error);
+
+            return GunConverter.ToGraphDbResult("{}");
+        }
+        catch (OperationCanceledException)
+        {
             throw;
         }
         catch (Exception ex)

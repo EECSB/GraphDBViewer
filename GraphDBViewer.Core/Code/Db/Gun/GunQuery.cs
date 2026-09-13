@@ -29,6 +29,12 @@ public sealed class GunQuery
     ///</summary>
     public const string Nothing = "~none";
 
+    ///<summary>
+    ///Not a read: whether the page reached a peer, which is what connecting to GUN can prove. GUN says nothing
+    ///about a key it does not hold, so no read can stand in for it (see <c>gunInterop.probe</c>).
+    ///</summary>
+    public const string Probe = "~probe";
+
     ///<summary>The keys walked from the root — <c>alice</c>, or <c>alice</c> then <c>knows</c>.</summary>
     public IReadOnlyList<string> Keys { get; init; } = new List<string>();
 

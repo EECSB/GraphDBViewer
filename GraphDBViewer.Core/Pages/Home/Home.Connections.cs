@@ -506,7 +506,7 @@ public partial class Home
 
                 //An engine read by form has no use for query text left behind by another one.
                 if (provider.NoQueryLanguage)
-                    NormalizeFormQueryText(provider.ProbeQuery);
+                    NormalizeFormQueryText(provider.ExampleQuery);
 
                 if (provider.Capabilities.BrowseGraph)
                     await RefreshSchemaVocabularyAsync();

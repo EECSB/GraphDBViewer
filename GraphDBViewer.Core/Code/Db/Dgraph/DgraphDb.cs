@@ -203,17 +203,42 @@ public class DgraphDb : IGraphDb
     }
 
     ///<summary>
-    ///Attaches the access token, if one is configured. Dgraph reads it from a different header depending on
-    ///where it runs — <c>X-Dgraph-AccessToken</c> for a self-hosted cluster with ACLs, <c>Dg-Auth</c> for
-    ///Dgraph Cloud — so both are sent rather than making the user say which kind they are pointing at.
+    ///Attaches the access token, if one is configured, in the headers <see cref="TokenHeaders"/> names for the
+    ///host this request is going to and the route it is taking.
     ///</summary>
     private void Authorize(HttpRequestMessage request)
     {
         if (string.IsNullOrEmpty(_connection.AuthKey))
             return;
 
-        request.Headers.TryAddWithoutValidation("X-Dgraph-AccessToken", _connection.AuthKey);
-        request.Headers.TryAddWithoutValidation("Dg-Auth", _connection.AuthKey);
+        foreach (var header in TokenHeaders(request.RequestUri.Host, OperatingSystem.IsBrowser()))
+            request.Headers.TryAddWithoutValidation(header, _connection.AuthKey);
+    }
+
+    ///<summary>
+    ///The headers the access token travels in. Dgraph reads it from a different one depending on where it
+    ///runs: <c>X-Dgraph-AccessToken</c> on a self-hosted cluster with ACLs, <c>Dg-Auth</c> on Dgraph Cloud.
+    ///The host sends both, so nobody has to say which kind they point at.
+    ///
+    ///A page cannot. A self-hosted Alpha's CORS answer allows <c>X-Dgraph-AccessToken</c> and not
+    ///<c>Dg-Auth</c>, so a browser that sent both was refused at the preflight, and every Dgraph with ACLs
+    ///failed on the Browser route with only "Failed to fetch" until the live database check tried one. From a
+    ///page, <c>Dg-Auth</c> goes to a Dgraph Cloud address alone, where nothing about it has changed.
+    ///</summary>
+    public static string[] TokenHeaders(string host, bool fromBrowser)
+    {
+        if (fromBrowser && !IsDgraphCloud(host))
+            return new[] { "X-Dgraph-AccessToken" };
+
+        return new[] { "X-Dgraph-AccessToken", "Dg-Auth" };
+    }
+
+    ///<summary>Whether a host is a Dgraph Cloud cluster, whose addresses end in <c>.cloud.dgraph.io</c>.</summary>
+    public static bool IsDgraphCloud(string host)
+    {
+        var name = (host ?? "").TrimEnd('.').ToLowerInvariant();
+
+        return name.EndsWith(".cloud.dgraph.io", StringComparison.Ordinal);
     }
 
 

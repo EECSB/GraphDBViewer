@@ -45,6 +45,15 @@ public static class SparqlConverter
         {
             var root = doc.RootElement;
 
+            //JSON-LD is JSON too, and read as RDF/JSON its "@graph" became the only subject and no real node was
+            //drawn. SparqlDb asks for RDF/JSON first, so this is an endpoint that does not offer it: say so.
+            if (IsJsonLd(root))
+            {
+                result.IsError = true;
+                result.Error = "The endpoint answered in JSON-LD, which this viewer does not read. It asks for RDF/JSON (application/rdf+json) first, and this endpoint did not offer it.";
+                return result;
+            }
+
             if (root.ValueKind != JsonValueKind.Object)
                 return result;
 
@@ -66,6 +75,37 @@ public static class SparqlConverter
             result.GraphData = JsonDocument.Parse(TriplesToGraph(root)).RootElement;
             return result;
         }
+    }
+
+    //A JSON-LD document names its nodes with keywords (@graph, @id, @context), at the top or on each node of
+    //an expanded array. Neither RDF/JSON nor SPARQL results has a key starting with "@": an RDF/JSON subject is
+    //an absolute IRI or a blank node label.
+    private static bool IsJsonLd(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object)
+            return HasKeyword(root);
+
+        if (root.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var item in root.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Object && HasKeyword(item))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasKeyword(JsonElement node)
+    {
+        foreach (var property in node.EnumerateObject())
+        {
+            if (property.Name.StartsWith('@'))
+                return true;
+        }
+
+        return false;
     }
 
     private static void ParseSelect(JsonElement root, JsonElement bindings, SparqlResult result)

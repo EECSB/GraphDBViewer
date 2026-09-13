@@ -317,8 +317,11 @@ public partial class Home
             return;
         }
 
-        //Read before the run, because the editor's text can change under a long one.
-        bool mutating = Qb.IsMutating(queryText ?? "");
+        //Read before the run, because the editor's text can change under a long one. Like EffectiveData, and
+        //unlike the builder's other uses, Run has no capability gate in front of it, so it has to allow for an
+        //engine with no builder: SPARQL composes no queries, and every SPARQL query threw here until the live
+        //database check ran one.
+        bool mutating = Qb != null && Qb.IsMutating(queryText ?? "");
 
         var ct = BeginQuery();
         queryResults = null;

@@ -67,4 +67,34 @@ public class SparqlConverterTests
         var alice = table.Nodes.Single(n => n.Id == "http://ex/alice");
         Assert.Equal("Alice", alice.Properties["name"]);
     }
+
+    //Fuseki 6.2.0's answer to a CONSTRUCT when JSON-LD won the negotiation, as the live database check got
+    //it. Read as RDF/JSON, "@graph" was taken for the only subject and neither node was drawn.
+    [Fact]
+    public void Parse_JsonLd_IsReportedRatherThanMisreadAsRdfJson()
+    {
+        var body = """
+        {
+          "@graph": [
+            { "@id": "urn:gdbv:check-b", "http://www.w3.org/2000/01/rdf-schema#label": "check-b" },
+            { "@id": "urn:gdbv:check-a", "http://www.w3.org/2000/01/rdf-schema#label": "check-a", "urn:gdbv:knows": { "@id": "urn:gdbv:check-b" } }
+          ]
+        }
+        """;
+
+        var result = SparqlConverter.Parse(body);
+
+        Assert.True(result.IsError);
+        Assert.Contains("JSON-LD", result.Error);
+    }
+
+    //Expanded JSON-LD is a bare array of nodes, which fell through to an empty bindings table.
+    [Fact]
+    public void Parse_ExpandedJsonLd_IsReportedToo()
+    {
+        var result = SparqlConverter.Parse("""[ { "@id": "urn:gdbv:check-a", "urn:gdbv:knows": [ { "@id": "urn:gdbv:check-b" } ] } ]""");
+
+        Assert.True(result.IsError);
+        Assert.Contains("JSON-LD", result.Error);
+    }
 }

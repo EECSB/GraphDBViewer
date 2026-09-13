@@ -98,6 +98,12 @@ public sealed class GraphDbProvider
     public string ProbeQuery { get; init; }
 
     ///<summary>
+    ///What the form of an engine with no query language starts from when the editor holds nothing of its own
+    ///(see <see cref="NoQueryLanguage"/>). Null for an engine with a language.
+    ///</summary>
+    public string ExampleQuery { get; init; }
+
+    ///<summary>
     ///The port this engine listens on when nothing else says otherwise.
     ///
     ///It lives here so there is one answer to "where does Dgraph listen" rather than one per caller. Both
@@ -427,9 +433,10 @@ public static class GraphDbProviders
         DisplayName = "GUN (peer-to-peer)",
         EditorLanguage = null,//a path, not a language — nothing to highlight
         StagedLanguage = "gunjs",//but a staged edit is real GUN JavaScript
-        //GUN answers nothing for a key that does not exist, so a probe can only prove the page is wired
-        //up, not that a peer replied. Reading the key the example query uses keeps the two consistent.
-        ProbeQuery = GunDb.ExampleQuery,
+        //Not a read. GUN answers nothing for a key it does not hold, so the probe that read the example's key
+        //failed every peer without an "alice" until 2026-09-13; this one asks whether a peer answered at all.
+        ProbeQuery = GunQuery.Probe,
+        ExampleQuery = GunDb.ExampleQuery,
         Capabilities = GunCapabilities,
         BrowserOnly = true,
         NoQueryLanguage = true,
