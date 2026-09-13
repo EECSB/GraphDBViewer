@@ -93,6 +93,104 @@ window.graph3DInterop = {
         this.instance.zoomToFit(400, 50);
     },
 
+    //How far a fanned edge bows away from the straight line between its two nodes, as a fraction of that
+    //line's length. Big enough to separate the arcs at a glance; small enough that a pair does not swing
+    //out past the nodes it joins.
+    FAN_CURVATURE: 0.28,
+
+    //A self-loop has no length to bow across, so its curvature is what gives it any size at all. Each
+    //further loop on the same node gets a wider one, or they would all draw on top of each other.
+    SELF_LOOP_CURVATURE: 0.6,
+    SELF_LOOP_STEP: 0.35,
+
+    //Gives every link the curvature and curve rotation it will be drawn with, once, from the whole set
+    //of links -- which is the only place the answer is knowable, since it depends on how many other
+    //links join the same two nodes.
+    //
+    //It replaced a linkCurvature accessor that counted links as the renderer asked about them. That
+    //could not work: the renderer asks again on every refresh, the count carried over between passes,
+    //and the value was clamped, so after a few refreshes every parallel edge returned the same clamped
+    //curvature and N edges drew as one arc. Seven edges between two nodes rendered as two.
+    //
+    //Grouping is undirected on purpose. A->B and B->A are one fan, not two: counted separately they
+    //each start at the same offset and draw in the same place, which is the other half of why a
+    //reciprocal pair looked like a single edge.
+    assignLinkCurves: function (links) {
+        if (!Array.isArray(links))
+            return;
+
+        const idOf = end => {
+            if (end && typeof end === 'object')
+                return String(end.id);
+
+            return String(end);
+        };
+
+        const groups = new Map();
+
+        links.forEach(link => {
+            const a = idOf(link.source);
+            const b = idOf(link.target);
+            let key;
+
+            //Sorted, so the pair keys the same whichever way the edge points. JSON rather than joining
+            //on a separator character: ids come from whatever database is connected and are free to
+            //contain any character that might have been picked as one, which would put two unrelated
+            //pairs in the same fan.
+            if (a <= b)
+                key = JSON.stringify([a, b]);
+            else
+                key = JSON.stringify([b, a]);
+
+            if (!groups.has(key))
+                groups.set(key, []);
+
+            groups.get(key).push(link);
+        });
+
+        groups.forEach(group => {
+            const n = group.length;
+
+            group.forEach((link, i) => {
+                const from = idOf(link.source);
+                const to = idOf(link.target);
+
+                if (from === to) {
+                    link.curvature = this.SELF_LOOP_CURVATURE + i * this.SELF_LOOP_STEP;
+                    link.curveRotation = (2 * Math.PI * i) / n;
+
+                    return;
+                }
+
+                if (n === 1) {
+                    //The ordinary case, and the one worth keeping straight: a single edge between two
+                    //nodes is a line, not an arc.
+                    link.curvature = 0;
+                    link.curveRotation = 0;
+
+                    return;
+                }
+
+                //Every edge in a fan bows by the same amount and they are spread evenly around the axis
+                //joining the two nodes. Spreading by rotation rather than by curvature is what makes
+                //this read as N edges from any camera angle: curvature alone fans them within a single
+                //plane, which vanishes to one line as soon as you look along it.
+                link.curvature = this.FAN_CURVATURE;
+
+                //The rotation frame is built from the source-to-target axis, so a link running the other
+                //way has a mirrored frame and the same angle would put it back on top of its opposite
+                //number. Negating cancels the mirror, so the angle means the same place in space for
+                //every link in the fan regardless of which way it points.
+                const angle = (2 * Math.PI * i) / n;
+
+                if (from <= to)
+                    link.curveRotation = angle;
+                else
+                    link.curveRotation = -angle;
+            });
+        });
+    },
+
     drawGraph: function (containerId, graphDataJson, dagMode) {
         const container = document.getElementById(containerId);
         if (!container) {
@@ -101,6 +199,7 @@ window.graph3DInterop = {
         }
 
         const graphData = JSON.parse(graphDataJson);
+        this.assignLinkCurves(graphData.links);
 
         if (this.instance) {
             this.instance._destructor && this.instance._destructor();
@@ -185,29 +284,11 @@ window.graph3DInterop = {
                 }
             });
 
-        const linkCountMap = {};
-        graph.linkCurvature(link => {
-            let srcId;
-            if (typeof link.source === 'object')
-                srcId = link.source.id;
-            else
-                srcId = link.source;
-
-            let tgtId;
-            if (typeof link.target === 'object')
-                tgtId = link.target.id;
-            else
-                tgtId = link.target;
-
-            const key = `${srcId}->${tgtId}`;
-
-            if (!linkCountMap[key])
-                linkCountMap[key] = 0;
-
-            const count = ++linkCountMap[key];
-
-            return Math.min(0.03 * (count - 1), 0.3);
-        });
+        //Both read a value assignLinkCurves has already put on the link. They are deliberately property
+        //names rather than functions: an accessor that counted as it went would be called again on every
+        //refresh, and anything it accumulated would keep accumulating.
+        graph.linkCurvature('curvature');
+        graph.linkCurveRotation('curveRotation');
 
         this.applyLayout(graph, dagMode);
         this.instance = graph;
@@ -324,6 +405,10 @@ window.graph3DInterop = {
             }
         });
 
+        //Recomputed over the whole set, not just what arrived: an expansion that adds a second edge
+        //between two nodes changes the curve of the one already drawn.
+        this.assignLinkCurves(cur.links);
+
         this.instance.graphData(cur);
         this.setupLabels(this.container);
     },
@@ -411,8 +496,11 @@ window.graph3DInterop = {
         const linksAllKnown = incoming.links.every(l => curLinkKeys.has(linkKey(l)));
         const topologyChanged = !sameNodeCount || !nodesAllKnown || !sameLinkCount || !linksAllKnown;
 
-        if (topologyChanged)
+        //Only the topology can change a fan, so recomputing rides with the branch that re-sets the data.
+        if (topologyChanged) {
+            this.assignLinkCurves(links);
             this.instance.graphData({ nodes: nodes, links: links });
+        }
         else if (positionChanged)
             this.instance.d3ReheatSimulation();
 
