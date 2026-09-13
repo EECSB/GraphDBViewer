@@ -525,10 +525,52 @@ public static class GraphDataConverter
             if (type == "g:Map" && inner.ValueKind == JsonValueKind.Array)
                 return ConvertGraphSONMapToObject(inner);
 
+            //A date is epoch milliseconds on the wire, which nothing downstream can read as a date.
+            //Read back as the ISO 8601 UTC instant it stands for, which every date reader can.
+            if ((type == "g:Date" || type == "g:Timestamp") && inner.ValueKind == JsonValueKind.Number && inner.TryGetInt64(out var epochMilliseconds))
+                return JsonSerializer.SerializeToElement(IsoInstant(epochMilliseconds));
+
             return UnwrapGraphSON(inner);
         }
 
         return element;
+    }
+
+    ///<summary>
+    ///A property's value as text: a string as it is, a whole number as its digits, a double in its
+    ///shortest invariant form — 10 for 10.0, 12.5 for 12.5 — so a value the seam wrote typed reads
+    ///back as exactly the text it was written from (ADR 0014's "reading is already correct", kept true).
+    ///</summary>
+    private static string ValueText(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Number)
+        {
+            if (value.TryGetInt64(out var whole))
+                return whole.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            if (value.TryGetDouble(out var number))
+                return number.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        //A JSON boolean's ToString is C#'s "True"; every reader compares against the word as Gremlin says it.
+        if (value.ValueKind == JsonValueKind.True)
+            return "true";
+
+        if (value.ValueKind == JsonValueKind.False)
+            return "false";
+
+        return value.ToString();
+    }
+
+    ///<summary>Epoch milliseconds as the ISO 8601 UTC instant they stand for — 2026-09-05T00:00:00Z, milliseconds only when there are any.</summary>
+    private static string IsoInstant(long epochMilliseconds)
+    {
+        var at = DateTimeOffset.FromUnixTimeMilliseconds(epochMilliseconds);
+
+        if (epochMilliseconds % 1000 == 0)
+            return at.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
+
+        return at.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static JsonElement ConvertGraphSONMapToObject(JsonElement kvArray)
@@ -762,10 +804,10 @@ public static class GraphDataConverter
                         var unwrapped = UnwrapGraphSON(entry);
                         if (unwrapped.TryGetProperty("value", out var val))
                         {
-                            result[prop.Name] = UnwrapGraphSON(val).ToString();
+                            result[prop.Name] = ValueText(UnwrapGraphSON(val));
                             break;
                         }
-                        result[prop.Name] = unwrapped.ToString();
+                        result[prop.Name] = ValueText(unwrapped);
                         break;
                     }
                 }
@@ -773,9 +815,9 @@ public static class GraphDataConverter
                 {
                     var unwrapped = UnwrapGraphSON(prop.Value);
                     if (unwrapped.TryGetProperty("value", out var val))
-                        result[prop.Name] = UnwrapGraphSON(val).ToString();
+                        result[prop.Name] = ValueText(UnwrapGraphSON(val));
                     else
-                        result[prop.Name] = unwrapped.ToString();
+                        result[prop.Name] = ValueText(unwrapped);
                 }
                 else
                 {

@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Text.Json;
 
 namespace GraphDBViewerWeb.Code;
@@ -94,5 +95,35 @@ public static class GraphWireText
         target = id.Substring(arrow + EdgeArrow.Length);
 
         return true;
+    }
+
+    ///<summary>
+    ///A value off the wire as a number, whatever the driver typed it as. A <c>long</c> or <c>double</c>
+    ///is read as itself; a string is read invariantly — the wire has one number format, and it is not
+    ///the host's culture — and anything else is null. Reading a driver's number through
+    ///<c>ToString</c> and back parses it under the host's culture twice, which round-trips only by
+    ///accident, and turns <c>1234.5</c> into twelve thousand on a comma-decimal host when it does not.
+    ///</summary>
+    public static double? Number(object? value)
+    {
+        if (value is long whole)
+            return whole;
+
+        if (value is int narrow)
+            return narrow;
+
+        if (value is double fraction)
+            return fraction;
+
+        if (value is float single)
+            return single;
+
+        if (value is decimal exact)
+            return (double)exact;
+
+        if (value is string text && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+            return parsed;
+
+        return null;
     }
 }
