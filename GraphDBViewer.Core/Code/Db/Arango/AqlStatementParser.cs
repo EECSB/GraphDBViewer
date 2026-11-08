@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace GraphDBViewerWeb.Code;
@@ -19,111 +18,140 @@ public static class AqlStatementParser
     };
 
     ///<summary>
-    ///True when the query contains a data-modification operation outside a string, a backticked identifier
-    ///or a comment — so a document literally named 'REMOVE', or an attribute <c>`update`</c>, doesn't read
-    ///as a mutation.
+    ///True when the query contains a data-modification operation where one can stand: not inside a string, a quoted
+    ///name or a comment, and not as an attribute (after a dot), a bind parameter (after an at sign), an object's key
+    ///(before a colon) or part of a longer name. So a document literally named 'REMOVE', an attribute
+    ///<c>`update`</c> or a call of <c>REGEX_REPLACE</c> doesn't read as a mutation; until 2026-10-03 AQL's own
+    ///REGEX_REPLACE, REMOVE_VALUE and REPLACE_NTH did.
     ///</summary>
     public static bool IsMutating(string query)
     {
         if (string.IsNullOrEmpty(query))
             return false;
 
-        foreach (var word in Words(query))
-            if (WriteKeywords.Contains(word))
+        var tokens = Tokens(query);
+
+        for (int i = 0; i < tokens.Count; i++)
+            if (IsOperationWord(tokens, i) && WriteKeywords.Contains(tokens[i].Text))
                 return true;
 
         return false;
     }
 
-    //Walks the query, skipping string literals, backticked identifiers and comments, and yields the bare
-    //words in between.
-    private static IEnumerable<string> Words(string query)
+    //Whether the word at i stands where an operation can, rather than naming an attribute, a bind parameter or an
+    //object's key.
+    private static bool IsOperationWord(List<Token> tokens, int i)
     {
-        var word = new StringBuilder();
+        if (tokens[i].Kind != TokenKind.Word)
+            return false;
 
-        for (int i = 0; i < query.Length; i++)
+        if (i > 0 && tokens[i - 1].Kind == TokenKind.Symbol && tokens[i - 1].Text is "." or "@")
+            return false;
+
+        if (i + 1 < tokens.Count && tokens[i + 1].Kind == TokenKind.Symbol && tokens[i + 1].Text == ":")
+            return false;
+
+        return true;
+    }
+
+    private enum TokenKind
+    {
+        Word,
+        Quoted,
+        Symbol
+    }
+
+    //One piece of a query: a word, a string or quoted name (whose text is never read, so nothing inside one can
+    //look like an operation), or one character of punctuation.
+    private readonly record struct Token(TokenKind Kind, string Text);
+
+    //The query as tokens, with its comments and spaces left out. A word is letters, digits and underscores, so
+    //REGEX_REPLACE is one name rather than REPLACE and something before it.
+    private static List<Token> Tokens(string query)
+    {
+        var tokens = new List<Token>();
+        int i = 0;
+
+        while (i < query.Length)
         {
             char c = query[i];
 
-            if (c == '/' && i + 1 < query.Length && query[i + 1] == '/')
-            {
-                if (word.Length > 0)
-                {
-                    yield return word.ToString();
-                    word.Clear();
-                }
-
-                while (i < query.Length && query[i] != '\n')
-                    i++;
-
-                continue;
-            }
-
-            if (c == '/' && i + 1 < query.Length && query[i + 1] == '*')
-            {
-                if (word.Length > 0)
-                {
-                    yield return word.ToString();
-                    word.Clear();
-                }
-
-                i += 2;
-                while (i + 1 < query.Length && !(query[i] == '*' && query[i + 1] == '/'))
-                    i++;
-
+            if (char.IsWhiteSpace(c))
                 i++;
-                continue;
-            }
-
-            if (c == '\'' || c == '"' || c == '`')
+            else if (c == '/' && i + 1 < query.Length && query[i + 1] == '/')
+                i = PastLine(query, i);
+            else if (c == '/' && i + 1 < query.Length && query[i + 1] == '*')
+                i = PastBlockComment(query, i);
+            else if (c == '\'' || c == '"' || c == '`' || c == '´')
             {
-                if (word.Length > 0)
-                {
-                    yield return word.ToString();
-                    word.Clear();
-                }
+                i = PastQuoted(query, i);
+                tokens.Add(new Token(TokenKind.Quoted, ""));
+            }
+            else if (IsWordChar(c))
+            {
+                int start = i;
 
-                char quote = c;
-                i++;
-
-                while (i < query.Length)
-                {
-                    if (quote != '`' && query[i] == '\\')
-                    {
-                        i += 2;
-                        continue;
-                    }
-
-                    if (query[i] == quote)
-                        break;
-
+                while (i < query.Length && IsWordChar(query[i]))
                     i++;
-                }
 
-                continue;
+                tokens.Add(new Token(TokenKind.Word, query.Substring(start, i - start)));
             }
-
-            if (char.IsLetter(c))
+            else
             {
-                word.Append(c);
-                continue;
-            }
-
-            if (word.Length > 0)
-            {
-                yield return word.ToString();
-                word.Clear();
+                tokens.Add(new Token(TokenKind.Symbol, c.ToString()));
+                i++;
             }
         }
 
-        if (word.Length > 0)
-            yield return word.ToString();
+        return tokens;
+    }
+
+    private static bool IsWordChar(char c)
+    {
+        return char.IsLetterOrDigit(c) || c == '_';
+    }
+
+    private static int PastLine(string query, int i)
+    {
+        while (i < query.Length && query[i] != '\n')
+            i++;
+
+        return i;
+    }
+
+    private static int PastBlockComment(string query, int i)
+    {
+        i += 2;
+
+        while (i + 1 < query.Length && !(query[i] == '*' && query[i + 1] == '/'))
+            i++;
+
+        return i + 2;
+    }
+
+    //Just past the string or quoted name opening at i: AQL quotes a name in backticks or forward ticks, and a
+    //backslash escapes inside a string.
+    private static int PastQuoted(string query, int i)
+    {
+        char quote = query[i];
+        i++;
+
+        while (i < query.Length)
+            if ((quote == '\'' || quote == '"') && query[i] == '\\')
+                i += 2;
+            else if (query[i] == quote)
+                return i + 1;
+            else
+                i++;
+
+        return i;
     }
 
     //── Staged-edit parsing ─────────────────────────────────────────────
 
     private const string Literal = @"'((?:[^'\\]|\\.)*)'";
-    private const string Identifier = "`([^`]*)`";
+    //A backslash escapes inside the backticks too, as AqlQueryBuilder.QuoteIdentifier writes a name.
+    private const string Identifier = @"`((?:[^`\\]|\\.)*)`";
 
     private static readonly Regex AddVertexRegex = new(
         $@"^INSERT\s*\{{(?<fields>.*)\}}\s*INTO\s+{Identifier}\s*RETURN\s+NEW$",
@@ -134,11 +162,11 @@ public static class AqlStatementParser
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex SetPropertyRegex = new(
-        $@"^UPDATE\s+{Literal}\s+WITH\s*\{{\s*`(?<key>[^`]*)`\s*:\s*'(?<value>(?:[^'\\]|\\.)*)'\s*\}}\s*IN\s+{Identifier}$",
+        $@"^UPDATE\s+{Literal}\s+WITH\s*\{{\s*`(?<key>(?:[^`\\]|\\.)*)`\s*:\s*'(?<value>(?:[^'\\]|\\.)*)'\s*\}}\s*IN\s+{Identifier}$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex DropPropertyRegex = new(
-        $@"^UPDATE\s+{Literal}\s+WITH\s*\{{\s*`(?<key>[^`]*)`\s*:\s*null\s*\}}\s*IN\s+{Identifier}\s*OPTIONS.*$",
+        $@"^UPDATE\s+{Literal}\s+WITH\s*\{{\s*`(?<key>(?:[^`\\]|\\.)*)`\s*:\s*null\s*\}}\s*IN\s+{Identifier}\s*OPTIONS.*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     //One `key`: 'value' pair inside an object literal, plus the bare _key / _from / _to AQL attributes.
@@ -246,7 +274,7 @@ public static class AqlStatementParser
                 Kind = GraphEditKind.DropProperty,
                 Type = "node",
                 Id = Unquote(drop.Groups[2].Value) + "/" + Unescape(drop.Groups[1].Value),
-                Key = drop.Groups["key"].Value
+                Key = Unquote(drop.Groups["key"].Value)
             });
 
             return;
@@ -254,16 +282,14 @@ public static class AqlStatementParser
 
         var set = SetPropertyRegex.Match(line);
         if (set.Success)
-        {
             edits.Add(new GraphEdit
             {
                 Kind = GraphEditKind.SetProperty,
                 Type = "node",
                 Id = Unquote(set.Groups[2].Value) + "/" + Unescape(set.Groups[1].Value),
-                Key = set.Groups["key"].Value,
+                Key = Unquote(set.Groups["key"].Value),
                 Value = Unescape(set.Groups["value"].Value)
             });
-        }
     }
 
     private static Dictionary<string, string> ParseFields(string fields)
@@ -290,11 +316,12 @@ public static class AqlStatementParser
     //Reverses AqlQueryBuilder.Escape.
     private static string Unescape(string value)
     {
-        return (value ?? string.Empty).Replace("\\'", "'").Replace("\\\\", "\\");
+        return StagedLiteral.Unescape(value);
     }
 
+    //Reverses the escaping AqlQueryBuilder.QuoteIdentifier applies inside backticks, which is a literal's.
     private static string Unquote(string identifier)
     {
-        return identifier ?? string.Empty;
+        return StagedLiteral.Unescape(identifier);
     }
 }

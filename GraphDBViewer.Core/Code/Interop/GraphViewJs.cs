@@ -75,6 +75,21 @@ public class GraphViewJs
         catch { }
     }
 
+    ///<summary>Frames these vertices, and in 2D selects them, as a search's matches are: what an algorithm found, a path or a vertex of its top list.</summary>
+    public async Task FocusAsync(IEnumerable<string> ids)
+    {
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(ids ?? []);
+
+            if (Is2d)
+                await _js.InvokeVoidAsync("focusCytoscapeNodes", json);
+            else if (Is3d)
+                await _js.InvokeVoidAsync("graph3DInterop.focusNodes", json);
+        }
+        catch { }
+    }
+
     ///<summary>Applies the label filter (a JSON array of the hidden vertex type-labels).</summary>
     public async Task SetLabelFilterAsync(string hiddenLabelsJson)
     {
@@ -99,6 +114,44 @@ public class GraphViewJs
                 await _js.InvokeVoidAsync("graph3DInterop.applyLabelStyles", stylesJson);
         }
         catch { }
+    }
+
+    ///<summary>
+    ///Gives a label's vertices on the 2D canvas their details cards, or takes them away, where they stand, vertices with
+    ///their own gdbvDetails aside. False where there is no 2D graph to change, so the caller draws the graph instead.
+    ///</summary>
+    public async Task<bool> SetLabelDetails2dAsync(string label, bool on)
+    {
+        if (!Is2d)
+            return false;
+
+        try
+        {
+            return await _js.InvokeAsync<bool>("setCytoscapeLabelDetails", label, on);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    ///<summary>
+    ///Gives a label's nodes on the 2D canvas a new shape where they stand, nodes with a shape of their own aside. False
+    ///where there is no 2D graph to change, so the caller draws the graph instead.
+    ///</summary>
+    public async Task<bool> SetLabelShape2dAsync(string label, string shape)
+    {
+        if (!Is2d)
+            return false;
+
+        try
+        {
+            return await _js.InvokeAsync<bool>("setCytoscapeLabelShape", label, shape ?? "");
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     ///<summary>Switches the 2D Cytoscape layout on the already-drawn graph.</summary>
@@ -160,6 +213,25 @@ public class GraphViewJs
         catch { }
     }
 
+    ///<summary>
+    ///Where the Map and the Globe take their earth from: null for the built-in images, or { template, key } for a tile
+    ///server (MapTilesPreference). Told to both views, as the style is.
+    ///</summary>
+    public async Task SetMapTilesAsync(object source)
+    {
+        try
+        {
+            await _js.InvokeVoidAsync("setCytoscapeMapTiles", source);
+        }
+        catch { }
+
+        try
+        {
+            await _js.InvokeVoidAsync("graph3DInterop.setGlobeTiles", source);
+        }
+        catch { }
+    }
+
     ///<summary>Toggles always-on vertex/edge labels and the shown-properties overlay in the 3D view.</summary>
     public async Task Set3dLabelVisibilityAsync(bool vertexLabels, bool edgeLabels, bool props)
     {
@@ -186,6 +258,22 @@ public class GraphViewJs
         try
         {
             await _js.InvokeVoidAsync("graph3DInterop.setNodeDrawDistance", percent);
+        }
+        catch { }
+    }
+
+    ///<summary>Sets Node size on map (a percentage, 100 the plain size) on the Map and the Globe alike.</summary>
+    public async Task SetMapNodeSizeAsync(int percent)
+    {
+        try
+        {
+            await _js.InvokeVoidAsync("setCytoscapeMapNodeSize", percent);
+        }
+        catch { }
+
+        try
+        {
+            await _js.InvokeVoidAsync("graph3DInterop.setGlobeNodeSize", percent);
         }
         catch { }
     }
@@ -217,6 +305,24 @@ public class GraphViewJs
                 await _js.InvokeVoidAsync("graph3DInterop.applyPositions", positionsJson);
         }
         catch { }
+    }
+
+    ///<summary>
+    ///The live view as a PNG data URL no longer than <paramref name="most"/> pixels a side, for Ask AI's picture tool
+    ///(<see cref="GraphPictureRunner"/>), or null.
+    ///</summary>
+    public async Task<string> PictureAsync(int most)
+    {
+        try
+        {
+            if (Is2d)
+                return await _js.InvokeAsync<string>("cytoscapePicture", most);
+            else if (Is3d)
+                return await _js.InvokeAsync<string>("shrinkPicture", await _js.InvokeAsync<string>("graph3DInterop.image", "png"), most);
+        }
+        catch { }
+
+        return null;
     }
 
     ///<summary>Captures the live view as an image data-URL in the given format (png/jpeg), or null.</summary>

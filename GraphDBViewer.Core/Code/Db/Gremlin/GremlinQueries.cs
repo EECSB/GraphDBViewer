@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 
 namespace GraphDBViewerWeb.Code;
@@ -12,19 +13,37 @@ public static class GremlinQueryBuilder
 {
     //── Low-level helpers ───────────────────────────────────────────────
 
-    ///<summary>Escapes a value for use inside a single-quoted Gremlin string literal.</summary>
+    ///<summary>
+    ///Escapes a value for use inside a single-quoted Gremlin string literal: the backslash, the quote, and the
+    ///line breaks. A single-quoted Groovy string cannot hold a raw line break, and until 2026-09-15 Gremlin Server
+    ///refused every value that had one — <c>Unexpected character</c> — so a description written on two lines, or a
+    ///list of options one to a line, never reached the graph.
+    ///</summary>
     public static string Escape(string value)
     {
-        return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "\\'");
+        return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "\\r").Replace("\n", "\\n");
     }
 
-    ///<summary>Numeric IDs are emitted bare; everything else is single-quoted and escaped.</summary>
+    ///<summary>Numeric IDs are emitted bare (see <see cref="IsPlainNumber"/>); everything else is single-quoted and escaped.</summary>
     public static string FormatId(string id)
     {
-        if (long.TryParse(id, out _))
+        if (IsPlainNumber(id))
             return id;
         else
             return $"'{Escape(id)}'";
+    }
+
+    ///<summary>
+    ///Whether an id is digits in the form a number is written in: an optional minus, and no leading zero, plus or
+    ///space. Only such an id is written bare, by every formatter of ids here. Anything else bare reads as another
+    ///number or as none: Groovy takes 007 for the octal 7, another element's id, and 08 for no number at all, and
+    ///+5 or " 5" for 5, where each is a string id of its own. Until 2026-10-03 any text a long would parse from was
+    ///written bare.
+    ///</summary>
+    public static bool IsPlainNumber(string id)
+    {
+        return long.TryParse(id, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var number)
+            && number.ToString(CultureInfo.InvariantCulture) == id;
     }
 
     ///<summary>
@@ -32,18 +51,23 @@ public static class GremlinQueryBuilder
     ///Gremlin is type-strict on edge ids: an edge whose id is a Long must be written g.E(123L) — a
     ///bare 123 is an Integer and matches nothing. Int32 ids stay bare; unknown / non-numeric types
     ///fall back to the type-less heuristic (bare number, else quoted string). Vertex lookups are
-    ///lenient about numeric width, so this mainly matters for edges.
+    ///lenient about numeric width, so this mainly matters for edges. A typed id is the number its type
+    ///says, so it is written as that number is, whatever text it came as: 010L would be the octal 8.
     ///</summary>
     public static string FormatId(string id, string graphSonType)
     {
         if (id == null)
             return FormatId(id);
 
-        if ((graphSonType == "g:Int64" || graphSonType == "g:Long") && long.TryParse(id, out _))
-            return id + "L";
+        if (long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+        {
+            var digits = number.ToString(CultureInfo.InvariantCulture);
 
-        if ((graphSonType == "g:Int32" || graphSonType == "g:Integer") && long.TryParse(id, out _))
-            return id;
+            if (graphSonType == "g:Int64" || graphSonType == "g:Long")
+                return digits + "L";
+            else if (graphSonType == "g:Int32" || graphSonType == "g:Integer")
+                return digits;
+        }
 
         return FormatId(id);
     }
@@ -214,6 +238,24 @@ g.E().properties({keys}).drop()";
     }
 
     ///<summary>
+    ///Vertices of one label carrying one of these names — what a generated entity is matched against so a
+    ///second Acme is not written beside the one the graph already has. One request for the whole label, so
+    ///a hundred generated entities are a handful of queries rather than a hundred.
+    ///
+    ///The names go as one Groovy list, as <see cref="TinkerPopAlgorithms.IdFilter"/>'s ids do, and not an argument each:
+    ///on the development JanusGraph a call with 254 names was refused, "too many arguments" (2026-10-23), where a list of
+    ///a thousand ran. The ceiling a list meets is the index's, 1,024 clauses: 2,500 names were refused with
+    ///"maxClauseCount is set to 1024". The knowledge-graph modal, the one caller, asks for at most
+    ///<see cref="KgGraphParser.MaxNodes"/> names, a hundred.
+    ///</summary>
+    public static string VerticesByName(string label, IEnumerable<string> names, int limit)
+    {
+        var quoted = string.Join(", ", names.Select(name => $"'{Escape(name)}'"));
+
+        return $"g.V().hasLabel('{Escape(label)}').has('name', within([{quoted}])).limit({limit})";
+    }
+
+    ///<summary>
     ///Full visualization payload: every vertex (including isolated, edgeless ones)
     ///followed by every edge. The earlier bothE()-based traversal silently dropped
     ///vertices with no edges; folding the vertices and unioning their out-edges keeps them.
@@ -227,8 +269,10 @@ g.E().properties({keys}).drop()";
             return "g.V().fold().union(__.unfold(), __.unfold().outE())";
     }
 
-    ///<summary>A vertex's incident edges and neighbor vertices — used for incremental (double-click) expansion.</summary>
-    ///<summary>A node's incident edges and neighbor vertices, capped at `limit` edges (limit ≤ 0 = uncapped).</summary>
+    ///<summary>
+    ///A vertex's incident edges and neighbor vertices, for incremental (double-click) expansion, capped at `limit` edges
+    ///(limit ≤ 0 = uncapped).
+    ///</summary>
     public static string Neighbors(string id, int limit)
     {
         if (limit <= 0)
@@ -303,7 +347,8 @@ public class GremlinStep
 ///<summary>
 ///Splits a Gremlin traversal into its top-level steps (respecting string literals and nested
 ///parentheses) so the debugger can run growing prefixes of the query. Pure and unit-tested; also
-///reports whether a query mutates the graph (so the debugger can refuse to run those steps).
+///reports whether a query may change the graph (so the debugger can refuse to run those steps), by
+///<see cref="GremlinReading"/>'s grammar rather than this splitting, which knows only Gremlin's two quotes.
 ///</summary>
 public static class GremlinStepParser
 {
@@ -318,16 +363,30 @@ public static class GremlinStepParser
     };
 
     ///<summary>
-    ///The steps that change a graph. The six traversal ones are the obvious half; the other four are
-    ///the half that had been missing, and each is a real write nothing warned about: an element handed
-    ///to Groovy answers <c>remove()</c>, <c>graph</c> itself answers <c>addVertex</c> and
-    ///<c>addEdge</c>, and <c>io()</c> reads a file into the graph or writes the server one.
+    ///The steps that take a traversal as an argument, whose arguments written as a call are sub-traversals:
+    ///<c>where(out('x'))</c> is <c>where(__.out('x'))</c> written as Groovy lets it be. A call anywhere else is a value or
+    ///a predicate, as in <c>has('age', gt(5))</c>.
     ///</summary>
-    private static readonly HashSet<string> Mutating = new()
+    private static readonly HashSet<string> TakesTraversals = new()
     {
-        "addV", "addE", "drop", "property", "mergeV", "mergeE",
-        "remove", "addVertex", "addEdge", "io"
+        "where", "filter", "not", "and", "or", "union", "coalesce", "choose", "optional", "repeat", "until", "emit",
+        "local", "map", "flatMap", "sideEffect", "branch", "by", "option", "match"
     };
+
+    ///<summary>P's and TextP's predicates, which read like calls when written bare and are never traversals.</summary>
+    private static readonly HashSet<string> Predicates = new()
+    {
+        "eq", "neq", "lt", "lte", "gt", "gte", "inside", "outside", "between", "within", "without",
+        "containing", "notContaining", "startingWith", "notStartingWith", "endingWith", "notEndingWith", "regex", "notRegex"
+    };
+
+    ///<summary>Which arguments a tree descends into: those written with <c>__</c>, any call besides, or a call where a traversal goes.</summary>
+    private enum Descend
+    {
+        Anonymous,
+        Calls,
+        Traversals
+    }
 
     ///<summary>Splits a traversal into top-level steps, each tagged with its role and character range.</summary>
     public static List<GremlinStep> Parse(string query)
@@ -357,6 +416,27 @@ public static class GremlinStepParser
         {
             char c = query[i];
 
+            //A comment, Groovy's, passed over as the read guard passes it (2026-11-07): no step starts in one, and a
+            //leading one is not the first step's text. One that never closes runs to the end.
+            if (!inString && c == '/' && i + 1 < end && query[i + 1] == '/')
+            {
+                while (i < end && query[i] != '\n' && query[i] != '\r')
+                    i++;
+
+                continue;
+            }
+            else if (!inString && c == '/' && i + 1 < end && query[i + 1] == '*')
+            {
+                int close = query.IndexOf("*/", i + 2, System.StringComparison.Ordinal);
+
+                if (close < 0 || close + 1 >= end)
+                    i = end;
+                else
+                    i = close + 1;
+
+                continue;
+            }
+
             if (tokenStart < 0 && !char.IsWhiteSpace(c))
                 tokenStart = i;
 
@@ -378,8 +458,7 @@ public static class GremlinStepParser
                 stringChar = c;
                 continue;
             }
-
-            if (c == '(' || c == '[' || c == '{')
+            else if (c == '(' || c == '[' || c == '{')
                 depth++;
             else if (c == ')' || c == ']' || c == '}')
                 depth--;
@@ -403,15 +482,46 @@ public static class GremlinStepParser
     ///</summary>
     public static List<GremlinStep> ParseTree(string query)
     {
+        return ParseTree(query, false);
+    }
+
+    ///<summary>
+    ///The same, and with <paramref name="bare"/> also recursing into an argument written without <c>__</c> that
+    ///begins with a call — the <c>V().has('name', 'b')</c> in <c>where(V().has('name', 'b'))</c>, which Groovy runs as
+    ///<c>__.V()</c>. A bare predicate (<c>gt(5)</c>, <c>within('a')</c>) reads the same way and comes back as a
+    ///one-step sub-traversal, which is why the debugger does not ask for it: it is for a caller looking for
+    ///particular steps at any depth, such as the instance graph's time limit.
+    ///</summary>
+    public static List<GremlinStep> ParseTree(string query, bool bare)
+    {
+        if (bare)
+            return Tree(query, Descend.Calls);
+
+        return Tree(query, Descend.Anonymous);
+    }
+
+    ///<summary>
+    ///The tree the debugger steps through: the <c>__</c> sub-traversals, and those written without it where a step takes a
+    ///traversal, <c>where(out('created'))</c>, <c>repeat(out()).until(has('name', 'x'))</c>, <c>choose(hasLabel('a'),
+    ///out(), in())</c>, as Groovy reads them. A predicate is not one, <c>gt(5)</c> or <c>within('a')</c>, and neither is a
+    ///call inside a step that takes values, so <c>has('age', not(within(1)))</c> has no sub-traversal to step into.
+    ///</summary>
+    public static List<GremlinStep> ParseDebugTree(string query)
+    {
+        return Tree(query, Descend.Traversals);
+    }
+
+    private static List<GremlinStep> Tree(string query, Descend descend)
+    {
         var result = new List<GremlinStep>();
 
         if (!string.IsNullOrWhiteSpace(query))
-            ParseTreeRange(query, 0, query.Length, 0, result);
+            ParseTreeRange(query, 0, query.Length, 0, descend, result);
 
         return result;
     }
 
-    private static void ParseTreeRange(string query, int start, int end, int depth, List<GremlinStep> result)
+    private static void ParseTreeRange(string query, int start, int end, int depth, Descend descend, List<GremlinStep> result)
     {
         var steps = SplitTopLevelSteps(query, start, end);
 
@@ -422,15 +532,16 @@ public static class GremlinStepParser
             step.Depth = depth;
             result.Add(step);
 
-            foreach (var range in SubTraversalRanges(query, step))
-                ParseTreeRange(query, range.Start, range.End, depth + 1, result);
+            foreach (var range in SubTraversalRanges(query, step, descend))
+                ParseTreeRange(query, range.Start, range.End, depth + 1, descend, result);
         }
     }
 
     //The absolute ranges of the __-prefixed sub-traversal arguments inside a step's parentheses — e.g. the
     //__.out() in where(__.out()), or each branch of and(__.a(), __.b()). Literals, predicates (P.gt(5)) and
-    //enums aren't sub-traversals, so only args that begin with "__" are returned.
-    private static List<(int Start, int End)> SubTraversalRanges(string query, GremlinStep step)
+    //enums aren't sub-traversals, so only args that begin with "__" are returned — and, when `bare`, args
+    //that begin with a call.
+    private static List<(int Start, int End)> SubTraversalRanges(string query, GremlinStep step, Descend descend)
     {
         var ranges = new List<(int Start, int End)>();
 
@@ -466,16 +577,13 @@ public static class GremlinStepParser
                 stringChar = c;
                 continue;
             }
-
-            if (c == '(' || c == '[' || c == '{')
-            {
+            else if (c == '(' || c == '[' || c == '{')
                 depth++;
-            }
             else if (c == ')' || c == ']' || c == '}')
             {
                 if (depth == 0)
                 {
-                    AddSubTraversal(query, argStart, i, ranges);
+                    AddSubTraversal(query, argStart, i, step, descend, ranges);
                     break;
                 }
 
@@ -483,7 +591,7 @@ public static class GremlinStepParser
             }
             else if (c == ',' && depth == 0)
             {
-                AddSubTraversal(query, argStart, i, ranges);
+                AddSubTraversal(query, argStart, i, step, descend, ranges);
                 argStart = i + 1;
             }
         }
@@ -520,8 +628,7 @@ public static class GremlinStepParser
                 stringChar = c;
                 continue;
             }
-
-            if (c == '(')
+            else if (c == '(')
                 return i;
         }
 
@@ -529,8 +636,10 @@ public static class GremlinStepParser
     }
 
     //Adds query[start..end) to `ranges` as a sub-traversal only when, once whitespace-trimmed, it begins
-    //with "__" (an anonymous sub-traversal — the reliably-detectable form).
-    private static void AddSubTraversal(string query, int start, int end, List<(int Start, int End)> ranges)
+    //with "__" (an anonymous sub-traversal — the reliably-detectable form); for Calls, with a name and its
+    //"(" (the same traversal written without the "__."); and for Traversals, with such a call inside a step
+    //that takes traversals, a predicate's name not being one.
+    private static void AddSubTraversal(string query, int start, int end, GremlinStep parent, Descend descend, List<(int Start, int End)> ranges)
     {
         int s = start;
         while (s < end && char.IsWhiteSpace(query[s]))
@@ -542,61 +651,44 @@ public static class GremlinStepParser
 
         if (e - s >= 2 && query[s] == '_' && query[s + 1] == '_')
             ranges.Add((s, e));
+        else if (descend == Descend.Calls && BeginsWithCall(query, s, e))
+            ranges.Add((s, e));
+        else if (descend == Descend.Traversals
+            && TakesTraversals.Contains(parent.Name)
+            && BeginsWithCall(query, s, e)
+            && !Predicates.Contains(StepName(query.Substring(s, e - s))))
+            ranges.Add((s, e));
     }
 
-    ///<summary>True when the query contains a graph-mutating step (see <see cref="Mutating"/>) outside a string.</summary>
-    public static bool IsMutating(string query)
+    //Whether query[start..end) opens with a name followed by "(" — out(...), V() — rather than a literal, a
+    //lambda, an enum or a qualified name such as P.gt(5).
+    private static bool BeginsWithCall(string query, int start, int end)
     {
-        if (string.IsNullOrEmpty(query))
+        if (start >= end || !char.IsLetter(query[start]))
             return false;
 
-        char stringChar = '\0';
-        bool inString = false;
-        bool escape = false;
+        int i = start;
+        while (i < end && (char.IsLetterOrDigit(query[i]) || query[i] == '_'))
+            i++;
 
-        for (int i = 0; i < query.Length; i++)
-        {
-            char c = query[i];
+        while (i < end && char.IsWhiteSpace(query[i]))
+            i++;
 
-            if (inString)
-            {
-                if (escape)
-                    escape = false;
-                else if (c == '\\')
-                    escape = true;
-                else if (c == stringChar)
-                    inString = false;
+        return i < end && query[i] == '(';
+    }
 
-                continue;
-            }
+    ///<summary>
+    ///True when the query is not shown to be a read: when <see cref="GremlinReading"/> refuses it, for a step that writes
+    ///or for anything it cannot read whole as one Gremlin traversal. Until 2026-10-23 this looked for a writing step's
+    ///name outside quoted text, which a comment, Groovy's other strings or a method of no step's name got past.
+    ///Nothing at all is not a write.
+    ///</summary>
+    public static bool IsMutating(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
 
-            if (c == '\'' || c == '"')
-            {
-                inString = true;
-                stringChar = c;
-                continue;
-            }
-
-            if (!char.IsLetter(c) && c != '_')
-                continue;
-
-            int j = i;
-            while (j < query.Length && (char.IsLetterOrDigit(query[j]) || query[j] == '_'))
-                j++;
-
-            var name = query.Substring(i, j - i);
-
-            int k = j;
-            while (k < query.Length && char.IsWhiteSpace(query[k]))
-                k++;
-
-            if (Mutating.Contains(name) && k < query.Length && query[k] == '(')
-                return true;
-
-            i = j - 1;
-        }
-
-        return false;
+        return GremlinReading.Refusal(query) != null;
     }
 
     private static GremlinStep MakeStep(string query, int start, int endExclusive)
@@ -692,13 +784,11 @@ public static class GremlinEditParser
         var statements = SplitStatements(buffer);
 
         for (int i = 0; i < statements.Count; i++)
-        {
             try
             {
                 ParseStatement(statements[i], i, edits);
             }
             catch { }
-        }
 
         return edits;
     }
@@ -709,14 +799,29 @@ public static class GremlinEditParser
     ///replaced by <paramref name="regeneratedLines"/>, while every other line — other elements, other keys,
     ///and non-property queries (adds / deletes / links) — is preserved. Lets property edits across several
     ///elements accumulate instead of overwriting one another, and drops a line for a reverted key.
+    ///
+    ///<strong>Read in the connection's own language</strong> (2026-10-05): <paramref name="parse"/> is the
+    ///connection's parser and <paramref name="language"/> its editor language, Gremlin's when neither is given. The
+    ///lines are written in that language, Cypher, AQL, DQL and GUN having builders of their own, and read with
+    ///Gremlin's parser alone none of theirs was recognized: each change put another line for the same key beside the
+    ///last, and a value put back left the earlier change staged.
+    ///
+    ///<strong>Staged elements followed</strong> (2026-10-05): a staged element's stand-in id is its statement's
+    ///position (<see cref="StagedIds"/>), and taking an element's line out and putting the new one at the end moved
+    ///every staged add after it, so a link staged against a new vertex named another statement, or none, and was lost
+    ///at commit. Whatever names a stand-in now follows it (<see cref="StagedIds.Renumbered"/>).
     ///</summary>
     public static string MergePropertyEdits(
         string existingBuffer,
         string elementType,
         string elementId,
         IEnumerable<string> touchedKeys,
-        IEnumerable<string> regeneratedLines)
+        IEnumerable<string> regeneratedLines,
+        Func<string, List<GraphEdit>> parse = null,
+        string language = null)
     {
+        parse ??= Parse;
+
         HashSet<string> keys;
         if (touchedKeys == null)
             keys = new HashSet<string>();
@@ -727,7 +832,7 @@ public static class GremlinEditParser
 
         var existing = (existingBuffer ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         foreach (var line in existing)
-            if (!IsPropertyEditFor(line, elementType, elementId, keys))
+            if (!IsPropertyEditFor(line, elementType, elementId, keys, parse))
                 result.Add(line);
 
         if (regeneratedLines != null)
@@ -735,13 +840,24 @@ public static class GremlinEditParser
                 if (!string.IsNullOrWhiteSpace(line))
                     result.Add(line);
 
-        return string.Join("\n", result);
+        return StagedIds.Renumbered(existingBuffer, string.Join("\n", result), language, parse);
     }
 
     //True when the statement is a set/drop-property op targeting the given element and one of the keys.
-    private static bool IsPropertyEditFor(string statement, string elementType, string elementId, HashSet<string> keys)
+    private static bool IsPropertyEditFor(string statement, string elementType, string elementId, HashSet<string> keys, Func<string, List<GraphEdit>> parse)
     {
-        foreach (var edit in Parse(statement))
+        List<GraphEdit> edits;
+
+        try
+        {
+            edits = parse(statement);
+        }
+        catch
+        {
+            return false;
+        }
+
+        foreach (var edit in edits)
             if ((edit.Kind == GraphEditKind.SetProperty || edit.Kind == GraphEditKind.DropProperty)
                 && edit.Type == elementType
                 && edit.Id == elementId
@@ -763,6 +879,7 @@ public static class GremlinEditParser
         string elementType = null;//"node" / "edge" — the V(id)/E(id) currently targeted
         string elementId = null;
         GraphEdit pendingAdd = null;//an addV/addE being built up on this line
+        string addEdgeVertex = null;//the vertex an addE was called on, the end Gremlin takes for one it is not given
         string pendingDropKey = null;//set by .properties('k'), consumed by the next .drop()
 
         foreach (var step in steps)
@@ -801,6 +918,7 @@ public static class GremlinEditParser
                 if (elementType == "node")
                     source = elementId;
 
+                addEdgeVertex = source;
                 pendingAdd = new GraphEdit { Kind = GraphEditKind.AddEdge, Type = "edge", Id = StagedIds.ForEdge(lineIndex), Label = label, Source = source };
                 edits.Add(pendingAdd);
             }
@@ -841,21 +959,24 @@ public static class GremlinEditParser
                     pendingDropKey = StripQuotes(args[0]);
             }
             else if (name == "drop")
-            {
                 if (pendingDropKey != null && elementId != null)
                 {
                     edits.Add(new GraphEdit { Kind = GraphEditKind.DropProperty, Type = elementType, Id = elementId, Key = pendingDropKey });
                     pendingDropKey = null;
                 }
                 else if (elementId != null && pendingAdd == null)
-                {
                     if (elementType == "node")
                         edits.Add(new GraphEdit { Kind = GraphEditKind.RemoveNode, Type = "node", Id = elementId });
                     else
                         edits.Add(new GraphEdit { Kind = GraphEditKind.RemoveEdge, Type = "edge", Id = elementId });
-                }
-            }
         }
+
+        //An addE with no to() ends at the vertex it was called on: Gremlin takes the traverser's vertex for an end it is
+        //not given, so the edge it will make is a loop on that vertex, and the preview draws the edge it will make. One
+        //called on no vertex (g.addE) has no end to take, and keeps none. Until 2026-11-07 the loop was the canvases'
+        //own fallback for any edge naming one end, which draws nothing now.
+        if (pendingAdd is { Kind: GraphEditKind.AddEdge, Target: null } && addEdgeVertex != null)
+            pendingAdd.Target = addEdgeVertex;
     }
 
     //Splits the buffer into individual traversals on top-level newlines and semicolons (respecting
@@ -1085,28 +1206,11 @@ public static class GremlinEditParser
         return StripQuotes(trimmed);
     }
 
+    //Reverses GremlinQueryBuilder.Escape. Until 2026-09-18 this dropped every backslash and kept the
+    //character after it, so the \n the builder had written since 2026-09-15 came back as the letter n.
     private static string Unescape(string s)
     {
-        var sb = new StringBuilder(s.Length);
-        bool escape = false;
-
-        foreach (char c in s)
-        {
-            if (escape)
-            {
-                sb.Append(c);
-                escape = false;
-            }
-            else if (c == '\\')
-                escape = true;
-            else
-                sb.Append(c);
-        }
-
-        if (escape)
-            sb.Append('\\');
-
-        return sb.ToString();
+        return StagedLiteral.Unescape(s);
     }
 }
 
@@ -1234,26 +1338,27 @@ public static class GremlinExamples
     ///Eighteen cities — Europe, the United States, East Asia, Sydney — with their coordinates under the
     ///plain <c>lat</c> / <c>lon</c> names the Map and Globe read by convention, joined by routes — and
     ///returned as a graph, so one click on Map or Globe after running it shows the routes arcing over the
-    ///earth. One statement per line: the Gremlin server runs the script whole.
+    ///earth. One statement per line: the Gremlin server runs the script whole. Each coordinate carries Groovy's d, a
+    ///double: a bare decimal is a BigDecimal, which JanusGraph does not take (2026-11-07).
     ///</summary>
-    public const string GeoMapLoader = @"def vie=g.addV('City').property('name','Vienna').property('country','Austria').property('lat',48.2082).property('lon',16.3738).property('exampleType','geo_example_1').next()
-def lhr=g.addV('City').property('name','London').property('country','United Kingdom').property('lat',51.5074).property('lon',-0.1278).property('exampleType','geo_example_1').next()
-def par=g.addV('City').property('name','Paris').property('country','France').property('lat',48.8566).property('lon',2.3522).property('exampleType','geo_example_1').next()
-def ber=g.addV('City').property('name','Berlin').property('country','Germany').property('lat',52.5200).property('lon',13.4050).property('exampleType','geo_example_1').next()
-def ams=g.addV('City').property('name','Amsterdam').property('country','Netherlands').property('lat',52.3676).property('lon',4.9041).property('exampleType','geo_example_1').next()
-def mad=g.addV('City').property('name','Madrid').property('country','Spain').property('lat',40.4168).property('lon',-3.7038).property('exampleType','geo_example_1').next()
-def rom=g.addV('City').property('name','Rome').property('country','Italy').property('lat',41.9028).property('lon',12.4964).property('exampleType','geo_example_1').next()
-def rkv=g.addV('City').property('name','Reykjavik').property('country','Iceland').property('lat',64.1466).property('lon',-21.9426).property('exampleType','geo_example_1').next()
-def nyc=g.addV('City').property('name','New York').property('country','United States').property('lat',40.7128).property('lon',-74.0060).property('exampleType','geo_example_1').next()
-def chi=g.addV('City').property('name','Chicago').property('country','United States').property('lat',41.8781).property('lon',-87.6298).property('exampleType','geo_example_1').next()
-def dfw=g.addV('City').property('name','Dallas').property('country','United States').property('lat',32.7767).property('lon',-96.7970).property('exampleType','geo_example_1').next()
-def mia=g.addV('City').property('name','Miami').property('country','United States').property('lat',25.7617).property('lon',-80.1918).property('exampleType','geo_example_1').next()
-def sea=g.addV('City').property('name','Seattle').property('country','United States').property('lat',47.6062).property('lon',-122.3321).property('exampleType','geo_example_1').next()
-def sfo=g.addV('City').property('name','San Francisco').property('country','United States').property('lat',37.7749).property('lon',-122.4194).property('exampleType','geo_example_1').next()
-def lax=g.addV('City').property('name','Los Angeles').property('country','United States').property('lat',34.0522).property('lon',-118.2437).property('exampleType','geo_example_1').next()
-def tyo=g.addV('City').property('name','Tokyo').property('country','Japan').property('lat',35.6762).property('lon',139.6503).property('exampleType','geo_example_1').next()
-def sel=g.addV('City').property('name','Seoul').property('country','South Korea').property('lat',37.5665).property('lon',126.9780).property('exampleType','geo_example_1').next()
-def syd=g.addV('City').property('name','Sydney').property('country','Australia').property('lat',-33.8688).property('lon',151.2093).property('exampleType','geo_example_1').next()
+    public const string GeoMapLoader = @"def vie=g.addV('City').property('name','Vienna').property('country','Austria').property('lat',48.2082d).property('lon',16.3738d).property('exampleType','geo_example_1').next()
+def lhr=g.addV('City').property('name','London').property('country','United Kingdom').property('lat',51.5074d).property('lon',-0.1278d).property('exampleType','geo_example_1').next()
+def par=g.addV('City').property('name','Paris').property('country','France').property('lat',48.8566d).property('lon',2.3522d).property('exampleType','geo_example_1').next()
+def ber=g.addV('City').property('name','Berlin').property('country','Germany').property('lat',52.5200d).property('lon',13.4050d).property('exampleType','geo_example_1').next()
+def ams=g.addV('City').property('name','Amsterdam').property('country','Netherlands').property('lat',52.3676d).property('lon',4.9041d).property('exampleType','geo_example_1').next()
+def mad=g.addV('City').property('name','Madrid').property('country','Spain').property('lat',40.4168d).property('lon',-3.7038d).property('exampleType','geo_example_1').next()
+def rom=g.addV('City').property('name','Rome').property('country','Italy').property('lat',41.9028d).property('lon',12.4964d).property('exampleType','geo_example_1').next()
+def rkv=g.addV('City').property('name','Reykjavik').property('country','Iceland').property('lat',64.1466d).property('lon',-21.9426d).property('exampleType','geo_example_1').next()
+def nyc=g.addV('City').property('name','New York').property('country','United States').property('lat',40.7128d).property('lon',-74.0060d).property('exampleType','geo_example_1').next()
+def chi=g.addV('City').property('name','Chicago').property('country','United States').property('lat',41.8781d).property('lon',-87.6298d).property('exampleType','geo_example_1').next()
+def dfw=g.addV('City').property('name','Dallas').property('country','United States').property('lat',32.7767d).property('lon',-96.7970d).property('exampleType','geo_example_1').next()
+def mia=g.addV('City').property('name','Miami').property('country','United States').property('lat',25.7617d).property('lon',-80.1918d).property('exampleType','geo_example_1').next()
+def sea=g.addV('City').property('name','Seattle').property('country','United States').property('lat',47.6062d).property('lon',-122.3321d).property('exampleType','geo_example_1').next()
+def sfo=g.addV('City').property('name','San Francisco').property('country','United States').property('lat',37.7749d).property('lon',-122.4194d).property('exampleType','geo_example_1').next()
+def lax=g.addV('City').property('name','Los Angeles').property('country','United States').property('lat',34.0522d).property('lon',-118.2437d).property('exampleType','geo_example_1').next()
+def tyo=g.addV('City').property('name','Tokyo').property('country','Japan').property('lat',35.6762d).property('lon',139.6503d).property('exampleType','geo_example_1').next()
+def sel=g.addV('City').property('name','Seoul').property('country','South Korea').property('lat',37.5665d).property('lon',126.9780d).property('exampleType','geo_example_1').next()
+def syd=g.addV('City').property('name','Sydney').property('country','Australia').property('lat',-33.8688d).property('lon',151.2093d).property('exampleType','geo_example_1').next()
 g.addE('route').from(vie).to(lhr).property('exampleType','geo_example_1').iterate()
 g.addE('route').from(vie).to(par).property('exampleType','geo_example_1').iterate()
 g.addE('route').from(vie).to(ber).property('exampleType','geo_example_1').iterate()

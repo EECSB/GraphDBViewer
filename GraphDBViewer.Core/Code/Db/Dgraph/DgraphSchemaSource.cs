@@ -53,12 +53,36 @@ public sealed class DgraphSchemaSource : IGraphSchemaSource
             return new SchemaReadResult { HasErrors = true };
 
         var counts = await ReadTypeCountsAsync(db, read.Schema, cancellationToken);
+        var vocabulary = SchemaBuilder.ExtractVocabulary(counts, EdgeCounts(read.Schema), TypeKeys(read.Schema));
+
+        vocabulary.PropertyKeys = PropertyKeys(read.Schema);
 
         return new SchemaReadResult
         {
-            Vocabulary = SchemaBuilder.ExtractVocabulary(counts, EdgeCounts(read.Schema), TypeKeys(read.Schema)),
+            Vocabulary = vocabulary,
             HasErrors = false
         };
+    }
+
+    ///<summary>
+    ///Every predicate holding values, whether a type declares it or not. A declaration is the tidy case, and
+    ///Dgraph does not insist on one: a mutation that names a new predicate creates it, and a node carries
+    ///whatever it was given. The viewer's own import is that case, each node's label written as its
+    ///<c>dgraph.type</c> and no type declared, so asking only for declared fields reloaded an imported graph
+    ///as bare nodes and edges. These are what the query builder asks every node for.
+    ///</summary>
+    public static List<string> PropertyKeys(DgraphSchema schema)
+    {
+        var keys = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (var fields in TypeKeys(schema).Values)
+            foreach (var field in fields)
+                keys.Add(field);
+
+        foreach (var predicate in schema.ScalarPredicates)
+            keys.Add(predicate);
+
+        return keys.ToList();
     }
 
     public async Task<string> BuildSchemaGraphJsonAsync(IGraphDb db, CancellationToken cancellationToken = default)

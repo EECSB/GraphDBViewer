@@ -124,6 +124,140 @@ window.floatingDialog = (function () {
         panel.style.zIndex = topZ;
     }
 
+    //The class a box that takes files wears while one is held over it: the whole of the highlight.
+    const dropOverClass = 'gdbv-drop-over';
+
+    let fileDropStarted = false;
+
+    //Whether a drag carries files at all. A drag inside the page, a text selection or a link, has types of its own and
+    //goes on doing what it did before. types is a DOMStringList in older browsers rather than an array.
+    function carriesFiles(e) {
+        const carrying = e.dataTransfer;
+
+        if (carrying == null || carrying.types == null)
+            return false;
+
+        return Array.prototype.indexOf.call(carrying.types, 'Files') >= 0;
+    }
+
+    //Whether Blazor's own listener is on an InputFile yet: a change dispatched before it is carries no files, and C#
+    //takes the silent return a canceled dialog takes. _blazorInputFileNextFileId is InputFile's own, an internal detail
+    //to check again on a framework upgrade (GDS Viewer's note; there in .NET 10).
+    function inputReady(input) {
+        return input != null && !input.disabled && input._blazorInputFileNextFileId !== undefined;
+    }
+
+    //Files handed to an InputFile as if they had been chosen in its dialog, so the component has one way in.
+    function handFiles(input, files) {
+        input.files = files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function clearDropHighlight() {
+        document.querySelectorAll('.' + dropOverClass).forEach(function (lit) {
+            lit.classList.remove(dropOverClass);
+        });
+    }
+
+    //What a drag event is over, when it is an element that can be asked where it sits.
+    function dragTarget(e) {
+        const target = e.target;
+
+        if (target == null || typeof target.closest !== 'function')
+            return null;
+
+        return target;
+    }
+
+    //dragover rather than dragenter decides: the browser reads the answer to it throughout the drag, so preventing its
+    //default is what makes the drop possible, and it keeps saying where the pointer is, so the highlight goes off from
+    //where it goes on rather than from a dragleave that fires on every child boundary crossed.
+    function onFileDragOver(e) {
+        if (!carriesFiles(e))
+            return;
+
+        const target = dragTarget(e);
+
+        if (target == null)
+            return;
+
+        const zone = target.closest('[data-drop-into]');
+
+        if (zone == null) {
+            clearDropHighlight();
+
+            //A miss inside a window that takes files lands on nothing rather than on the browser's own file viewer,
+            //which would open in place of the page.
+            if (target.closest('[data-drop-guard]') != null) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'none';
+            }
+
+            return;
+        }
+
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+
+        if (!zone.classList.contains(dropOverClass)) {
+            clearDropHighlight();
+            zone.classList.add(dropOverClass);
+        }
+    }
+
+    //The drop: its files onto the input the zone names, and the input's own change event to carry them across.
+    function onFileDrop(e) {
+        if (!carriesFiles(e))
+            return;
+
+        const target = dragTarget(e);
+
+        if (target == null)
+            return;
+
+        const zone = target.closest('[data-drop-into]');
+
+        if (zone == null && target.closest('[data-drop-guard]') == null)
+            return;
+
+        e.preventDefault();
+        clearDropHighlight();
+
+        if (zone == null)
+            return;
+
+        const input = document.getElementById(zone.dataset.dropInto);
+        const files = e.dataTransfer.files;
+
+        if (!inputReady(input) || files == null || files.length === 0)
+            return;
+
+        handFiles(input, files);
+    }
+
+    //Delegated from the document, once, so a window drawn again keeps taking files: a listener on the element there was
+    //at the start would be on one that is gone. Only a zone or a guard is answered; a drop anywhere else on the page is
+    //left as it was, the knowledge-graph window's own file box among it.
+    function startFileDrop() {
+        if (fileDropStarted)
+            return;
+
+        fileDropStarted = true;
+
+        document.addEventListener('dragover', onFileDragOver);
+        document.addEventListener('drop', onFileDrop);
+
+        //The drag leaving the window, which no dragover reports: relatedTarget is null then, and an element when it has
+        //only moved within the page.
+        document.addEventListener('dragleave', function (e) {
+            if (e.relatedTarget == null)
+                clearDropHighlight();
+        });
+
+        //A drag given up with Escape, which fires neither.
+        document.addEventListener('dragend', clearDropHighlight);
+    }
+
     return {
         //Called once per dialog, when it first appears. Safe to call again: the second call only
         //re-clamps, so a panel reopened after the window shrank comes back on screen.
@@ -143,8 +277,9 @@ window.floatingDialog = (function () {
 
             if (saved) {
                 //A geometry restored without a size is one whose stored size was rejected above; leaving
-                //the width and height alone keeps the default the markup set.
-                if (saved.width && saved.height) {
+                //the width and height alone keeps the default the markup set. A window with no grip keeps
+                //them too: it is the size its content asks for, not one it was dragged to.
+                if (grip && saved.width && saved.height) {
                     panel.style.width = saved.width + 'px';
                     panel.style.height = saved.height + 'px';
                 }
@@ -194,7 +329,7 @@ window.floatingDialog = (function () {
                 ev.preventDefault();
             });
 
-            if (grip) {
+            if (grip)
                 grip.addEventListener('pointerdown', (ev) => {
                     if (ev.button !== 0)
                         return;
@@ -229,7 +364,6 @@ window.floatingDialog = (function () {
                     ev.preventDefault();
                     ev.stopPropagation();
                 });
-            }
 
             //A window can also be resized by something other than the grip — a zoom, a rotated phone —
             //so what it settles at is watched rather than only recorded at the end of a drag.
@@ -256,6 +390,15 @@ window.floatingDialog = (function () {
                 return;
 
             el.addEventListener('keydown', function (e) {
+                //While the slash commands' list is up, its keys move through it rather than the caret and the focus
+                //(2026-11-01, as GDS Viewer's): the box says so on data-slash-menu.
+                if (el.dataset.slashMenu === 'open' && !e.isComposing
+                    && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Tab' || e.key === 'Escape')) {
+                    e.preventDefault();
+
+                    return;
+                }
+
                 //isComposing: an IME is mid-word, where Enter picks a candidate rather than sending.
                 if (e.key !== 'Enter' || e.shiftKey || e.isComposing)
                     return;
@@ -303,6 +446,178 @@ window.floatingDialog = (function () {
                 return;
 
             el.scrollTop = el.scrollHeight;
+        },
+
+        //Files for Ask AI's next question (2026-11-02, GDS Viewer's): pasted into its box, they go to the paperclip's
+        //input as if chosen there, and dropped on anything marked data-drop-into they go to the input it names (see
+        //startFileDrop). A pasted screenshot arrives called image.png every time, so it is named for when it was pasted;
+        //a paste that also has text on the clipboard pastes the text, since cells copied out of Excel come with a
+        //picture of themselves.
+        attachFiles: function (box, inputId) {
+            startFileDrop();
+
+            if (!box || box.gdbvFiles)
+                return;
+
+            box.gdbvFiles = true;
+
+            box.addEventListener('paste', function (e) {
+                const data = e.clipboardData;
+
+                if (!data || !data.files || data.files.length === 0)
+                    return;
+
+                if (data.getData('text/plain'))
+                    return;
+
+                const input = document.getElementById(inputId);
+
+                if (!inputReady(input))
+                    return;
+
+                const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+                const transfer = new DataTransfer();
+
+                Array.from(data.files).forEach(function (file, index) {
+                    let named = file;
+
+                    if (/^image\.\w+$/.test(file.name)) {
+                        let suffix = '';
+
+                        if (index > 0)
+                            suffix = '-' + (index + 1);
+
+                        named = new File([file], 'pasted-' + stamp + suffix + '.' + file.name.split('.').pop(), { type: file.type });
+                    }
+
+                    transfer.items.add(named);
+                });
+
+                e.preventDefault();
+
+                handFiles(input, transfer.files);
+            });
+        },
+
+        //Files handed to the InputFile named as a paste hands them, for Ask AI's camera and screenshot (CameraInterop.js),
+        //so a picture taken there meets every check a chosen one does. False while the input is not there or not ready.
+        giveFiles: function (inputId, files) {
+            const input = document.getElementById(inputId);
+
+            if (!inputReady(input))
+                return false;
+
+            handFiles(input, files);
+
+            return true;
+        },
+
+        //The dividers between Ask AI's conversation and its panels, the chats on its left and the files on its right
+        //(2026-11-02, GDS Viewer's attachSplits): dragging one sizes its panel, kept in this browser for the next visit.
+        //The width is a custom property on the row rather than a style on the panel, which Blazor takes away and puts back
+        //as it is collapsed and opened: the row stays, and so does what is set on it. A divider is there only while its
+        //panel is.
+        attachSplits: function (row) {
+            if (!row || row.gdbvSplits)
+                return;
+
+            row.gdbvSplits = true;
+
+            const panels = { chats: '.gdbv-ai-chats', files: '.gdbv-ai-files' };
+
+            Object.keys(panels).forEach(function (name) {
+                let kept = null;
+
+                try {
+                    kept = localStorage.getItem(storePrefix + 'ai-panel-' + name);
+                }
+                catch (e) { }
+
+                if (kept && /^\d+$/.test(kept))
+                    row.style.setProperty('--gdbv-ai-' + name + '-width', kept + 'px');
+            });
+
+            row.addEventListener('pointerdown', function (e) {
+                const split = e.target.closest('.gdbv-ai-split');
+
+                if (!split || !row.contains(split) || e.button !== 0)
+                    return;
+
+                const name = split.dataset.split;
+                const panel = row.querySelector(panels[name]);
+
+                if (!panel)
+                    return;
+
+                e.preventDefault();
+
+                //The files are right of their divider, and grow as it goes left.
+                let sign = 1;
+
+                if (name === 'files')
+                    sign = -1;
+
+                const startX = e.clientX;
+                const startWidth = panel.getBoundingClientRect().width;
+                const most = Math.max(160, row.getBoundingClientRect().width * 0.6);
+                let width = startWidth;
+
+                split.setPointerCapture(e.pointerId);
+                split.classList.add('gdbv-ai-split-dragging');
+
+                function move(m) {
+                    width = Math.round(Math.max(120, Math.min(most, startWidth + (sign * (m.clientX - startX)))));
+                    row.style.setProperty('--gdbv-ai-' + name + '-width', width + 'px');
+                }
+
+                function done() {
+                    split.removeEventListener('pointermove', move);
+                    split.removeEventListener('pointerup', done);
+                    split.removeEventListener('pointercancel', done);
+                    split.classList.remove('gdbv-ai-split-dragging');
+
+                    try {
+                        localStorage.setItem(storePrefix + 'ai-panel-' + name, String(width));
+                    }
+                    catch (e) { }
+                }
+
+                split.addEventListener('pointermove', move);
+                split.addEventListener('pointerup', done);
+                split.addEventListener('pointercancel', done);
+            });
+        },
+
+        //A press anywhere but a menu in the window, or the button that opens it, tells the component to put that menu
+        //away (2026-11-01, GDS Viewer's registerBarMenu). The opener is not outside: pressing it is how the menu is
+        //asked for. Each menu found by its selector inside the window, since it is only on the page while it is open;
+        //registered again for the same window, the list is replaced rather than added to.
+        dismissOnOutsidePress: function (owner, panel, menus) {
+            if (!panel)
+                return;
+
+            panel.gdbvMenus = menus;
+
+            if (panel.gdbvMenuListener)
+                return;
+
+            panel.gdbvMenuListener = function (e) {
+                for (const one of panel.gdbvMenus || []) {
+                    const menu = panel.querySelector(one.menu);
+
+                    if (menu == null || menu.contains(e.target))
+                        continue;
+
+                    const opener = panel.querySelector(one.opener);
+
+                    if (opener != null && opener.contains(e.target))
+                        continue;
+
+                    owner.invokeMethodAsync(one.method).catch(function () { });
+                }
+            };
+
+            document.addEventListener('pointerdown', panel.gdbvMenuListener, true);
         },
 
         //Forgets a panel's remembered geometry, so it opens where a first-time one would.

@@ -21,20 +21,18 @@ public static class GraphWireText
     ///<summary>
     ///A JSON value as the viewer's string-keyed property maps hold it. Null stays null — a property that
     ///is absent and one that is null are the same thing to a graph — and anything that is not a scalar
-    ///keeps its JSON, which is the only lossless way to put an object in a string.
+    ///keeps its JSON, which is the only lossless way to put an object in a string. A number keeps its exact
+    ///text, so a Long picks up no decimal point. Neo4j's converter kept a copy of its own until 2026-11-07.
     ///</summary>
     public static string Stringify(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.String)
             return value.GetString();
-
-        if (value.ValueKind == JsonValueKind.Null)
+        else if (value.ValueKind == JsonValueKind.Null)
             return null;
-
-        if (value.ValueKind == JsonValueKind.True)
+        else if (value.ValueKind == JsonValueKind.True)
             return "true";
-
-        if (value.ValueKind == JsonValueKind.False)
+        else if (value.ValueKind == JsonValueKind.False)
             return "false";
 
         return value.GetRawText();
@@ -68,7 +66,10 @@ public static class GraphWireText
     ///<summary>
     ///Reads such an id back into its triple, or returns false when it is not one. Read from the right, so
     ///a source containing a dash still parses; a <i>label</i> containing one would not, which is the price
-    ///of an id that stays readable.
+    ///of an id that stays readable. A target containing an arrow (a GUN soul can) parses too: an arrow
+    ///whose label would begin with <c>&gt;</c>, the dash before it being another arrow's, is the target's
+    ///own, and the edge's is further left. A target with a dash before its own arrow (<c>x-y-&gt;z</c>)
+    ///would not, the same price.
     ///</summary>
     public static bool TryReadEdgeId(string id, out string source, out string label, out string target)
     {
@@ -81,20 +82,27 @@ public static class GraphWireText
 
         int arrow = id.LastIndexOf(EdgeArrow, StringComparison.Ordinal);
 
-        if (arrow <= 0)
-            return false;
+        while (arrow > 0)
+        {
+            var head = id.Substring(0, arrow);
+            int dash = head.LastIndexOf('-');
 
-        var head = id.Substring(0, arrow);
-        int dash = head.LastIndexOf('-');
+            if (dash <= 0)
+                return false;
 
-        if (dash <= 0)
-            return false;
+            if (!head.AsSpan(dash).StartsWith(EdgeArrow, StringComparison.Ordinal))
+            {
+                source = head.Substring(0, dash);
+                label = head.Substring(dash + 1);
+                target = id.Substring(arrow + EdgeArrow.Length);
 
-        source = head.Substring(0, dash);
-        label = head.Substring(dash + 1);
-        target = id.Substring(arrow + EdgeArrow.Length);
+                return true;
+            }
 
-        return true;
+            arrow = id.LastIndexOf(EdgeArrow, arrow - 1, StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     ///<summary>
@@ -108,20 +116,15 @@ public static class GraphWireText
     {
         if (value is long whole)
             return whole;
-
-        if (value is int narrow)
+        else if (value is int narrow)
             return narrow;
-
-        if (value is double fraction)
+        else if (value is double fraction)
             return fraction;
-
-        if (value is float single)
+        else if (value is float single)
             return single;
-
-        if (value is decimal exact)
+        else if (value is decimal exact)
             return (double)exact;
-
-        if (value is string text && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+        else if (value is string text && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
             return parsed;
 
         return null;

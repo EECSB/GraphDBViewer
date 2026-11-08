@@ -8,7 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="bunit" Version="2.9.0" />
+    <!--2.12.5 or later (2026-11-06), as Treeality's tests have it: before it, a render landing while Find() parsed the markup left
+        the parse of the previous render cached, so Find() handed out elements whose event handlers were gone (bUnit #1938).-->
+    <PackageReference Include="bunit" Version="2.13.3" />
     <PackageReference Include="coverlet.collector" Version="10.0.1" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageReference Include="xunit" Version="2.9.3" />

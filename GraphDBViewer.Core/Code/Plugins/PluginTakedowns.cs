@@ -41,7 +41,11 @@ public static class PluginTakedowns
     ///<summary>Where the host answers this: GET what is still relevant, PUT what the Store tab just saw.</summary>
     public const string Path = "api/plugins/takedowns";
 
-    ///<summary>Where the seen list lives in instance state. Not reserved: it holds no credential, and a page reads it.</summary>
+    ///<summary>
+    ///Where the seen list lives in instance state. Reserved from the generic instance-state surface since
+    ///2026-09-24: a page reads it through <see cref="Path"/>, and a whole value written there could erase a
+    ///reminder that only uninstalling its plugin is meant to end.
+    ///</summary>
     public const string StateKey = "plugins:takedowns";
 
     private static readonly JsonSerializerOptions Options = new() { PropertyNameCaseInsensitive = true };
@@ -78,16 +82,12 @@ public static class PluginTakedowns
         var merged = new Dictionary<string, SeenTakedown>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var one in kept ?? [])
-        {
             if (!string.IsNullOrWhiteSpace(one?.Id))
                 merged[one.Id] = one;
-        }
 
         foreach (var one in seen ?? [])
-        {
             if (!string.IsNullOrWhiteSpace(one?.Id))
                 merged[one.Id] = one;
-        }
 
         return merged.Values.OrderBy(one => one.Id, StringComparer.Ordinal).ToList();
     }

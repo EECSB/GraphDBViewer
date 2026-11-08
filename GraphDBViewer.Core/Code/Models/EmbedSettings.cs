@@ -9,9 +9,12 @@ namespace GraphDBViewerWeb.Code;
 ///Recognized keys (case-insensitive):
 ///<list type="bullet">
 ///<item>Connection: dbType, transport, host, port, ssl, database, collection, authKey, endpoint, username, viaServer</item>
+///<item>Or the instance's own graph: instance (a host with plugins, for an account that may browse it)</item>
 ///<item>Query: query (q), lang, run</item>
 ///<item>View: view — json | 2d | 3d | table | map | globe</item>
 ///<item>Control: connect</item>
+///<item>Look: theme — dark | light | tinted, or dark-blue | light-blue | blue-tinted, for the embedded viewer (<c>/embed</c>), which keeps no theme of its own</item>
+///<item>Messages: origin — the embedding page's own origin, which turns on the embedded viewer's messages with it</item>
 ///</list>
 ///</remarks>
 public class EmbedSettings
@@ -34,18 +37,40 @@ public class EmbedSettings
     ///</summary>
     public bool? ViaServer { get; set; }
 
+    ///<summary>
+    ///Whether to open the instance's own graph rather than a connection the URL describes: how a plugin's page
+    ///hands the viewer something to draw, such as recall's paths from a lot to every customer. Only a host with
+    ///plugins has one, and only an account that may browse it is given it; anywhere else it says nothing.
+    ///</summary>
+    public bool? InstanceGraph { get; set; }
+
     //Query & view
     public string Query { get; set; }
     public string Language { get; set; }
-    public int? View { get; set; }//1 = JSON, 2 = 2D, 3 = 3D, 4 = Table
+    public int? View { get; set; }//1 = JSON, 2 = 2D, 3 = 3D, 4 = Table, 5 = Map, 6 = Globe
     public bool? Connect { get; set; }
     public bool? AutoRun { get; set; }
 
-    ///<summary>True when enough was supplied to open a connection (a Gremlin host or a SPARQL endpoint).</summary>
+    ///<summary>
+    ///The theme the embedded viewer wears, so it can match the page around it (2026-10-21): one of ShellState's, or null to
+    ///leave the viewer's own. Only the embedded viewer reads it, since anywhere else the theme is the person's choice.
+    ///</summary>
+    public string Theme { get; set; }
+
+    ///<summary>
+    ///The origin of the page that embeds the viewer, which turns the embedded viewer's messages on (2026-10-23,
+    ///Home.EmbedMessages.cs): it reads a message only from its parent window at this origin, and posts only to that
+    ///window, addressed to it. Null, which is every address that names none or names something that is not an absolute
+    ///http(s) origin, leaves them off. Only the embedded viewer reads it, as it does the theme.
+    ///</summary>
+    public string Origin { get; set; }
+
+    ///<summary>True when enough was supplied to open a connection (a host, or an endpoint such as a SPARQL endpoint or a GUN relay).</summary>
     public bool HasConnection => !string.IsNullOrWhiteSpace(Hostname) || !string.IsNullOrWhiteSpace(Endpoint);
 
     ///<summary>True when the URL carried any recognized setting at all.</summary>
     public bool HasAny => HasConnection
+        || InstanceGraph == true
         || DatabaseType != null
         || Query != null
         || Language != null
@@ -64,19 +89,22 @@ public class EmbedSettings
         s.Transport = NormalizeTransport(GetValue(map, "transport"));
         s.Hostname = GetValue(map, "host", "hostname");
         s.Port = ParseInt(GetValue(map, "port"));
-        s.UseSsl = ParseBool(GetValue(map, "ssl", "usessl"));
+        s.UseSsl = ParseFlag(map, "ssl", "usessl");
         s.Database = GetValue(map, "database");
         s.Collection = GetValue(map, "collection");
         s.AuthKey = GetValue(map, "authkey", "key");
         s.Endpoint = GetValue(map, "endpoint", "url");
         s.Username = GetValue(map, "username", "user");
-        s.ViaServer = ParseBool(GetValue(map, "viaserver", "proxy"));
+        s.ViaServer = ParseFlag(map, "viaserver", "proxy");
+        s.InstanceGraph = ParseFlag(map, "instance", "instancegraph");
 
         s.Query = GetValue(map, "query", "q");
         s.Language = NormalizeLanguage(GetValue(map, "lang", "language"));
         s.View = ParseView(GetValue(map, "view", "mode"));
-        s.Connect = ParseBool(GetValue(map, "connect", "autoconnect"));
-        s.AutoRun = ParseBool(GetValue(map, "run", "autorun"));
+        s.Connect = ParseFlag(map, "connect", "autoconnect");
+        s.AutoRun = ParseFlag(map, "run", "autorun");
+        s.Theme = NormalizeTheme(GetValue(map, "theme"));
+        s.Origin = NormalizeOrigin(GetValue(map, "origin"));
 
         return s;
     }
@@ -95,7 +123,11 @@ public class EmbedSettings
 
         var transport = Transport ?? "WebSocket";
         var port = Port ?? DefaultPortFor(dbType, UseSsl);
-        var useSsl = UseSsl ?? DefaultSsl(port);
+
+        //An address that says nothing about SSL gets it, on whatever port (the user's rule of 2026-10-03: what the
+        //product defaults to is the secure option, and plain is a choice somebody makes). Until then it was read off
+        //the port, and only 443 meant SSL; a plain database is now one the address says ssl=false for.
+        var useSsl = UseSsl ?? true;
 
         var conn = new GremlinDB.GremlinConnection(transport, port, useSsl, Hostname ?? "", AuthKey ?? "", Database ?? "", Collection ?? "")
         {
@@ -122,23 +154,17 @@ public class EmbedSettings
 
         if (v == "cosmos" || v == "cosmosdb" || v == "azure")
             return "CosmosDb";
-
-        if (v == "sparql" || v == "rdf")
+        else if (v == "sparql" || v == "rdf")
             return "Sparql";
-
-        if (v == "tinkerpop" || v == "apachetinkerpop" || v == "gremlin")
+        else if (v == "tinkerpop" || v == "apachetinkerpop" || v == "gremlin")
             return "ApacheTinkerPop";
-
-        if (v == "neo4j" || v == "memgraph" || v == "bolt" || v == "cypher")
+        else if (v == "neo4j" || v == "memgraph" || v == "bolt" || v == "cypher")
             return "Neo4j";
-
-        if (v == "arango" || v == "arangodb" || v == "aql")
+        else if (v == "arango" || v == "arangodb" || v == "aql")
             return "ArangoDb";
-
-        if (v == "dgraph" || v == "dql")
+        else if (v == "dgraph" || v == "dql")
             return "Dgraph";
-
-        if (v == "gun" || v == "gunjs" || v == "gun.js")
+        else if (v == "gun" || v == "gunjs" || v == "gun.js")
             return "Gun";
 
         return value;//pass an already-canonical value through unchanged
@@ -153,8 +179,7 @@ public class EmbedSettings
 
         if (v == "ws" || v == "websocket")
             return "WebSocket";
-
-        if (v == "http" || v == "https" || v == "rest")
+        else if (v == "http" || v == "https" || v == "rest")
             return "HTTP";
 
         return value;
@@ -169,21 +194,97 @@ public class EmbedSettings
 
         if (v == "gremlin")
             return "gremlin";
-
-        if (v == "cypher" || v == "opencypher")
+        else if (v == "cypher" || v == "opencypher")
             return "cypher";
-
-        if (v == "sparql")
+        else if (v == "sparql")
             return "sparql";
-
-        if (v == "aql")
+        else if (v == "aql")
             return "aql";
-
-        if (v == "dql")
+        else if (v == "dql")
             return "dql";
 
         return value;
     }
+
+    ///<summary>A theme as ShellState names it, or null for anything else.</summary>
+    public static string NormalizeTheme(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var v = value.Trim().ToLowerInvariant();
+
+        if (v == "dark")
+            return ShellState.ThemeDark;
+        else if (v == "light")
+            return ShellState.ThemeLight;
+        else if (v == "tinted" || v == "light-tinted")
+            return ShellState.ThemeLightTinted;
+        else if (v == "dark-blue")
+            return ShellState.ThemeDarkBlue;
+        else if (v == "light-blue")
+            return ShellState.ThemeLightBlue;
+        else if (v == "blue-tinted" || v == "light-blue-tinted")
+            return ShellState.ThemeLightBlueTinted;
+
+        return null;
+    }
+
+    ///<summary>
+    ///An origin as a browser writes one in a message event's <c>origin</c>: the scheme and the host in lowercase, an
+    ///international host in its ASCII form, and the port only where it is not the scheme's own, so that comparing the two
+    ///exactly is enough. Only an absolute http or https origin is one: a scheme, a host and a port, with at most a lone
+    ///slash after them. A path, a query, a fragment or a user, a bare host, another scheme, <c>*</c> and the opaque
+    ///<c>null</c> are all null, and leave the messages off rather than guessing what the page meant.
+    ///</summary>
+    public static string NormalizeOrigin(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var v = value.Trim();
+
+        if (v.EndsWith('/'))
+            v = v.Substring(0, v.Length - 1);
+
+        var schemeEnds = v.IndexOf("://", StringComparison.Ordinal);
+
+        if (schemeEnds <= 0)
+            return null;
+
+        //Read before the parser, which would quietly drop some of it: "https://example.com/.." is a path, and so not an
+        //origin, however little of it is left once the dot segments are resolved.
+        var authority = v.Substring(schemeEnds + 3);
+
+        if (authority.Length == 0 || authority.Any(c => c <= ' ' || NotInAnOrigin.Contains(c)))
+            return null;
+
+        if (!Uri.TryCreate(v, UriKind.Absolute, out var uri))
+            return null;
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            return null;
+
+        //A browser writes an IPv6 host in its brackets and any other in its ASCII form, which is what IdnHost is.
+        string host;
+
+        if (uri.HostNameType == UriHostNameType.IPv6)
+            host = uri.Host;
+        else
+            host = uri.IdnHost;
+
+        if (string.IsNullOrEmpty(host))
+            return null;
+
+        if (uri.IsDefaultPort)
+            return $"{uri.Scheme}://{host}";
+
+        return $"{uri.Scheme}://{host}:{uri.Port}";
+    }
+
+    //What ends an origin's host and port, or would have a parser read something other than one: a path, a query, a
+    //fragment, a user, a backslash a browser reads as a slash, and an escape.
+    private const string NotInAnOrigin = "/?#@\\%";
 
     public static int? ParseView(string value)
     {
@@ -194,21 +295,16 @@ public class EmbedSettings
 
         if (v == "json" || v == "1")
             return 1;
-
-        if (v == "2d" || v == "graph" || v == "2")
+        else if (v == "2d" || v == "graph" || v == "2")
             return 2;
-
-        if (v == "3d" || v == "3")
+        else if (v == "3d" || v == "3")
             return 3;
-
-        if (v == "table" || v == "4")
+        else if (v == "table" || v == "4")
             return 4;
-
-        //The two geographic modes: the 2D view on a world map, the 3D view on a globe.
-        if (v == "map" || v == "5")
+        else if (v == "map" || v == "5")
+            //The two geographic modes: the 2D view on a world map, the 3D view on a globe.
             return 5;
-
-        if (v == "globe" || v == "6")
+        else if (v == "globe" || v == "6")
             return 6;
 
         return null;
@@ -218,9 +314,10 @@ public class EmbedSettings
     ///Where to dial when the URL named no port: the engine's own default.
     ///
     ///It used to be Gremlin's alone — 8182, or 443 unless the URL said <c>ssl=false</c> — which meant an
-    ///embed for Bolt, ArangoDB, Dgraph or GUN quietly dialled 443 and could only fail. Those engines get
-    ///their own port now; a Gremlin endpoint keeps assuming a hosted, TLS one, since an embed URL is
-    ///usually pointing at something public and an unencrypted default would be the worse guess.
+    ///embed for Bolt, ArangoDB, Dgraph or GUN quietly dialed 443 and could only fail. Those engines get
+    ///their own port now, where each serves TLS as well as plain; a Gremlin endpoint keeps assuming a
+    ///hosted, TLS one, since an embed URL is usually pointing at something public and an unencrypted default
+    ///would be the worse guess.
     ///</summary>
     public static int DefaultPortFor(string databaseType, bool? useSsl)
     {
@@ -235,26 +332,33 @@ public class EmbedSettings
     ///<summary>TinkerPop's own port, and the one an embed URL only falls back to when it says ssl=false.</summary>
     public const int GremlinDefaultPort = 8182;
 
-    ///<summary>Where anything TLS listens, and the only port SSL is assumed on.</summary>
+    ///<summary>Where a hosted TLS endpoint listens, and where a Gremlin embed dials when it names no port.</summary>
     public const int TlsPort = 443;
-
-    ///<summary>
-    ///Whether to use SSL when the URL did not say. Only 443 implies it: every other port an engine listens
-    ///on by default — 8182, 7687, 8529, 8080, 8765 — is a plain one, and a database behind TLS on a
-    ///non-standard port is the case worth spelling out rather than the case worth assuming.
-    ///</summary>
-    public static bool DefaultSsl(int port)
-    {
-        return port == TlsPort;
-    }
 
     private static string GetValue(Dictionary<string, string> map, params string[] keys)
     {
         foreach (var key in keys)
-        {
             if (map.TryGetValue(key, out var v) && !string.IsNullOrEmpty(v))
                 return v;
-        }
+
+        return null;
+    }
+
+    ///<summary>
+    ///A yes-or-no setting: its value read by <see cref="ParseBool"/>, and the key named with no value at all on, as
+    ///in the documented <c>/embed?instance&amp;q=…</c>. Until 2026-10-31 a bare key read as nothing, so that link did
+    ///not open the instance's graph.
+    ///</summary>
+    private static bool? ParseFlag(Dictionary<string, string> map, params string[] keys)
+    {
+        foreach (var key in keys)
+            if (map.TryGetValue(key, out var v))
+            {
+                if (string.IsNullOrEmpty(v))
+                    return true;
+
+                return ParseBool(v);
+            }
 
         return null;
     }
@@ -279,8 +383,7 @@ public class EmbedSettings
 
         if (v == "true" || v == "1" || v == "yes" || v == "on")
             return true;
-
-        if (v == "false" || v == "0" || v == "no" || v == "off")
+        else if (v == "false" || v == "0" || v == "no" || v == "off")
             return false;
 
         return null;

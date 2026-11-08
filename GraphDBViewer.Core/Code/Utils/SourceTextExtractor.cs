@@ -10,7 +10,8 @@ using System.Xml.Linq;
 namespace GraphDBViewerWeb.Code;
 
 ///<summary>
-///Turns an uploaded file into plain text for knowledge-graph generation. Office formats that are
+///Turns an uploaded file into plain text: since 2026-11-02, a PDF Ask AI sends as its words to a model set to take
+///them (<see cref="AiAttachment.ReadPdf"/>), as knowledge-graph generation's window once did every file. Office formats that are
 ///really ZIP + XML (.docx, .xlsx) are unpacked with the framework's own ZipArchive/XDocument — no new
 ///dependency — PDFs go through PdfPig, and anything else is read as text with a binary sniff, so any
 ///text-based format (.csv, .json, .log, source code, …) just works. Pure; the caller hands in a
@@ -22,18 +23,21 @@ namespace GraphDBViewerWeb.Code;
 ///</summary>
 public static class SourceTextExtractor
 {
-    ///<summary>The file as text, or a clear reason it can't be. Never both.</summary>
-    public static (string Text, string Error) Extract(string fileName, MemoryStream content)
+    ///<summary>
+    ///The file as text, or a clear reason it can't be. Never both. What the file is read as agrees with
+    ///<see cref="AiAttachment.KindOf"/> (2026-11-07): a PDF is one by its type, <c>application/pdf</c>, since a browser
+    ///may name a file dragged out of another page by its type alone, or by its extension; the Office formats by theirs.
+    ///</summary>
+    public static (string Text, string Error) Extract(string fileName, MemoryStream content, string mediaType = null)
     {
         var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        var type = (mediaType ?? "").Trim().ToLowerInvariant();
 
-        if (extension == ".pdf")
+        if (type == "application/pdf" || extension == ".pdf")
             return ExtractVia(fileName, content, "PDF", FromPdf);
-
-        if (extension == ".docx")
+        else if (extension == ".docx")
             return ExtractVia(fileName, content, "Word", FromDocx);
-
-        if (extension == ".xlsx")
+        else if (extension == ".xlsx")
             return ExtractVia(fileName, content, "Excel", FromXlsx);
 
         content.Position = 0;
@@ -164,8 +168,8 @@ public static class SourceTextExtractor
                 shared.Add(string.Concat(si.Descendants(ns + "t").Select(t => t.Value)));
         }
 
-        var styles = DateStyles(zip, ns);
-        var epoch = Epoch(zip, ns);
+        var styles = XlsxTable.DateStyles(zip);
+        var epoch = XlsxTable.Epoch(zip);
 
         var sb = new StringBuilder();
         var sheets = zip.Entries
@@ -212,201 +216,15 @@ public static class SourceTextExtractor
 
     ///<summary>
     ///One cell's value as text: a serial number written as a date when its style says it is one, and
-    ///the stored value untouched otherwise. A cell whose type says it is text is never a serial, even
-    ///when it carries a date style.
+    ///the stored value untouched otherwise (<see cref="XlsxTable.TryDate"/>).
     ///</summary>
     private static string Cell(string value, string type, string style, IReadOnlyDictionary<int, bool> styles, DateTime epoch)
     {
-        if (type != null && type != "n")
-            return value;
+        if (XlsxTable.TryDate(value, type, style, styles, epoch, out var date))
+            return date;
 
-        if (style == null || !int.TryParse(style, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
-            return value;
-
-        if (!styles.TryGetValue(index, out var isDate) || !isDate)
-            return value;
-
-        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var serial))
-            return value;
-
-        var when = Moment(serial, epoch);
-
-        if (when == null)
-            return value;
-
-        //ISO 8601, and the time only when there is one — a date cell with a zero fraction is a date.
-        if (when.Value.TimeOfDay == TimeSpan.Zero)
-            return when.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-
-        return when.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        return value;
     }
-
-    ///<summary>
-    ///A serial number as a moment. Excel's day 1 is 1900-01-01 and it also believes in 1900-02-29, a
-    ///day that never existed — so every serial from 61 onwards is one greater than the real day count,
-    ///and serials below 61 are off by that day. Both are handled the way every reader handles them:
-    ///subtract the phantom day above 60. Serial 60 is the phantom itself and comes back as 1900-03-01,
-    ///a day later than the impossible date Excel prints for it; no real spreadsheet holds it.
-    ///</summary>
-    private static DateTime? Moment(double serial, DateTime epoch)
-    {
-        if (serial < 0 || serial > 2958465)
-            return null;
-
-        var days = serial;
-
-        //The 1900 workbook's phantom leap day. A 1904 workbook has no such thing.
-        if (epoch.Year == 1899 && days >= 61)
-            days -= 1;
-
-        try
-        {
-            return epoch.AddDays(days);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return null;
-        }
-    }
-
-    ///<summary>
-    ///Which style indexes are dates. A cell names a style, the style names a number format, and the
-    ///format says whether the number is a date: the built-in ids that are dates by definition, or a
-    ///custom format code with a date or time token outside its quoted literals.
-    ///</summary>
-    private static Dictionary<int, bool> DateStyles(ZipArchive zip, XNamespace ns)
-    {
-        var styles = new Dictionary<int, bool>();
-        var entry = zip.GetEntry("xl/styles.xml");
-
-        if (entry == null)
-            return styles;
-
-        XDocument doc;
-
-        using (var stream = entry.Open())
-            doc = XDocument.Load(stream);
-
-        //The custom formats, by id. Anything not here is one of the built-ins.
-        var custom = new Dictionary<int, string>();
-
-        foreach (var format in doc.Descendants(ns + "numFmt"))
-        {
-            if (int.TryParse((string)format.Attribute("numFmtId"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
-                custom[id] = (string)format.Attribute("formatCode") ?? "";
-        }
-
-        var cellXfs = doc.Descendants(ns + "cellXfs").FirstOrDefault();
-
-        if (cellXfs == null)
-            return styles;
-
-        var index = 0;
-
-        foreach (var xf in cellXfs.Elements(ns + "xf"))
-        {
-            //A missing or unparseable id is 0, which is "General" and never a date.
-            int.TryParse((string)xf.Attribute("numFmtId"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id);
-
-            if (custom.TryGetValue(id, out var code))
-                styles[index] = IsDateFormat(code);
-            else
-                styles[index] = BuiltInDateFormats.Contains(id);
-
-            index++;
-        }
-
-        return styles;
-    }
-
-    ///<summary>The built-in number format ids that are dates or times. Fixed by the standard, so they are a list rather than a guess.</summary>
-    private static readonly HashSet<int> BuiltInDateFormats = [14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58];
-
-    ///<summary>
-    ///Whether a custom format code draws a date. The tokens are y, m, d, h and s — but only outside
-    ///quoted text and escapes, or a currency format naming "dollars" would read as a date, and only
-    ///when the code is not the "General"/text one.
-    ///</summary>
-    private static bool IsDateFormat(string code)
-    {
-        if (string.IsNullOrWhiteSpace(code))
-            return false;
-
-        var quoted = false;
-
-        for (var i = 0; i < code.Length; i++)
-        {
-            var c = code[i];
-
-            if (c == '"')
-            {
-                quoted = !quoted;
-
-                continue;
-            }
-
-            if (quoted)
-                continue;
-
-            //A backslash escapes the next character, and [Red] and friends are conditions, not tokens.
-            if (c == '\\' || c == '_' || c == '*')
-            {
-                i++;
-
-                continue;
-            }
-
-            if (c == '[')
-            {
-                var close = code.IndexOf(']', i);
-
-                if (close < 0)
-                    return false;
-
-                //[h], [m] and [s] are elapsed-time tokens, which are durations rather than dates.
-                i = close;
-
-                continue;
-            }
-
-            //"m" is minutes or months depending on where it sits; either way the cell is a moment.
-            if (c is 'y' or 'Y' or 'd' or 'D' or 'h' or 'H' or 's' or 'S' or 'm' or 'M')
-                return true;
-        }
-
-        return false;
-    }
-
-    ///<summary>
-    ///Day zero for this workbook. Excel's default is the 1900 system, whose serial 1 is 1900-01-01, so
-    ///day zero is 1899-12-31; a workbook saved by an older Mac Excel says <c>date1904</c> and counts
-    ///from 1904-01-01.
-    ///</summary>
-    private static DateTime Epoch(ZipArchive zip, XNamespace ns)
-    {
-        var entry = zip.GetEntry("xl/workbook.xml");
-
-        if (entry == null)
-            return new DateTime(1899, 12, 31);
-
-        try
-        {
-            using var stream = entry.Open();
-            var doc = XDocument.Load(stream);
-            var properties = doc.Descendants(ns + "workbookPr").FirstOrDefault();
-            var flag = (string)properties?.Attribute("date1904");
-
-            if (flag == "1" || flag == "true")
-                return new DateTime(1904, 1, 1);
-        }
-        catch (System.Xml.XmlException)
-        {
-            //A workbook part this reader cannot parse is not a reason to fail the file.
-        }
-
-        return new DateTime(1899, 12, 31);
-    }
-
 
     ///<summary>True when decoded text is riddled with NULs or replacement characters — a binary file
     ///opened as text, not something a model should ever see.</summary>
@@ -419,10 +237,8 @@ public static class SourceTextExtractor
         int sample = Math.Min(text.Length, 4000);
 
         for (int i = 0; i < sample; i++)
-        {
             if (text[i] == '\0' || text[i] == '�')
                 suspicious++;
-        }
 
         return suspicious > sample / 100;
     }

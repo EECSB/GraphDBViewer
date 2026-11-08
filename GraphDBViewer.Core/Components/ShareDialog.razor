@@ -1,0 +1,415 @@
+@using GraphDBViewerWeb.Code
+@inject IJSRuntime JS
+
+@* Sharing the viewer: a link to send, or the code that embeds it in another site's page (2026-10-31, GDS Viewer's Share
+   popup, the user's call). One dialog, two answers, set up the same way: both are an address underneath, a link one and
+   an embed an iframe around one, so the choices about what it opens are made once, and the tab decides what comes out
+   at the bottom and which extra choices an embed has. The parameters are the viewer's own address (EmbedSettings, and
+   DOCUMENTATION.md's "Embedding the viewer"); ShareLink turns the choices into them. Framed like the Import/Export
+   dialog, and put away by its backdrop, its ×, or Escape. *@
+<div class="bg-dark bg-opacity-50 modal fade show d-block" tabindex="-1" @onmousedown="() => backdropMouseDown = true" @onclick="CloseIfBackdropAsync" data-testid="share-dialog">
+<div class="modal-dialog gdbv-setup-dialog" style="max-width: min(640px, calc(100vw - 2rem));" @onmousedown="() => backdropMouseDown = false" @onmousedown:stopPropagation="true" @onclick:stopPropagation="true">
+<div class="modal-content gdbv-tint" role="dialog" aria-label="Share" tabindex="-1" @onkeydown="OnKeyAsync" @ref="popup">
+    <div class="d-flex align-items-center gap-2 border-bottom gdbv-popup-bar">
+        <h5 class="gdbv-popup-title"><i class="bi bi-share gdbv-title-icon" aria-hidden="true"></i>Share</h5>
+        <button type="button" class="btn-close ms-auto" aria-label="Close" title="Close" @onclick="CloseAsync"></button>
+    </div>
+
+    <div class="p-3 gdbv-tint-panel d-flex flex-column gap-3">
+        <div class="btn-group btn-group-sm align-self-start" role="tablist" aria-label="What to share">
+            <button type="button" role="tab" class="btn @(embedding ? "btn-outline-primary" : "btn-primary")" aria-selected="@(embedding ? "false" : "true")" @onclick="() => ChooseEmbed(false)" data-testid="share-link-tab">Link</button>
+            <button type="button" role="tab" class="btn @(embedding ? "btn-primary" : "btn-outline-primary")" aria-selected="@(embedding ? "true" : "false")" @onclick="() => ChooseEmbed(true)" data-testid="share-embed-tab">Embed</button>
+        </div>
+
+        <div class="small text-body-secondary">@Lead</div>
+
+        <div>
+            <div class="fw-bold mb-1">What it opens</div>
+
+            @if (OffersInstanceGraph)
+            {
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="shareSource" id="shareInstance" checked="@(source == ShareSource.InstanceGraph)" @onchange="() => source = ShareSource.InstanceGraph" />
+                    <label class="form-check-label" for="shareInstance">This instance's graph</label>
+                </div>
+            }
+
+            @if (CanShareConnection)
+            {
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="shareSource" id="shareConnection" checked="@(source == ShareSource.Connection)" @onchange="() => source = ShareSource.Connection" />
+                    <label class="form-check-label" for="shareConnection">This connection, <b>@ConnectionLabel</b></label>
+                </div>
+            }
+
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="shareSource" id="shareNone" checked="@(source == ShareSource.None)" @onchange="() => source = ShareSource.None" />
+                <label class="form-check-label" for="shareNone">No connection</label>
+            </div>
+
+            @if (SourceNote != null)
+            {
+                <div class="small text-body-secondary mt-1" data-testid="share-source-note">@SourceNote</div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(Query))
+            {
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" id="shareQuery" checked="@withQuery" @onchange="e => withQuery = IsOn(e)" />
+                    <label class="form-check-label" for="shareQuery">This tab's query, <code class="gdbv-text-sm">@QueryPreview</code></label>
+                </div>
+
+                @if (withQuery)
+                {
+                    <div class="form-check ms-4">
+                        <input class="form-check-input" type="checkbox" id="shareRun" checked="@run" @onchange="e => run = IsOn(e)" />
+                        <label class="form-check-label" for="shareRun">Run it as it opens</label>
+                    </div>
+                }
+            }
+
+            <div class="d-flex align-items-center gap-2 mt-2 flex-wrap">
+                <span>View</span>
+                <div class="btn-group btn-group-sm" role="group" aria-label="View">
+                    @foreach (var (number, says) in Views)
+                    {
+                        var choosing = number;
+
+                        <button type="button" class="btn @(view == choosing ? "btn-primary" : "btn-outline-primary")" aria-pressed="@(view == choosing ? "true" : "false")" @onclick="() => view = choosing">@says</button>
+                    }
+                </div>
+            </div>
+        </div>
+
+        @if (embedding)
+        {
+            <div>
+                <div class="fw-bold mb-1">The embedded viewer</div>
+
+                <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                    <label for="shareTheme">Theme</label>
+                    <select id="shareTheme" class="form-select form-select-sm w-auto" style="padding-left: 0.4rem; padding-right: 1.4rem; background-position: right 0.4rem center;" value="@theme" @onchange="e => theme = e.Value?.ToString() ?? OwnTheme">
+                        <option value="@OwnTheme">Its own (Dark green)</option>
+                        @foreach (var (name, says) in Themes)
+                        {
+                            <option value="@name">@says</option>
+                        }
+                    </select>
+                </div>
+
+                @if (source == ShareSource.InstanceGraph)
+                {
+                    <label for="shareToken" class="form-label mb-1">Read-only token</label>
+                    <input id="shareToken" class="form-control form-control-sm" type="text" autocomplete="off" spellcheck="false" placeholder="trl_…" value="@token" @oninput="e => token = e.Value?.ToString() ?? string.Empty" data-testid="share-token" />
+                    <div class="small text-body-secondary mt-1 mb-2">@TokenNote</div>
+                }
+
+                <label for="shareOrigin" class="form-label mb-1">Talk with the page at (optional)</label>
+                <input id="shareOrigin" class="form-control form-control-sm" type="text" spellcheck="false" placeholder="https://shop.example.com" value="@origin" @oninput="e => origin = e.Value?.ToString() ?? string.Empty" data-testid="share-origin" />
+                <div class="small text-body-secondary mt-1 mb-2" data-testid="share-origin-note">@OriginNote</div>
+
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span>Size</span>
+                    <input class="form-control form-control-sm" style="width: 6rem;" type="text" value="@width" @oninput="e => width = e.Value?.ToString() ?? ShareLink.DefaultWidth" aria-label="Width" title="Pixels, or a percentage of the page" />
+                    <span>by</span>
+                    <input class="form-control form-control-sm" style="width: 6rem;" type="text" value="@height" @oninput="e => height = e.Value?.ToString() ?? ShareLink.DefaultHeight" aria-label="Height" title="Pixels, or a percentage of the page" />
+                </div>
+            </div>
+        }
+
+        @* What comes out, in a box that can be read and selected as well as copied: a copy the page was not allowed still
+           leaves the text there to take by hand. *@
+        <textarea class="form-control font-monospace gdbv-text-sm" readonly rows="@Rows" aria-label="@CopyWhat" value="@Output" data-testid="share-output"></textarea>
+
+        <div class="d-flex align-items-center gap-3">
+            @* Its picture before its word (2026-11-04, the user): the copy, a tick once copied. *@
+            <button type="button" class="btn btn-primary btn-sm" @onclick="CopyAsync" data-testid="share-copy"><i class="bi @(copy.Copied ? "bi-check-lg" : "bi-copy") me-1" aria-hidden="true"></i>@CopyLabel</button>
+
+            @if (!embedding)
+            {
+                <a href="@Address" target="_blank" rel="noopener">Open it in a new tab</a>
+            }
+        </div>
+
+        @if (copy.Refused)
+        {
+            <div class="small text-body-secondary">This page was not allowed the clipboard: select the text above and copy it with Ctrl+C.</div>
+        }
+    </div>
+</div>
+</div>
+</div>
+
+@code {
+    ///<summary>The app's own address, which every link is built on: NavigationManager.BaseUri.</summary>
+    [Parameter] public string BaseUri { get; set; } = "";
+
+    ///<summary>The product's name, the embed's title for a screen reader.</summary>
+    [Parameter] public string AppName { get; set; }
+
+    ///<summary>The connection the viewer has, whose address and engine a share can carry.</summary>
+    [Parameter] public GremlinDB.GremlinConnection Connection { get; set; }
+
+    ///<summary>Whether the connection names something a share can carry: a host, or a SPARQL endpoint.</summary>
+    [Parameter] public bool CanShareConnection { get; set; }
+
+    ///<summary>What the connection is called on the pill, said beside its choice.</summary>
+    [Parameter] public string ConnectionLabel { get; set; }
+
+    ///<summary>Whether this host offers its own graph to this account, and so to a link.</summary>
+    [Parameter] public bool OffersInstanceGraph { get; set; }
+
+    ///<summary>Whether the instance's graph is the one open, which a share then starts on.</summary>
+    [Parameter] public bool OnInstanceGraph { get; set; }
+
+    ///<summary>Whether this host has accounts, whose server route answers only people signed in to it.</summary>
+    [Parameter] public bool HasAccounts { get; set; }
+
+    [Parameter] public string Query { get; set; }
+
+    [Parameter] public string Language { get; set; }
+
+    ///<summary>The view that is open, as EmbedSettings numbers them, Map and Globe as 5 and 6.</summary>
+    [Parameter] public int View { get; set; } = 2;
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private const string OwnTheme = "";
+
+    private static readonly (int Number, string Says)[] Views = { (1, "JSON"), (2, "2D"), (3, "3D"), (4, "Table"), (5, "Map"), (6, "Globe") };
+
+    private static readonly (string Name, string Says)[] Themes =
+    {
+        (ShellState.ThemeDark, "Dark green"),
+        (ShellState.ThemeDarkBlue, "Dark blue"),
+        (ShellState.ThemeLight, "Light green 1"),
+        (ShellState.ThemeLightTinted, "Light green 2"),
+        (ShellState.ThemeLightBlue, "Light blue 1"),
+        (ShellState.ThemeLightBlueTinted, "Light blue 2")
+    };
+
+    private bool embedding;
+    private ShareSource source;
+    private bool withQuery;
+    private bool run = true;
+    private int view;
+    private string theme = OwnTheme;
+    private string token = "";
+    private string origin = "";
+    private string width = ShareLink.DefaultWidth;
+    private string height = ShareLink.DefaultHeight;
+
+    private readonly ClipboardCopy copy = new();
+
+    private bool backdropMouseDown;
+    private ElementReference popup;
+
+    //Starts on what is open: the instance's graph or the connection when either is, the tab's query, and its view.
+    protected override void OnInitialized()
+    {
+        if (OnInstanceGraph && OffersInstanceGraph)
+            source = ShareSource.InstanceGraph;
+        else if (CanShareConnection)
+            source = ShareSource.Connection;
+        else
+            source = ShareSource.None;
+
+        withQuery = !string.IsNullOrWhiteSpace(Query);
+        view = View;
+    }
+
+    //The keyboard into the dialog as it opens, so Escape reaches it straight away: it was opened from a button in the
+    //workspace's row, which keeps the keyboard otherwise.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        try
+        {
+            await popup.FocusAsync();
+        }
+        catch { }
+    }
+
+    private void ChooseEmbed(bool embed)
+    {
+        embedding = embed;
+        copy.Reset();
+    }
+
+    private static bool IsOn(ChangeEventArgs e)
+    {
+        return e.Value is bool on && on;
+    }
+
+    private ShareOptions Options()
+    {
+        var chosen = new ShareOptions { Source = source, Connection = Connection, View = view, Run = run };
+
+        if (withQuery)
+        {
+            chosen.Query = Query;
+            chosen.Language = Language;
+        }
+
+        if (embedding)
+        {
+            chosen.Theme = theme;
+            chosen.Origin = origin;
+            chosen.Token = token;
+        }
+
+        return chosen;
+    }
+
+    private string Address => ShareLink.Address(BaseUri, Options(), embedding);
+
+    private string Output
+    {
+        get
+        {
+            if (!embedding)
+                return Address;
+
+            return ShareLink.Iframe(Address, width, height, AppName);
+        }
+    }
+
+    private int Rows
+    {
+        get
+        {
+            if (embedding)
+                return 5;
+
+            return 3;
+        }
+    }
+
+    private string Lead
+    {
+        get
+        {
+            if (embedding)
+                return "Code to paste into another site's page, which shows the viewer inside it, set up the way you choose here. The embedded viewer reads: it has no tabs and no tool that edits the graph.";
+
+            return "A link that opens the viewer the way you set it up here. It carries the settings and not your graph or your password.";
+        }
+    }
+
+    ///<summary>What the chosen source needs said: the password a connection is shared without, and a route a visitor has no way along.</summary>
+    private string SourceNote
+    {
+        get
+        {
+            if (source == ShareSource.InstanceGraph && !embedding)
+                return "It opens for someone signed in here who may browse this instance's graph.";
+
+            if (source != ShareSource.Connection || Connection == null)
+                return null;
+
+            if (embedding && Connection.ViaServer && HasAccounts)
+                return "This connection goes through this host's server, which answers only people signed in here, and a visitor to another site's page is not. Embed this instance's graph instead, or a database the visitor's browser can reach itself (Browser in the connection dialog).";
+
+            if (!string.IsNullOrEmpty(Connection.AuthKey) || !string.IsNullOrEmpty(Connection.Username))
+                return "The login is left out, since anyone who can read the address can read everything in it. The viewer connects without one, so the database has to let it read, or whoever opens a link signs in in the connection dialog.";
+
+            return null;
+        }
+    }
+
+    private string TokenNote
+    {
+        get
+        {
+            string where = "your account page";
+
+            if (HasAccounts)
+                where = "your account page (/account)";
+
+            if (string.IsNullOrWhiteSpace(token))
+                return $"Without one the embedded viewer reads nothing of this instance's graph. Make one on {where}, under For a viewer embedded in another site, and paste it here. It goes after the #, which a browser sends to no server.";
+
+            return "It reads the instance's graph and nothing else, and every write is refused, but anybody who can read the page can read what it reads.";
+        }
+    }
+
+    private string OriginNote
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(origin))
+                return "The address of the page the viewer sits in, to let that page send it queries and hear what is selected. Left empty, the two do not talk.";
+
+            if (EmbedSettings.NormalizeOrigin(origin) == null)
+                return "That is not a page's origin, so it is left out: the scheme and the host alone, with a port if it has one, like https://shop.example.com.";
+
+            return $"Messages only with {EmbedSettings.NormalizeOrigin(origin)}.";
+        }
+    }
+
+    private string QueryPreview
+    {
+        get
+        {
+            var text = (Query ?? "").Trim().Replace('\n', ' ');
+
+            if (text.Length > 60)
+                return text.Substring(0, 60) + "…";
+
+            return text;
+        }
+    }
+
+    private string CopyWhat
+    {
+        get
+        {
+            if (embedding)
+                return "The code to paste into a page";
+
+            return "The link";
+        }
+    }
+
+    private string CopyLabel
+    {
+        get
+        {
+            if (copy.Copied)
+                return "Copied";
+
+            if (embedding)
+                return "Copy code";
+
+            return "Copy link";
+        }
+    }
+
+    //Onto the clipboard, saying so on the button for a moment (ClipboardCopy).
+    private async Task CopyAsync()
+    {
+        await copy.CopyAsync(JS, Output, StateHasChanged);
+    }
+
+    private async Task OnKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            await CloseAsync();
+    }
+
+    //A click that began and ended on the backdrop closes it; one that began inside and was let go outside does not.
+    private async Task CloseIfBackdropAsync()
+    {
+        if (!backdropMouseDown)
+            return;
+
+        await CloseAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        await OnClose.InvokeAsync();
+    }
+}

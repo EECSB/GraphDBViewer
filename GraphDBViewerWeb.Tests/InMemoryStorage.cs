@@ -9,7 +9,7 @@ namespace GraphDBViewerWeb.Tests;
 ///toggle). WorkspaceStoreTests and LlmConnectionStoreTests keep their own private copies on purpose:
 ///those suites test storage round-trips themselves.
 ///</summary>
-internal sealed class InMemoryStorage : IAppStorage
+internal sealed class InMemoryStorage : IMirrorStorage
 {
     private readonly Dictionary<string, string> _data = new();
 
@@ -46,6 +46,12 @@ internal sealed class InMemoryStorage : IAppStorage
     public Task RemoveAsync(string key)
     {
         _data.Remove(key);
+        return Task.CompletedTask;
+    }
+
+    public Task ClearAsync()
+    {
+        _data.Clear();
         return Task.CompletedTask;
     }
 }

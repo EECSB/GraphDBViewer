@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>gdbv-mcp</AssemblyName>
+    <RootNamespace>GraphDBViewer.Mcp</RootNamespace>
+    <!--The MCP server a Graph DB Viewer tab links to (2026-11-03, GDS Viewer's gds mcp brought across). References nothing
+        of the viewer's: the tab runs the tools, and this only carries the calls to it and the answers back.-->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--The Core package rather than ModelContextProtocol, which adds hosting and dependency injection on top, as GDS
+        Viewer's does: a stdio server with two handlers needs neither.-->
+    <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
+  </ItemGroup>
+
+</Project>

@@ -66,10 +66,8 @@ public static class LiveAi
         while (directory != null)
         {
             foreach (var candidate in Candidates(directory))
-            {
                 if (File.Exists(candidate))
                     return candidate;
-            }
 
             directory = directory.Parent;
         }
@@ -81,7 +79,8 @@ public static class LiveAi
     {
         yield return Path.Combine(directory.FullName, DevSecrets.Path);
 
-        foreach (var host in Directory.Exists(directory.FullName) ? Directory.GetDirectories(directory.FullName) : new string[0])
-            yield return Path.Combine(host, "wwwroot", DevSecrets.Path);
+        if (Directory.Exists(directory.FullName))
+            foreach (var host in Directory.GetDirectories(directory.FullName))
+                yield return Path.Combine(host, "wwwroot", DevSecrets.Path);
     }
 }

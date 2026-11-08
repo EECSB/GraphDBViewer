@@ -12,7 +12,7 @@
 //    a texture — the <img> path, which loads cross-origin *without* CORS. So the probe is an <img> load.
 //    The price is the HTTP status: an <img> reports that it failed, never why. That is the right way
 //    round — a wrong red on a working image is worse than a vague message on a broken one.
-//  - A model is fetched (3dForceGraphInterop.loadObjModel), which *does* need the host to send CORS
+//  - A model is fetched (3dForceGraphInterop.loadModel), which *does* need the host to send CORS
 //    headers. So the probe is a fetch, and a "not reachable" answer also means the loader would fail.
 //
 //The <img> half is the part that cannot move to C#. In WebAssembly a .NET HttpClient is implemented on
@@ -31,7 +31,7 @@ window.urlCheck = {
 
         url = url.trim();
 
-        if (kind === 'image') {
+        if (kind === 'image')
             return new Promise(function (resolve) {
                 var done = false;
                 var finish = function (result) {
@@ -47,7 +47,6 @@ window.urlCheck = {
                 setTimeout(function () { finish({ reachable: false, error: "Timed out loading the image (12s)." }); }, 12000);
                 img.src = url;
             });
-        }
 
         return (async function () {
             var controller = new AbortController();
@@ -64,12 +63,20 @@ window.urlCheck = {
                 clearTimeout(timer);
 
                 //Got the headers — we don't need the body, so stop the download.
-                try { if (resp.body) resp.body.cancel(); } catch (e) { }
+                try {
+                    if (resp.body)
+                        resp.body.cancel();
+                }
+                catch (e) { }
 
                 if (resp.ok)
                     return { reachable: true, error: "" };
 
-                return { reachable: false, error: "HTTP " + resp.status + (resp.statusText ? " " + resp.statusText : "") };
+                var error = "HTTP " + resp.status;
+                if (resp.statusText)
+                    error += " " + resp.statusText;
+
+                return { reachable: false, error: error };
             } catch (e) {
                 clearTimeout(timer);
 

@@ -6,8 +6,8 @@
         <div class="modal-dialog modal-lg" style="margin-top: 5rem;" @onmousedown="() => backdropMouseDown = false" @onmousedown:stopPropagation="true" @onclick:stopPropagation="true">
             <div class="modal-content">
 
-                <div class="modal-header">
-                    <h5 class="modal-title">About</h5>
+                <div class="modal-header gdbv-popup-bar">
+                    <h5 class="modal-title gdbv-popup-title"><i class="bi bi-info-circle gdbv-title-icon" aria-hidden="true"></i>About</h5>
                     <button type="button" class="btn-close" @onclick="OnClose"></button>
                 </div>
 
@@ -32,11 +32,12 @@
                             history; results can be read as JSON or explored in interactive 2D and 3D editors where nodes and
                             edges can be navigated and edited, and graphs imported and exported. An AI model of your choosing
                             can answer questions about the connected graph, write queries for it, and build one out of plain
-                            text. You supply the key, and it is stored in your browser.
+                            text. @KeySentence
                         </p>
 
-                        <p class="mb-1"><strong>Two editions</strong></p>
-                        <ul class="mb-3 ps-4">
+                        @* Room over the heading and under the list, apart from the text and the links (2026-11-04, the user). *@
+                        <p class="mt-3 mb-1" data-testid="about-editions"><strong>Two editions</strong></p>
+                        <ul class="mb-4 ps-4" data-testid="about-editions-list">
                             <li class="mb-1">
                                 <strong>Web edition</strong>@(HostOptions.HasServerRoute ? "." : " (what you are running).")
                                 Everything happens in the browser. It reaches any database the browser itself can reach:
@@ -53,12 +54,17 @@
                         </ul>
                     }
 
-                    @if (!string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
-                    {
-                        <button type="button" class="btn btn-outline-primary btn-sm mb-3" @onclick="OnOpenShowcase">✨ Open the feature showcase</button>
-                    }
+                    <div class="d-flex flex-column gap-2" data-testid="about-links">
+                        @* The showcase is a link of this list, with its icon, as the others are (2026-11-04, the user): it
+                           stood above them as a button. *@
+                        @if (!string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
+                        {
+                            <a href="" class="d-inline-flex align-items-center" @onclick="OnOpenShowcase" @onclick:preventDefault="true" data-testid="about-showcase">
+                                <i class="bi bi-stars me-2" style="flex-shrink: 0;" aria-hidden="true"></i>
+                                Open the feature showcase
+                            </a>
+                        }
 
-                    <div class="d-flex flex-column gap-2">
                         @* The blog post is the viewer's, so it is offered by the viewer only. The platform
                            gets its link back when there is a post about the platform to link to. *@
                         @if (!HostOptions.HasPlugins)
@@ -112,6 +118,20 @@
                 return "https://github.com/EECSB/Treeality";
             else
                 return "https://github.com/EECSB/GraphDBViewer";
+        }
+    }
+
+    //Where the AI key is kept is the host's to say (ViewerHostOptions.WhereAiKeysAreKept), as it is under the AI
+    //settings. Where it says nothing, the browser: that is where the standalone viewer, the one host this story is
+    //told in today, keeps it.
+    private string KeySentence
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(HostOptions.WhereAiKeysAreKept))
+                return "You supply the key, and it is stored in your browser.";
+            else
+                return $"You supply the key. {HostOptions.WhereAiKeysAreKept}";
         }
     }
 

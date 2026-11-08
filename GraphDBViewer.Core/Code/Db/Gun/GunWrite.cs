@@ -99,8 +99,7 @@ public sealed class GunWrite
 
             return sb.ToString();
         }
-
-        if (Kind == GunWriteKind.Link)
+        else if (Kind == GunWriteKind.Link)
             return sb.Append(".put(gun.get('").Append(GunQuery.Escape(Target)).Append("'))").ToString();
 
         return sb.Append(".put(").Append(ValuesJson()).Append(")").ToString();
@@ -197,14 +196,12 @@ public sealed class GunWrite
             var values = new Dictionary<string, string>();
 
             foreach (var property in doc.RootElement.EnumerateObject())
-            {
                 if (property.Value.ValueKind == JsonValueKind.Null)
                     values[property.Name] = null;
                 else if (property.Value.ValueKind == JsonValueKind.String)
                     values[property.Name] = property.Value.GetString();
                 else
                     values[property.Name] = property.Value.GetRawText();
-            }
 
             return values;
         }

@@ -20,10 +20,10 @@ public class ToolApprovalTests
         {
             get
             {
-                var tools = new List<LlmTool> { new LlmTool { Name = GremlinToolRunner.ReadToolName } };
+                var tools = new List<LlmTool> { new LlmTool { Name = QueryToolRunner.ReadToolName } };
 
                 if (AllowWrites)
-                    tools.Add(new LlmTool { Name = GremlinToolRunner.WriteToolName });
+                    tools.Add(new LlmTool { Name = QueryToolRunner.WriteToolName, Changes = true });
 
                 return tools;
             }
@@ -31,11 +31,11 @@ public class ToolApprovalTests
 
         public List<string> Ran { get; } = new();
 
-        public Task<string> RunToolAsync(string name, string argumentsJson, CancellationToken ct)
+        public Task<LlmToolOutput> RunToolAsync(string name, string argumentsJson, CancellationToken ct)
         {
             Ran.Add(name);
 
-            return Task.FromResult("[]");
+            return Task.FromResult(LlmToolOutput.Result("[]"));
         }
     }
 
@@ -86,8 +86,8 @@ public class ToolApprovalTests
 
         var names = runner.Tools.Select(t => t.Name).ToList();
 
-        Assert.Contains(GremlinToolRunner.ReadToolName, names);
-        Assert.Contains(GremlinToolRunner.WriteToolName, names);
+        Assert.Contains(QueryToolRunner.ReadToolName, names);
+        Assert.Contains(QueryToolRunner.WriteToolName, names);
 
         //And the runner holding the database was told to offer them, which is the only thing that does.
         Assert.True(inner.AllowWrites);
@@ -99,12 +99,12 @@ public class ToolApprovalTests
         var inner = new RecordingRunner();
         var approvals = new Approvals();
 
-        await Wrap(inner, approvals, ToolApprovalMode.Ask).RunToolAsync(GremlinToolRunner.ReadToolName, OneCall, CancellationToken.None);
+        await Wrap(inner, approvals, ToolApprovalMode.Ask).RunToolAsync(QueryToolRunner.ReadToolName, OneCall, CancellationToken.None);
 
         var request = Assert.Single(approvals.Seen);
 
         Assert.False(request.AutoApproved);
-        Assert.Equal(GremlinToolRunner.ReadToolName, Assert.Single(inner.Ran));
+        Assert.Equal(QueryToolRunner.ReadToolName, Assert.Single(inner.Ran));
     }
 
     //Auto is not silent. The call is still handed to the panel — that is how it reaches the transcript —
@@ -116,14 +116,14 @@ public class ToolApprovalTests
         var approvals = new Approvals();
 
         var answer = await Wrap(inner, approvals, ToolApprovalMode.AutoRead)
-            .RunToolAsync(GremlinToolRunner.ReadToolName, OneCall, CancellationToken.None);
+            .RunToolAsync(QueryToolRunner.ReadToolName, OneCall, CancellationToken.None);
 
         var request = Assert.Single(approvals.Seen);
 
         Assert.True(request.AutoApproved);
         Assert.False(request.IsWrite);
-        Assert.Equal("[]", answer);
-        Assert.Equal(GremlinToolRunner.ReadToolName, Assert.Single(inner.Ran));
+        Assert.Equal("[]", answer.Text);
+        Assert.Equal(QueryToolRunner.ReadToolName, Assert.Single(inner.Ran));
     }
 
     [Fact]
@@ -133,14 +133,14 @@ public class ToolApprovalTests
         var approvals = new Approvals();
 
         var answer = await Wrap(inner, approvals, ToolApprovalMode.AutoReadWrite)
-            .RunToolAsync(GremlinToolRunner.WriteToolName, OneWrite, CancellationToken.None);
+            .RunToolAsync(QueryToolRunner.WriteToolName, OneWrite, CancellationToken.None);
 
         var request = Assert.Single(approvals.Seen);
 
         Assert.True(request.AutoApproved);
         Assert.True(request.IsWrite);
-        Assert.Equal("[]", answer);
-        Assert.Equal(GremlinToolRunner.WriteToolName, Assert.Single(inner.Ran));
+        Assert.Equal("[]", answer.Text);
+        Assert.Equal(QueryToolRunner.WriteToolName, Assert.Single(inner.Ran));
     }
 
     //Below the top rung a write is a question, not a refusal: it reaches a person, and it does not reach
@@ -153,13 +153,55 @@ public class ToolApprovalTests
         var inner = new RecordingRunner();
         var approvals = new Approvals();
 
-        await Wrap(inner, approvals, mode).RunToolAsync(GremlinToolRunner.WriteToolName, OneWrite, CancellationToken.None);
+        await Wrap(inner, approvals, mode).RunToolAsync(QueryToolRunner.WriteToolName, OneWrite, CancellationToken.None);
 
         var request = Assert.Single(approvals.Seen);
 
         Assert.True(request.IsWrite);
         Assert.False(request.AutoApproved);
-        Assert.Equal(GremlinToolRunner.WriteToolName, Assert.Single(inner.Ran));
+        Assert.Equal(QueryToolRunner.WriteToolName, Assert.Single(inner.Ran));
+    }
+
+    //A plugin's tools, as the plugin guide's example has them: a read, and a change whose name is nothing like the
+    //write query tool's.
+    private sealed class Shelf : ILlmToolRunner
+    {
+        public List<string> Ran { get; } = new();
+
+        public IReadOnlyList<LlmTool> Tools { get; } = new List<LlmTool>
+        {
+            new LlmTool { Name = "find_part", Description = "Find a part by its number", InputSchemaJson = "{}" },
+            new LlmTool { Name = "move_stock", Description = "Move stock between bins", InputSchemaJson = "{}", Changes = true }
+        };
+
+        public Task<LlmToolOutput> RunToolAsync(string name, string argumentsJson, CancellationToken ct)
+        {
+            Ran.Add(name);
+
+            return Task.FromResult(LlmToolOutput.Result("done"));
+        }
+    }
+
+    ///<summary>
+    ///The gate is told that a tool marked Changes is a write, so the rung that only lets reads go does not answer for it,
+    ///while the plugin's read goes through unasked. From the audit of 2026-11-05, fixed 2026-11-07: the request said
+    ///IsWrite only of the tool named run_write_query, so a plugin's change ran unasked on the middle rung.
+    ///</summary>
+    [Fact]
+    public async Task TheGateIsToldAToolMarkedAsChangingIsAWrite()
+    {
+        var shelf = new Shelf();
+        var approvals = new Approvals();
+        var runner = new ApprovingToolRunner(shelf, approvals.Approve, null, ToolApprovalMode.AutoRead);
+
+        await runner.RunToolAsync("move_stock", "{}", CancellationToken.None);
+        await runner.RunToolAsync("find_part", "{}", CancellationToken.None);
+
+        Assert.Equal(2, approvals.Seen.Count);
+        Assert.True(approvals.Seen[0].IsWrite);
+        Assert.False(approvals.Seen[0].AutoApproved);
+        Assert.False(approvals.Seen[1].IsWrite);
+        Assert.True(approvals.Seen[1].AutoApproved);
     }
 
     //And when they say no, nothing runs — the same answer a declined read gets.
@@ -169,9 +211,9 @@ public class ToolApprovalTests
         var inner = new RecordingRunner();
         var runner = new ApprovingToolRunner(inner, (r, ct) => Task.FromResult(false), null, ToolApprovalMode.AutoRead);
 
-        var answer = await runner.RunToolAsync(GremlinToolRunner.WriteToolName, OneWrite, CancellationToken.None);
+        var answer = await runner.RunToolAsync(QueryToolRunner.WriteToolName, OneWrite, CancellationToken.None);
 
-        Assert.Equal(ApprovingToolRunner.DeclinedMessage, answer);
+        Assert.Equal(ApprovingToolRunner.DeclinedMessage, answer.Text);
         Assert.Empty(inner.Ran);
     }
 
@@ -183,18 +225,18 @@ public class ToolApprovalTests
         var inner = new RecordingRunner();
         var runner = new ApprovingToolRunner(inner, null, null, ToolApprovalMode.AutoReadWrite);
 
-        Assert.Equal(ApprovingToolRunner.DeclinedMessage, await runner.RunToolAsync(GremlinToolRunner.ReadToolName, OneCall, CancellationToken.None));
+        Assert.Equal(ApprovingToolRunner.DeclinedMessage, (await runner.RunToolAsync(QueryToolRunner.ReadToolName, OneCall, CancellationToken.None)).Text);
         Assert.Empty(inner.Ran);
     }
 
     //An inner runner that knows nothing about writes must not be broken by being told about them.
     private sealed class ReadOnlyRunner : ILlmToolRunner
     {
-        public IReadOnlyList<LlmTool> Tools { get; } = new List<LlmTool> { new LlmTool { Name = GremlinToolRunner.ReadToolName } };
+        public IReadOnlyList<LlmTool> Tools { get; } = new List<LlmTool> { new LlmTool { Name = QueryToolRunner.ReadToolName } };
 
-        public Task<string> RunToolAsync(string name, string argumentsJson, CancellationToken ct)
+        public Task<LlmToolOutput> RunToolAsync(string name, string argumentsJson, CancellationToken ct)
         {
-            return Task.FromResult("[]");
+            return Task.FromResult(LlmToolOutput.Result("[]"));
         }
     }
 
@@ -203,7 +245,7 @@ public class ToolApprovalTests
     {
         var runner = new ApprovingToolRunner(new ReadOnlyRunner(), (r, ct) => Task.FromResult(true), null, ToolApprovalMode.AutoReadWrite);
 
-        Assert.Equal(GremlinToolRunner.ReadToolName, Assert.Single(runner.Tools).Name);
+        Assert.Equal(QueryToolRunner.ReadToolName, Assert.Single(runner.Tools).Name);
     }
 
     //Below: the runner that actually holds the database, checked on its own. The gate above can be wired
@@ -230,24 +272,25 @@ public class ToolApprovalTests
     [Fact]
     public void TheWriteToolIsNotEvenListedUntilItIsTurnedOn()
     {
-        var runner = new GremlinToolRunner(new FakeGraphDb());
+        var runner = new QueryToolRunner(new FakeGraphDb());
 
-        Assert.Equal(GremlinToolRunner.ReadToolName, Assert.Single(runner.Tools).Name);
+        Assert.Equal(QueryToolRunner.ReadToolName, Assert.Single(runner.Tools).Name);
 
         runner.AllowWrites = true;
 
-        Assert.Contains(runner.Tools, t => t.Name == GremlinToolRunner.WriteToolName);
+        Assert.Contains(runner.Tools, t => t.Name == QueryToolRunner.WriteToolName);
     }
 
     [Fact]
     public async Task AWriteCallOnARunnerThatIsNotAllowedToWriteTouchesNothing()
     {
         var db = new FakeGraphDb();
-        var runner = new GremlinToolRunner(db);
+        var runner = new QueryToolRunner(db);
 
-        var answer = await runner.RunToolAsync(GremlinToolRunner.WriteToolName, OneWrite, default);
+        var answer = await runner.RunToolAsync(QueryToolRunner.WriteToolName, OneWrite, default);
 
-        Assert.Contains("turned off", answer);
+        Assert.Contains("turned off", answer.Text);
+        Assert.True(answer.IsError);
         Assert.Equal(0, db.Calls);
     }
 
@@ -255,9 +298,9 @@ public class ToolApprovalTests
     public async Task AWriteRunsOnceWritingIsOn()
     {
         var db = new FakeGraphDb();
-        var runner = new GremlinToolRunner(db) { AllowWrites = true };
+        var runner = new QueryToolRunner(db) { AllowWrites = true };
 
-        await runner.RunToolAsync(GremlinToolRunner.WriteToolName, OneWrite, default);
+        await runner.RunToolAsync(QueryToolRunner.WriteToolName, OneWrite, default);
 
         Assert.Equal("g.addV('Product')", db.LastQuery);
     }
@@ -267,11 +310,12 @@ public class ToolApprovalTests
     public async Task TheReadToolKeepsRefusingMutationsEvenWithWritesOn()
     {
         var db = new FakeGraphDb();
-        var runner = new GremlinToolRunner(db) { AllowWrites = true };
+        var runner = new QueryToolRunner(db) { AllowWrites = true };
 
-        var answer = await runner.RunToolAsync(GremlinToolRunner.ReadToolName, OneWrite, default);
+        var answer = await runner.RunToolAsync(QueryToolRunner.ReadToolName, OneWrite, default);
 
-        Assert.Contains("not allowed", answer);
+        Assert.Contains("not allowed", answer.Text);
+        Assert.True(answer.IsError);
         Assert.Equal(0, db.Calls);
     }
 
@@ -285,7 +329,7 @@ public class ToolApprovalTests
     {
         var prompt = NlQueryPrompt.BuildChatSystemPrompt("gremlin", null, true, mode);
 
-        Assert.Contains(GremlinToolRunner.WriteToolName, prompt);
+        Assert.Contains(QueryToolRunner.WriteToolName, prompt);
     }
 
     //An exact-match lookup that comes back empty is the normal case, not a dead end: the graph stores

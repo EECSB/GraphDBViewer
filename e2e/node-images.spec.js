@@ -17,14 +17,14 @@ test('a per-label icon shows on that label\'s nodes in 2D and 3D', async ({ page
 
     //Set an icon URL for the person label in the Style dialog (offline data: URL image).
     await page.getByRole('button', { name: /Style: set each vertex label/ }).click();
-    const dialog = page.locator('.modal-content');
-    //The Style-All dialog lists each label in two tables (appearance + shape/media), so the
-    //label name renders twice; assert the first is visible to confirm the dialog opened.
-    await expect(dialog.getByText('person').first()).toBeVisible();
+    const dialog = page.locator('.gdbv-style-window');
 
-    const personRow = dialog.locator('tbody tr', { hasText: 'person' });
-    await personRow.locator('input[title^="Image URL"]').fill(TINY_PNG);
-    await personRow.locator('input[title^="Image URL"]').press('Enter');
+    //The icon is under a label's row, opened by its arrow (2026-11-04, the Style window in tabs).
+    await dialog.locator('[data-testid=style-row][data-label=person] [data-testid=style-row-toggle]').click();
+
+    const personMore = dialog.locator('[data-testid=style-row-more][data-label=person]');
+    await personMore.locator('input[title^="Image URL"]').fill(TINY_PNG);
+    await personMore.locator('input[title^="Image URL"]').press('Enter');
     await dialog.locator('.btn-close').click();
     await expect(dialog).toBeHidden();
 

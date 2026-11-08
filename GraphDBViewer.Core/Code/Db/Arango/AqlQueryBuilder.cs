@@ -62,16 +62,28 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
 
     //── Escaping ────────────────────────────────────────────────────────
 
-    ///<summary>Escapes a value for a single-quoted AQL string literal.</summary>
+    ///<summary>
+    ///Escapes a value for a single-quoted AQL string literal. A line break is written as its escape:
+    ///the Generated buffer is committed by splitting on newlines, so a value with a raw one became two
+    ///broken statements. Gremlin's Escape has done this since 2026-09-15; this one caught up on
+    ///2026-09-18, and <see cref="StagedLiteral.Unescape"/> reads it back.
+    ///</summary>
     public static string Escape(string value)
     {
-        return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "\\'");
+        return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "\\r").Replace("\n", "\\n");
     }
 
-    ///<summary>Quotes a collection or attribute name as a backticked identifier.</summary>
+    ///<summary>
+    ///Quotes a collection or attribute name as a backticked identifier. Inside the backticks a backslash
+    ///escapes the character after it, which ArangoDB's lexer (arangod/Aql/tokens.ll, 3.11: a backslash and
+    ///any character inside a backticked name, read back as an escaped string is) takes as itself: so a
+    ///backslash is written as <c>\\</c> and a backtick as <c>\`</c>, the backslash first, and the name
+    ///written is the name named. <see cref="AqlStatementParser"/> reads it back. Until 2026-11-07 a backtick
+    ///was dropped from the name and a backslash left bare.
+    ///</summary>
     public static string QuoteIdentifier(string name)
     {
-        return "`" + (name ?? string.Empty).Trim().Replace("`", "") + "`";
+        return "`" + (name ?? string.Empty).Trim().Replace("\\", "\\\\").Replace("`", "\\`") + "`";
     }
 
     private static string Literal(string value)
@@ -115,14 +127,12 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
         var sb = new StringBuilder(key.Length);
 
         foreach (var c in key)
-        {
             if (char.IsLetterOrDigit(c) && c < 128)
                 sb.Append(c);
             else if (KeyPunctuation.IndexOf(c) >= 0)
                 sb.Append(c);
             else
                 sb.Append('_');
-        }
 
         return sb.ToString();
     }
@@ -139,18 +149,15 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
         var parts = new List<string>();
 
         foreach (var collection in collections)
-        {
             if (perCollectionLimit.HasValue)
                 parts.Add($"(FOR x IN {QuoteIdentifier(collection)} LIMIT {perCollectionLimit.Value} RETURN x)");
             else
                 parts.Add($"(FOR x IN {QuoteIdentifier(collection)} RETURN x)");
-        }
 
         if (parts.Count == 0)
             return "[]";
-
-        //UNION needs at least two arrays; one collection is just that array.
-        if (parts.Count == 1)
+        else if (parts.Count == 1)
+            //UNION needs at least two arrays; one collection is just that array.
             return parts[0];
 
         return $"UNION({string.Join(", ", parts)})";
@@ -243,7 +250,6 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
             return edges;
 
         foreach (var row in result.Table.Rows)
-        {
             edges.Add(new EdgeInfo
             {
                 EdgeId = Cell(row, "eId"),
@@ -253,7 +259,6 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
                 OtherNodeId = Cell(row, "vId"),
                 OtherNodeLabel = Cell(row, "vLabel")
             });
-        }
 
         return edges;
     }
@@ -350,8 +355,7 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
 
         if (lookups.Count == 0)
             return Literal(id);
-
-        if (lookups.Count == 1)
+        else if (lookups.Count == 1)
             return $"FIRST({lookups[0]})";
 
         return $"FIRST(UNION({string.Join(", ", lookups)}))";

@@ -1,0 +1,53 @@
+@namespace GraphDBViewerWeb.Components
+
+@*A panel's card (panel-boards spec): an icon, a title and a count in its header, in the tone the panel is about, and
+   whatever the panel holds below. A table put straight inside sits flush with the card's edges; other content brings
+   its own padding, or goes in a card-body.*@
+<section class="card gdbv-panel-card @Class" @attributes="Attributes">
+    <div class="card-header">
+        @if (!string.IsNullOrEmpty(Icon))
+        {
+            <i class="bi @Icon @IconTone"></i>
+        }
+
+        <span>@Title</span>
+
+        @if (Count != null)
+        {
+            <span class="gdbv-count @CountTone" data-testid="panel-count">@Count</span>
+        }
+
+        @if (Aside != null)
+        {
+            <div class="ms-auto fw-normal">@Aside</div>
+        }
+    </div>
+
+    @ChildContent
+</section>
+
+@code {
+    [Parameter] public string Title { get; set; }
+
+    ///<summary>A Bootstrap Icons class, such as <c>bi-alarm</c>.</summary>
+    [Parameter] public string Icon { get; set; }
+
+    ///<summary>What the panel is about, in Bootstrap's words: danger, warning, info, success, primary or secondary.</summary>
+    [Parameter] public string Tone { get; set; } = "secondary";
+
+    [Parameter] public int? Count { get; set; }
+
+    ///<summary>What goes at the right of the header, such as a legend.</summary>
+    [Parameter] public RenderFragment Aside { get; set; }
+
+    [Parameter] public RenderFragment ChildContent { get; set; }
+
+    ///<summary>Classes besides the card's own, such as a margin.</summary>
+    [Parameter] public string Class { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object> Attributes { get; set; }
+
+    private string IconTone => "text-" + Tone;
+
+    private string CountTone => $"bg-{Tone}-subtle text-{Tone}-emphasis";
+}

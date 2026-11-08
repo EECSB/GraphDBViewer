@@ -32,11 +32,22 @@
         {
             selfRef = DotNetObjectReference.Create(this);
 
-            await JS.InvokeVoidAsync("monacoInterop.create", ElementId, Value ?? string.Empty, selfRef, Language);
+            //What the editor is created with, kept rather than read again afterwards: creating it is a round
+            //trip, and a parent that sets the text meanwhile changed Value while the editor was still being
+            //made with the old one. Recording the new one as synced left it out of the editor for good.
+            var initial = Value ?? string.Empty;
+
+            await JS.InvokeVoidAsync("monacoInterop.create", ElementId, initial, selfRef, Language);
 
             created = true;
-            lastSynced = Value;
+            lastSynced = initial;
             lastLanguage = Language;
+
+            if ((Value ?? string.Empty) != initial)
+            {
+                lastSynced = Value;
+                await JS.InvokeVoidAsync("monacoInterop.setValue", Value ?? string.Empty);
+            }
 
             //An editor born read-only has to be told so here: the sync below only runs on a later render,
             //and a preview that nothing else touches never gets one.

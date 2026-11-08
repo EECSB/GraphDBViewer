@@ -6,7 +6,7 @@ window.modelPreviewInterop = {
     modelCache: {},//url -> parsed model, shared across previews so re-selecting a node doesn't re-fetch
 
     //Renders (or re-renders) the model at url into the element with id containerId. color is an optional
-    //hex string for the mesh. Reuses graph3DInterop.loadObjModel for fetch + parse (and .zip handling).
+    //hex string for the mesh. Reuses graph3DInterop.loadModel for fetch + parse (.obj, .gltf, .glb, or a .zip of one).
     render: async function (containerId, url, color) {
         const el = document.getElementById(containerId);
         if (!el || typeof THREE === 'undefined' || !url)
@@ -49,8 +49,9 @@ window.modelPreviewInterop = {
 
         //Load + build the mesh (async). Bail if the scene was disposed meanwhile (selection changed).
         let parsed = null;
+
         try {
-            parsed = await graph3DInterop.loadObjModel(url, this.modelCache);
+            parsed = await graph3DInterop.loadModel(url, this.modelCache);
         }
         catch (e) { }
 
@@ -78,7 +79,13 @@ window.modelPreviewInterop = {
         };
         const onWheel = e => {
             e.preventDefault();
-            let z = camera.position.z + (e.deltaY > 0 ? 0.8 : -0.8);
+            let step;
+            if (e.deltaY > 0)
+                step = 0.8;
+            else
+                step = -0.8;
+
+            let z = camera.position.z + step;
             camera.position.z = Math.max(2.5, Math.min(30, z));
         };
         renderer.domElement.addEventListener('mousedown', onDown);
@@ -153,10 +160,11 @@ window.modelPreviewInterop = {
         geom.computeVertexNormals();
 
         let col = 0x4c8bf5;
-        if (color) {
-            try { col = new THREE.Color(color).getHex(); }
+        if (color)
+            try {
+                col = new THREE.Color(color).getHex();
+            }
             catch (e) { }
-        }
 
         const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.6, metalness: 0.1 });
         return new THREE.Mesh(geom, mat);
@@ -177,10 +185,11 @@ window.modelPreviewInterop = {
             window.removeEventListener('mousemove', state.handlers.onMove);
         }
 
-        if (state.renderer) {
-            try { state.renderer.dispose(); }
+        if (state.renderer)
+            try {
+                state.renderer.dispose();
+            }
             catch (e) { }
-        }
 
         const el = document.getElementById(containerId);
         if (el)

@@ -45,11 +45,9 @@ public partial class Home
         {
             if (Provider.EditorLanguage == "cypher")
                 return "Cypher";
-
-            if (Provider.EditorLanguage == "aql")
+            else if (Provider.EditorLanguage == "aql")
                 return "AQL";
-
-            if (Provider.EditorLanguage == "dql")
+            else if (Provider.EditorLanguage == "dql")
                 return "DQL";
 
             return "Gremlin";
@@ -153,8 +151,7 @@ public partial class Home
 
                 return;
             }
-
-            if (imageExportFormat == "dot")
+            else if (imageExportFormat == "dot")
             {
                 var data = CurrentGraphData();
                 if (data.ValueKind == JsonValueKind.Undefined)
@@ -165,15 +162,14 @@ public partial class Home
 
                 return;
             }
-
-            if (imageExportFormat == "svglayout")
+            else if (imageExportFormat == "svglayout")
             {
                 var data = CurrentGraphData();
                 if (data.ValueKind == JsonValueKind.Undefined)
                     return;
 
                 //Render the graph through an off-screen Cytoscape layout and download the laid-out SVG image.
-                var elements = GraphDataConverter.ToCytoscapeJson(data, labelStyles, edgeColorMode, edgeColors);
+                var elements = GraphDataConverter.ToCytoscapeJson(data, labelStyles, edgeColorMode, edgeColors, ActiveOverlay(), edgeDetails);
                 var svg = await JS.InvokeAsync<string>("cytoscapeLayoutToSvg", elements, cy2dLayout);
 
                 if (!string.IsNullOrEmpty(svg))
@@ -208,6 +204,14 @@ public partial class Home
             if (string.IsNullOrEmpty(content))
                 return;
 
+            //A .glb is binary, and comes back from the 3D view as base64.
+            if (g3dExportFormat == "glb")
+            {
+                await JS.InvokeVoidAsync("exportInterop.downloadBase64", "graph.glb", content, "model/gltf-binary");
+
+                return;
+            }
+
             string mime;
             if (g3dExportFormat == "stl")
                 mime = "model/stl";
@@ -232,6 +236,9 @@ public partial class Home
             return;
 
         var table = GraphDataConverter.ToTable(data);
+
+        //An algorithm's result goes out with the table, as the table shows it.
+        ActiveOverlay()?.AddColumnTo(table);
 
         if (tableExportFormat == "xlsx")
         {
@@ -276,7 +283,8 @@ public partial class Home
         if (await preparation.IsReadyAsync(db))
             return true;
 
-        bool confirmed = await JS.InvokeAsync<bool>("confirm",
+        bool confirmed = await JS.InvokeAsync<bool>(
+            "confirm",
             $"{Provider.DisplayName} needs a schema change before it can take an import:\n\n    {preparation.Requirement}\n\n{preparation.Reason}\n\nApply it now?");
 
         if (!confirmed)
@@ -352,13 +360,17 @@ public partial class Home
                     queryEditorTab = 2;
             }
             else
-            {
                 parsed = JsonSerializer.Deserialize<JsonElement>(input);
-            }
 
             lastResultData = parsed;
             graphResultData = parsed;
-            offlineMode = true;//an imported/pasted graph is offline work — reveal the workspace
+
+            //An imported or pasted graph is offline work when nothing is connected, which reveals the workspace. With a
+            //live connection the workspace is already shown, and offline mode would fight the connection's own state,
+            //as the merge path below has always known; until 2026-10-31 this turned it on regardless.
+            if (!isConnected)
+                offlineMode = true;
+
             resultsCleared = false;//pasted data is a real visualization, not a blank build surface
             queryResults = JsonSerializer.Serialize(parsed, new JsonSerializerOptions { WriteIndented = true });
             showConnectionCard = false;
@@ -373,14 +385,45 @@ public partial class Home
         }
     }
 
-    //Accepting a generated knowledge graph: Replace routes through the shared import path — inheriting
-    //its ConfirmReplaceStagedAsync guard — while Merge appends the modal's precomputed delta.
+    //The Import panel's Generate with AI (2026-11-02): knowledge-graph generation is Ask AI's now, at the user's word to reuse
+    //that window rather than keep one of its own, so this opens Ask AI with its knowledge-graph wizard in the conversation.
+    private async Task OpenGraphGenerationAsync()
+    {
+        showImportExport = false;
+        showNlModal = true;
+
+        //Drawn first, so the box the words go into is on screen to take the caret.
+        StateHasChanged();
+        await Task.Yield();
+
+        if (askAi != null)
+            await askAi.StartGraphAsync();
+    }
+
+    //Using a proposed knowledge graph: Replace routes through the shared import path — inheriting its
+    //ConfirmReplaceStagedAsync guard — while Merge appends the card's precomputed delta.
     private async Task HandleKgUseGraphAsync((string Gremlin, bool Merge) args)
     {
         if (args.Merge)
             await MergeGeneratedGraphAsync(args.Gremlin);
         else
             await VisualizePastedJsonAsync(args.Gremlin);
+    }
+
+    //The coordinates the geocoder found, as staged property edits. Previewed on the spot — the point of
+    //looking them up is watching the hidden vertices appear on the map — and committed like any other
+    //edit, or thrown away with them.
+    private async Task HandleGeocodeStagedAsync(string lines)
+    {
+        if (string.IsNullOrWhiteSpace(lines))
+            return;
+
+        AppendGeneratedQuery(lines);
+
+        reflectDbState = false;
+        queryEditorTab = 2;
+
+        await RenderGraphAsync();
     }
 
     //Merge mode (AC 9): concatenates the delta the modal already folded and previewed. Deliberately
@@ -432,12 +475,11 @@ public partial class Home
             gremlin = ComposedOrExplained(() => GraphImport.ToQueries(graph, Qb));
         }
         else if (GraphImport.LooksLikeQueryScript(input))
-        {
             gremlin = input.Trim();
-        }
         else
         {
             JsonElement data;
+
             try
             {
                 data = JsonSerializer.Deserialize<JsonElement>(input);
@@ -485,7 +527,7 @@ public partial class Home
     private void ExitOfflineMode()
     {
         offlineMode = false;
-        showConnectionCard = true;
+        OpenConnectionCard();
     }
 
     //Starts a blank offline drawing surface: seeds an empty canvas (so the editing toolbar appears) in 2D

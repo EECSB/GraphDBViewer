@@ -1,0 +1,302 @@
+@* The picker for a saved list that manages its own entries (2026-11-04, the user's "option 1"): the chosen entry's
+   name heads it and is renamed in place, and its menu lists the entries with Rename, Duplicate and Delete on each and
+   New at the end. Names alone, lined up with New's (the same evening, the user: no letter badges, no line under). Connections and AI models both use it, so the two read as the same control. It only shows and asks:
+   what a pick, a new name or a delete means is the parent's. *@
+
+<div class="gdbv-picker" data-testid="@TestId" @onkeydown="OnKeyDown">
+    <div class="gdbv-picker-head-row">
+    <div class="gdbv-picker-head @(Error != null ? "is-invalid" : "")">
+        @if (Current is SavedPickerItem current)
+        {
+            @if (renaming)
+            {
+                <input class="form-control form-control-sm gdbv-picker-name-box" value="@(typedName ?? current.Name)" @oninput="OnNameInput" @onchange="e => CommitAsync(current.Key, e)" @onkeydown="e => OnNameKeyDownAsync(current.Key, e)" @ref="nameBox" aria-label="Name" data-testid="@($"{TestId}-name")" />
+                @ConfirmName(current.Key)
+            }
+            else
+            {
+                <button type="button" class="gdbv-picker-face" @onclick="Toggle" aria-haspopup="listbox" aria-expanded="@(open ? "true" : "false")" data-testid="@($"{TestId}-toggle")">
+                    <span class="gdbv-picker-name">@current.Name</span>
+                </button>
+
+                @if (!current.Fixed)
+                {
+                    <button type="button" class="btn btn-sm gdbv-picker-act" @onclick="() => BeginRename()" title="Rename" aria-label="Rename" data-testid="@($"{TestId}-rename")"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                }
+            }
+        }
+        else
+        {
+            @* Not saved yet: its name is typed straight into the head, where a saved one's is shown. *@
+            <input class="form-control form-control-sm gdbv-picker-name-box" value="@(typedName ?? UnsavedName)" placeholder="@NamePlaceholder" @oninput="OnNameInput" @onchange="e => CommitAsync(null, e)" @onkeydown="e => OnNameKeyDownAsync(null, e)" @ref="nameBox" aria-label="Name" data-testid="@($"{TestId}-name")" />
+            @ConfirmName(null)
+        }
+
+        <button type="button" class="btn btn-sm gdbv-picker-act" @onclick="Toggle" title="@($"Your saved {Noun}s")" aria-label="@($"Your saved {Noun}s")" data-testid="@($"{TestId}-chevron")"><i class="bi @(open ? "bi-chevron-up" : "bi-chevron-down")" aria-hidden="true"></i></button>
+    </div>
+    @HeadEnd
+    </div>
+
+    @if (Error != null)
+    {
+        <div class="gdbv-text-sm text-danger mt-1" data-testid="@($"{TestId}-error")">@Error</div>
+    }
+
+    @if (open)
+    {
+        <div class="gdbv-picker-sheet" @onclick="Close"></div>
+
+        <div class="gdbv-picker-menu" role="listbox" data-testid="@($"{TestId}-menu")">
+            @if (Items.Count == 0)
+            {
+                <div class="gdbv-picker-empty">No saved @(Noun)s yet.</div>
+            }
+
+            @foreach (var item in Items)
+            {
+                <div class="gdbv-picker-row @(item.Key == SelectedKey ? "is-selected" : "")" role="option" aria-selected="@(item.Key == SelectedKey ? "true" : "false")" data-key="@item.Key" @onclick="() => PickAsync(item.Key)">
+                    <span class="gdbv-picker-name">@item.Name</span>
+
+                    @if (!item.Fixed)
+                    {
+                        <span class="gdbv-picker-row-acts">
+                            <button type="button" class="btn btn-sm gdbv-picker-act" @onclick="() => RenameRowAsync(item.Key)" @onclick:stopPropagation="true" title="Rename" aria-label="@($"Rename {item.Name}")" data-act="rename"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                            <button type="button" class="btn btn-sm gdbv-picker-act" @onclick="() => DuplicateAsync(item.Key)" @onclick:stopPropagation="true" title="Duplicate" aria-label="@($"Duplicate {item.Name}")" data-act="duplicate"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                            <button type="button" class="btn btn-sm gdbv-picker-act gdbv-picker-delete" @onclick="() => DeleteAsync(item.Key)" @onclick:stopPropagation="true" title="Delete" aria-label="@($"Delete {item.Name}")" data-act="delete"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                        </span>
+                    }
+                </div>
+            }
+
+            <button type="button" class="gdbv-picker-add" @onclick="AddAsync" title="@AddTitle" data-testid="@($"{TestId}-add")"><i class="bi bi-plus-lg" aria-hidden="true"></i>New @Noun</button>
+        </div>
+    }
+</div>
+
+@code {
+    ///<summary>The saved entries, in the order they are listed.</summary>
+    [Parameter] public IReadOnlyList<SavedPickerItem> Items { get; set; } = [];
+
+    ///<summary>The chosen entry's key, or null while the one being edited is not saved yet.</summary>
+    [Parameter] public string SelectedKey { get; set; }
+
+    ///<summary>What one entry is called, in the menu's words: "connection", "model".</summary>
+    [Parameter] public string Noun { get; set; } = "item";
+
+    ///<summary>The name typed so far for an entry that is not saved yet.</summary>
+    [Parameter] public string UnsavedName { get; set; }
+
+    [Parameter] public string NamePlaceholder { get; set; }
+
+    [Parameter] public string AddTitle { get; set; }
+
+    ///<summary>Shown under the head: why a name was not taken, or what has to be named first.</summary>
+    [Parameter] public string Error { get; set; }
+
+    [Parameter] public string TestId { get; set; } = "saved-picker";
+
+    ///<summary>A button joined to the head's end, such as Connections' Save.</summary>
+    [Parameter] public RenderFragment HeadEnd { get; set; }
+
+    [Parameter] public EventCallback<string> OnPick { get; set; }
+
+    ///<summary>A new name for an entry, the key null for the one not saved yet. Answers why it was refused, or null.</summary>
+    [Parameter] public Func<string, string, Task<string>> OnRename { get; set; }
+
+    [Parameter] public EventCallback<string> OnDuplicate { get; set; }
+
+    [Parameter] public EventCallback<string> OnDelete { get; set; }
+
+    [Parameter] public EventCallback OnAdd { get; set; }
+
+    private bool open;
+    private bool renaming;
+    private bool focusName;
+    private ElementReference nameBox;
+
+    //What is in the name box so far, null until something is typed there. Enter and the pencil have no value of their own.
+    private string typedName;
+    private bool confirming;
+    private string seenKey;
+    private string seenUnsavedName;
+
+    ///<summary>The pencil at the end of a name box, where Rename stands outside it. Pressing it leaves the focus in the box, whose blur would otherwise commit the name and put Rename under the pointer, for the click to land on.</summary>
+    private RenderFragment ConfirmName(string key)
+    {
+        return @<button type="button" class="btn btn-sm gdbv-picker-act" @onmousedown:preventDefault="true" @onclick="() => ConfirmNameAsync(key)" title="Confirm the name" aria-label="Confirm the name" data-testid="@($"{TestId}-confirm-name")"><i class="bi bi-pencil" aria-hidden="true"></i></button>;
+    }
+
+    private SavedPickerItem Current
+    {
+        get
+        {
+            if (SelectedKey == null)
+                return null;
+
+            return Items.FirstOrDefault(i => i.Key == SelectedKey);
+        }
+    }
+
+    ///<summary>Puts the name box in the head and the cursor in it: after New, or when a save needs a name first.</summary>
+    public void BeginRename()
+    {
+        open = false;
+        renaming = Current != null;
+        typedName = null;
+        focusName = true;
+        StateHasChanged();
+    }
+
+    protected override void OnParametersSet()
+    {
+        //A rename belongs to the entry it was begun on; another one chosen from outside ends it.
+        if (renaming && Current == null)
+            renaming = false;
+
+        //What was typed belongs to the name it was typed over.
+        if (SelectedKey != seenKey || UnsavedName != seenUnsavedName)
+            typedName = null;
+
+        seenKey = SelectedKey;
+        seenUnsavedName = UnsavedName;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!focusName)
+            return;
+
+        focusName = false;
+
+        try
+        {
+            await nameBox.FocusAsync();
+        }
+        catch { }
+    }
+
+    private void Toggle()
+    {
+        open = !open;
+    }
+
+    private void Close()
+    {
+        open = false;
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key != "Escape")
+            return;
+
+        open = false;
+        renaming = false;
+        typedName = null;
+    }
+
+    private void OnNameInput(ChangeEventArgs e)
+    {
+        typedName = e.Value?.ToString();
+    }
+
+    private async Task OnNameKeyDownAsync(string key, KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await ConfirmNameAsync(key);
+    }
+
+    private async Task PickAsync(string key)
+    {
+        open = false;
+        renaming = false;
+        typedName = null;
+
+        await OnPick.InvokeAsync(key);
+    }
+
+    private async Task CommitAsync(string key, ChangeEventArgs e)
+    {
+        //The browser's change event after an Enter that has already saved the unsaved entry.
+        if (key == null && SelectedKey != null)
+            return;
+
+        typedName = e.Value?.ToString();
+
+        await ConfirmNameAsync(key);
+    }
+
+    ///<summary>Takes what is in the name box: on Enter, on the pencil, and on the box's change when the focus leaves it. The browser sends that change after an Enter too, so one that comes while the first is being answered is dropped.</summary>
+    private async Task ConfirmNameAsync(string key)
+    {
+        if (confirming)
+            return;
+
+        var name = typedName;
+
+        if (name == null && key == null)
+            name = UnsavedName;
+        else if (name == null)
+            name = Current?.Name;
+
+        name = name?.Trim() ?? "";
+
+        //A saved entry's name left as it was, or emptied, is no rename.
+        if (key != null && (name.Length == 0 || name == Current?.Name))
+        {
+            renaming = false;
+            typedName = null;
+            return;
+        }
+
+        string refused = null;
+        confirming = true;
+
+        try
+        {
+            if (OnRename != null)
+                refused = await OnRename(key, name);
+        }
+        finally
+        {
+            confirming = false;
+        }
+
+        if (refused == null)
+        {
+            renaming = false;
+            typedName = null;
+        }
+    }
+
+    private async Task RenameRowAsync(string key)
+    {
+        if (key != SelectedKey)
+            await OnPick.InvokeAsync(key);
+
+        BeginRename();
+    }
+
+    private async Task DuplicateAsync(string key)
+    {
+        open = false;
+
+        await OnDuplicate.InvokeAsync(key);
+    }
+
+    private async Task DeleteAsync(string key)
+    {
+        await OnDelete.InvokeAsync(key);
+    }
+
+    private async Task AddAsync()
+    {
+        open = false;
+        renaming = false;
+        typedName = null;
+
+        await OnAdd.InvokeAsync();
+
+        focusName = true;
+    }
+}

@@ -19,6 +19,10 @@ namespace GraphDBViewerWeb.Code;
 ///</summary>
 public static class GeoCoordinates
 {
+    ///<summary>The viewer's own pair, alone — read before anything else, and before a label's mapping.</summary>
+    private static readonly string[] ViewerLatitudeKeys = { GdbvKeys.Lat };
+    private static readonly string[] ViewerLongitudeKeys = { GdbvKeys.Lon };
+
     ///<summary>Latitude, under the names it is usually stored under. The viewer's reserved key first.</summary>
     public static readonly string[] LatitudeKeys = { GdbvKeys.Lat, "latitude", "lat", "geo_lat", "geolat", "geo_latitude" };
 
@@ -43,33 +47,96 @@ public static class GeoCoordinates
     ///</summary>
     public static bool TryRead(IReadOnlyDictionary<string, string> properties, out double latitude, out double longitude)
     {
+        return TryRead(properties, null, out latitude, out longitude);
+    }
+
+    ///<summary>
+    ///The same, for a label whose vertices name their coordinates something convention does not know —
+    ///the mapping the Style dialog keeps. Three answers are tried in turn, and the order is the point:
+    ///the viewer's own <c>gdbvLat</c> / <c>gdbvLon</c> first, since a place assigned here (by hand, or
+    ///found by the geocoder) is the newest word on where the thing is; then the label's mapping, which
+    ///is somebody saying which properties these are; then convention, so a mapping that names only the
+    ///odd property out leaves the rest still read.
+    ///</summary>
+    public static bool TryRead(IReadOnlyDictionary<string, string> properties, GeoMapping mapping, out double latitude, out double longitude)
+    {
         latitude = 0;
         longitude = 0;
 
         if (properties == null || properties.Count == 0)
             return false;
 
-        if (TryFind(properties, LatitudeKeys, out var latitudeText)
-            && TryFind(properties, LongitudeKeys, out var longitudeText)
-            && TryParseDegrees(latitudeText, out var lat)
-            && TryParseDegrees(longitudeText, out var lon)
-            && IsOnEarth(lat, lon))
-        {
-            latitude = lat;
-            longitude = lon;
-
+        if (TryPair(properties, ViewerLatitudeKeys, ViewerLongitudeKeys, out latitude, out longitude))
             return true;
-        }
 
-        if (TryFind(properties, PointKeys, out var pointText) && TryParsePoint(pointText, out lat, out lon) && IsOnEarth(lat, lon))
-        {
-            latitude = lat;
-            longitude = lon;
-
+        if (mapping != null && TryMapped(properties, mapping, out latitude, out longitude))
             return true;
-        }
+
+        if (TryPair(properties, LatitudeKeys, LongitudeKeys, out latitude, out longitude))
+            return true;
+
+        if (TryPoint(properties, PointKeys, out latitude, out longitude))
+            return true;
 
         return false;
+    }
+
+    //A label's own names, in the same two shapes convention is read in: a pair of properties, then one
+    //holding both. A name that is not there, or holds something that is not a place, falls through to
+    //convention rather than declaring the vertex unlocated - the mapping is an addition, not a fence.
+    private static bool TryMapped(IReadOnlyDictionary<string, string> properties, GeoMapping mapping, out double latitude, out double longitude)
+    {
+        latitude = 0;
+        longitude = 0;
+
+        if (!string.IsNullOrWhiteSpace(mapping.Latitude)
+            && !string.IsNullOrWhiteSpace(mapping.Longitude)
+            && TryPair(properties, [mapping.Latitude], [mapping.Longitude], out latitude, out longitude))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(mapping.Point) && TryPoint(properties, [mapping.Point], out latitude, out longitude))
+            return true;
+
+        return false;
+    }
+
+    //Two properties, one each. Both have to be there, both have to read as degrees, and the pair has to
+    //be a place on the earth - a half-answer is not one.
+    private static bool TryPair(
+        IReadOnlyDictionary<string, string> properties,
+        string[] latitudeKeys,
+        string[] longitudeKeys,
+        out double latitude,
+        out double longitude)
+    {
+        latitude = 0;
+        longitude = 0;
+
+        if (!TryFind(properties, latitudeKeys, out var latitudeText) || !TryFind(properties, longitudeKeys, out var longitudeText))
+            return false;
+
+        if (!TryParseDegrees(latitudeText, out var lat) || !TryParseDegrees(longitudeText, out var lon) || !IsOnEarth(lat, lon))
+            return false;
+
+        latitude = lat;
+        longitude = lon;
+
+        return true;
+    }
+
+    //One property holding both, in any of the notations TryParsePoint reads.
+    private static bool TryPoint(IReadOnlyDictionary<string, string> properties, string[] keys, out double latitude, out double longitude)
+    {
+        latitude = 0;
+        longitude = 0;
+
+        if (!TryFind(properties, keys, out var text) || !TryParsePoint(text, out var lat, out var lon) || !IsOnEarth(lat, lon))
+            return false;
+
+        latitude = lat;
+        longitude = lon;
+
+        return true;
     }
 
     ///<summary>Whether a pair of numbers is a place on the earth at all.</summary>
@@ -179,10 +246,8 @@ public static class GeoCoordinates
             var members = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var member in root.EnumerateObject())
-            {
                 if (member.Value.ValueKind == JsonValueKind.Number || member.Value.ValueKind == JsonValueKind.String)
                     members[member.Name] = member.Value.ToString();
-            }
 
             return TryFind(members, LatitudeKeys, out var latText)
                 && TryFind(members, LongitudeKeys, out var lonText)
@@ -215,12 +280,14 @@ public static class GeoCoordinates
         return true;
     }
 
-    //The first of the candidate names present with a non-empty value, matched without regard to case
-    //— "Latitude" and "LAT" are the same habit as "lat".
-    private static bool TryFind(IReadOnlyDictionary<string, string> properties, string[] keys, out string value)
+    ///<summary>
+    ///The first of the candidate names present with a non-empty value, matched without regard to case — "Latitude"
+    ///and "LAT" are the same habit as "lat". Geocoding reads an address's lines with it too, and kept a copy of its
+    ///own until 2026-11-07.
+    ///</summary>
+    internal static bool TryFind(IReadOnlyDictionary<string, string> properties, string[] keys, out string value)
     {
         foreach (var key in keys)
-        {
             foreach (var property in properties)
             {
                 if (!string.Equals(property.Key, key, StringComparison.OrdinalIgnoreCase))
@@ -233,10 +300,31 @@ public static class GeoCoordinates
 
                 return true;
             }
-        }
 
         value = null;
 
         return false;
+    }
+}
+
+///<summary>
+///Which properties a vertex label keeps its coordinates in, for the data convention cannot read — a
+///column named <c>Breitengrad</c>, a pair called <c>y</c> and <c>x</c>, a point under a name of
+///somebody's own. Kept per label in the Style dialog, beside the color and the display property,
+///because it is the same kind of fact: something true of every vertex wearing that label.
+///
+///Either shape may be given, or both: a latitude and a longitude property, or one property holding
+///both. Nothing given is <see cref="GeoCoordinates.TryRead(IReadOnlyDictionary{string,string}, out double, out double)"/>,
+///which is what most graphs need.
+///</summary>
+public sealed record GeoMapping(string Latitude, string Longitude, string Point)
+{
+    ///<summary>The mapping, or null when it names nothing — so the common case allocates nothing at all.</summary>
+    public static GeoMapping Of(string latitude, string longitude, string point)
+    {
+        if (string.IsNullOrWhiteSpace(latitude) && string.IsNullOrWhiteSpace(longitude) && string.IsNullOrWhiteSpace(point))
+            return null;
+
+        return new GeoMapping(latitude, longitude, point);
     }
 }

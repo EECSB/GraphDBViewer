@@ -1,0 +1,32 @@
+@inherits LayoutComponentBase
+@layout MainLayout
+@implements IDisposable
+@inject GraphDBViewerWeb.Code.ShellState Shell
+
+@*Every page but the viewer: the shell's bar above it (MainLayout), and the page in a card below, which the
+   full-width toggle widens to the window's sides and which runs down to the window's bottom. Pages declare nothing
+   to get it: it is the router's default layout. The viewer lays out cards of its own, sized to the window, and asks
+   for MainLayout alone.*@
+<div class="container-fluid px-0 gdbv-page gdbv-page-below @(Shell.FullScreen ? "gdbv-fullscreen" : "")">
+    <div class="card gdbv-tint gdbv-page-card" data-testid="page-card">
+        @Body
+    </div>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        //The full-width class above is read from ShellState, which changes from inside the bar.
+        Shell.Changed += OnShellChanged;
+    }
+
+    private void OnShellChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Shell.Changed -= OnShellChanged;
+    }
+}

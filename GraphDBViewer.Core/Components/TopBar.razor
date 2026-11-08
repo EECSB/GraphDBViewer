@@ -2,164 +2,225 @@
 @implements IDisposable
 @inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
 @inject GraphDBViewerWeb.Code.ShellState Shell
+@inject IServiceProvider Services
+@inject NavigationManager Nav
 
-<div class="card gdbv-tint d-flex flex-row flex-wrap align-items-center gap-2 mb-2 p-2">
+@* Two columns (2026-10-24): the logo on its own, with almost none of the bar's padding above and below it, so it can be
+   drawn larger than the controls without making the bar taller; and beside it the row of everything else, which keeps
+   the padding and wraps on a narrow screen while the logo stays put. *@
+<div class="card gdbv-tint gdbv-bar d-flex flex-row align-items-center">
 
-    <img src="favicon.svg" alt="@HostOptions.AppName logo" class="ms-1" style="width: 2.2rem; height: 1.8rem; flex-shrink: 0;" />
+    <img src="@LogoPath" alt="@HostOptions.AppName logo" style="width: 2.3rem; height: 2.3rem; margin-left: 0.5rem; flex-shrink: 0;" />
 
-    @* A deployment that names its edition gets the label under the title; one that does not keeps the
-       plain heading, and its own right margin with it. *@
-    @if (!string.IsNullOrEmpty(HostOptions.EditionLabel))
-    {
-        <div class="d-flex flex-column me-5" style="line-height: 1;">
-            <h1 class="mb-0" style="font-size: 1.25rem; line-height: 1;">@HostOptions.AppName</h1>
-            <span style="font-size: 0.62rem; color: #d4af37; align-self: flex-end;">@HostOptions.EditionLabel</span>
-        </div>
-    }
-    else
-    {
-        <h1 class="mb-0 me-5" style="font-size: 1.25rem; line-height: 1;">@HostOptions.AppName</h1>
-    }
+    <div class="gdbv-bar-row d-flex flex-row flex-wrap align-items-center gap-2 p-2 flex-grow-1" style="min-width: 0;">
 
-    @* What the current page contributes to the toolbar — immediately after the logo, the one region a
-       page gets (application-shell spec). The viewer puts its connection indicator, import/export toggle
-       and query settings here; a page contributing nothing leaves just the shell's own controls. *@
-    @Shell.ToolbarContribution
-
-    @* Feature showcase — opens the full-screen showcase overlay, for a deployment that bundles one.
-       Starts the right-aligned button group when it is here; the full-width toggle does when it is not. *@
-    @if (!string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
-    {
-        <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis ms-auto" @onclick="() => showShowcase = true" title="Open the feature showcase">
-            Feature showcase ✨
-        </button>
-    }
-
-    @* Full-width toggle: drops the side margins so the layout fills the viewport. *@
-    <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis @(string.IsNullOrEmpty(HostOptions.ShowcaseUrl) ? "ms-auto" : "ms-2") @(Shell.FullScreen ? "active" : null)" @onclick="Shell.ToggleFullScreenAsync" aria-pressed="@(Shell.FullScreen ? "true" : "false")" title="@(Shell.FullScreen ? "Exit full-width: restore the side margins" : "Full-width: remove the side margins")">
-        @if (Shell.FullScreen)
+        @* A deployment that names its edition gets the label under the title; one that does not keeps the
+           plain heading, and its own right margin with it. *@
+        @if (!string.IsNullOrEmpty(HostOptions.EditionLabel))
         {
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
-                <path d="M5.5 0a.5.5 0 0 1 .5.5v4A1.5 1.5 0 0 1 4.5 6h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5m5 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 10 4.5v-4a.5.5 0 0 1 .5-.5M0 10.5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 6 11.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5m10 1a1.5 1.5 0 0 1 1.5-1.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0z"/>
-            </svg>
+            <div class="d-flex flex-column me-5" style="line-height: 1;">
+                <h1 class="gdbv-app-title mb-0">@HostOptions.AppName</h1>
+                <span style="font-size: 0.62rem; color: #d4af37; align-self: flex-end;">@HostOptions.EditionLabel</span>
+            </div>
         }
         else
         {
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
-                <path d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5M.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5m15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5"/>
-            </svg>
+            <h1 class="gdbv-app-title mb-0 me-5">@HostOptions.AppName</h1>
         }
-    </button>
 
-    @* Settings dropdown (right side) — holds the theme switch, About, and future options. Shell-only:
-       a page cannot add to it, which is what keeps it the same on every page. *@
-    <div class="position-relative ms-2">
-        <button class="btn btn-outline-secondary btn-sm text-body-emphasis" @onclick="() => showSettings = !showSettings" title="Settings">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
-                <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492M5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0"/>
-                <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 0 0 1.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 0 0 3.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.115z"/>
-            </svg>
-            Settings <span class="ms-1">@(showSettings ? "▲" : "▼")</span>
-        </button>
-
-        @if (showSettings)
+        @* The plugin pages open as tabs (2026-10-28): each page visited gets one, after the app's name, and a click on it
+           goes back there; its × closes it. Shortcuts, not live copies: a page switched to is drawn afresh. They stand on
+           the bar's bottom edge, open at the bottom like tabs. *@
+        @if (OfferTabs && TabPages.Count > 0)
         {
-            @* Transparent full-viewport backdrop: a click anywhere outside the menu closes it. *@
-            <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="() => showSettings = false"></div>
+            <nav class="gdbv-bar-tabs me-2" aria-label="Open plugins" data-testid="shell-tabs">
+                @foreach (var entry in TabPages)
+                {
+                    var current = IsCurrent(entry.Route);
 
-            <div class="card position-absolute end-0 mt-1 py-1 shadow" style="z-index: 1080; min-width: 225px;">
-                @* Theme picker. The choices fly out beside the row rather than pushing everything
-                   below them down the menu, so the card keeps its height whatever is open. Hovering
-                   the row opens it and leaving the row or the flyout closes it; both sit inside the
-                   same element, so crossing from one to the other never leaves it. The click is kept
-                   for touch, where there is no hover to have. *@
-                <div class="position-relative border-bottom" @onmouseenter="() => showThemes = true" @onmouseleave="() => showThemes = false">
-                    <button class="dropdown-item d-flex align-items-center gap-2 px-3 py-2" @onclick="() => showThemes = !showThemes">
-                        @* The arrow leads the label and points the way the flyout opens. *@
-                        <span>◀</span>
-                        <span>Theme</span>
-                    </button>
+                    <div class="gdbv-bar-tab @(current ? "active" : "")" data-testid="shell-tab" data-route="@entry.Route">
+                        <a class="gdbv-bar-tab-link" href="@entry.Route" title="@entry.Title" aria-current="@(current ? "page" : null)">
+                            <PluginPageIcon Page="entry" />
+                            <span class="gdbv-bar-tab-title">@entry.Title</span>
+                        </a>
+                        <button type="button" class="gdbv-bar-tab-close" title="Close" aria-label="Close @entry.Title" @onclick="() => CloseTabAsync(entry.Route)" data-testid="shell-tab-close">×</button>
+                    </div>
+                }
+            </nav>
+        }
 
-                    @if (showThemes)
-                    {
-                        <div class="card position-absolute top-0 end-100 py-1 shadow" style="z-index: 1090; min-width: 150px;">
-                            @foreach (var choice in ThemeChoices)
+        @* What the current page contributes to the toolbar, the one region a page gets (application-shell spec), where the
+           plugin pages' tabs stand; a page contributing nothing leaves just the shell's own controls. No page does now: the
+           standalone viewer's connection and Import/Export stood here as tabs for an evening (2026-11-02) before moving to
+           its workspace's row, and it gives the bar only Share, among the icons below. The wrapper is no box of its own
+           (display: contents), so a contribution's tabs would stand on the bar's edge as the page tabs do. *@
+        @if (Shell.ToolbarContribution != null)
+        {
+            <div class="gdbv-bar-contribution" data-testid="shell-contribution">
+                @Shell.ToolbarContribution
+            </div>
+        }
+
+        @* Plugins, as an icon in the bar rather than an entry in Settings: only a host with the plugin
+           platform and an account permitted to install get it — the standalone web-only viewer must show no
+           trace of it (accounts-and-roles task 20). Hiding is a courtesy; the refusal itself is the server's.
+           A real link, so the page it opens is an ordinary navigation. *@
+        @if (OfferPlugins)
+        {
+            @* Hovering it lists every plugin page this account may open, with its icon, to go straight there (2026-10-28);
+               the button itself still opens the Plugins page. The list hangs inside the button's element, so crossing
+               from one to the other never leaves it. *@
+            <div class="position-relative ms-auto" @onmouseenter="EnterPlugins" @onmouseleave="LeavePluginsAsync" data-testid="shell-plugins-host">
+                <a class="btn btn-outline-secondary btn-sm text-body-emphasis gdbv-bar-icon" href="/plugins" title="Plugins" aria-label="Plugins" data-testid="shell-plugins">
+                    <i class="bi bi-puzzle" style="font-size: 18px; line-height: 1; vertical-align: -3px;" aria-hidden="true"></i>
+                </a>
+
+                @if (showPluginMenu)
+                {
+                    <div class="position-absolute end-0 pt-1" style="top: 100%; z-index: 1080;">
+                        <div class="card py-1 shadow gdbv-plugin-menu" data-testid="shell-plugins-menu">
+                            @foreach (var entry in PluginPages)
                             {
-                                <button class="dropdown-item d-flex align-items-center gap-2 px-3 py-2" @onclick="() => PickThemeAsync(choice.Key)">
-                                    @* A fixed-width slot so the labels line up whether or not one is ticked. *@
-                                    <span style="width: 1em;">@(Shell.Theme == choice.Key ? "✓" : "")</span>
-                                    <span>@choice.Label</span>
-                                </button>
+                                <a class="dropdown-item gdbv-menu-row d-flex align-items-center gap-2 text-decoration-none text-body" href="@entry.Route" @onclick="() => showPluginMenu = false" data-testid="shell-plugins-menu-item">
+                                    <PluginPageIcon Page="entry" />
+                                    <span>@entry.Title</span>
+                                </a>
                             }
+
+                            <a class="dropdown-item gdbv-menu-row text-decoration-none text-body-secondary border-top mt-1 pt-2" href="/plugins" @onclick="() => showPluginMenu = false">Manage plugins…</a>
                         </div>
-                    }
-                </div>
-
-                <button class="dropdown-item px-3 py-2 border-bottom" @onclick="ShowLlmSettingsFromMenu">AI settings</button>
-                <button class="dropdown-item px-3 py-2 @(OfferPlugins || OfferInstanceGraph ? "border-bottom" : null)" @onclick="ShowAboutFromMenu">About</button>
-
-                @* Only a host with the plugin platform gets these — the standalone web-only viewer must
-                   show no trace of them — and only for accounts holding the permission each screen
-                   takes: the app does not offer what the server would refuse (accounts-and-roles
-                   task 20). Hiding is a courtesy; the refusal itself is the server's. *@
-                @if (OfferPlugins)
-                {
-                    @* Closes the menu itself: the bar survives the navigation now, so nothing else
-                       would — the menu would still be open on the page this lands on. *@
-                    <a class="dropdown-item px-3 py-2 text-decoration-none @(OfferInstanceGraph ? "border-bottom" : null)" href="/plugins" @onclick="() => showSettings = false">Plugins</a>
-                }
-
-                @if (OfferInstanceGraph)
-                {
-                    <a class="dropdown-item px-3 py-2 text-decoration-none @(OfferBackups ? "border-bottom" : null)" href="/instance-graph" @onclick="() => showSettings = false">Instance graph</a>
-                }
-
-                @if (OfferBackups)
-                {
-                    <a class="dropdown-item px-3 py-2 text-decoration-none" href="/backups" @onclick="() => showSettings = false">Backups</a>
+                    </div>
                 }
             </div>
         }
-    </div>
 
-    @* Account menu. Absent entirely when the deployment runs without sign-in — there is one built-in user
-       everybody is, so there would be nothing behind this to manage. *@
-    @if (Account != null)
-    {
-        <div class="position-relative ms-2">
-            <button class="btn btn-outline-secondary btn-sm d-flex align-items-center gap-2 text-body-emphasis"
-                    @onclick="() => showAccount = !showAccount"
-                    title="@($"Signed in as {Account.DisplayName}")"
-                    aria-haspopup="true" aria-expanded="@(showAccount ? "true" : "false")">
-                <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary text-white"
-                      style="width: 1.35rem; height: 1.35rem; font-size: .7rem; font-weight: 600;" aria-hidden="true">@Account.Initial</span>
-                <span class="ms-1">@(showAccount ? "▲" : "▼")</span>
-            </button>
-
-            @if (showAccount)
+        @* Full-width toggle: drops the side margins so the layout fills the viewport. The first of the
+           right-aligned group when Plugins is not here. The feature showcase stood before them until 2026-11-03, when it
+           moved into Settings, asked about once as the app opens (the user). *@
+        <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis gdbv-bar-icon @(!OfferPlugins ? "ms-auto" : "ms-2") @(Shell.FullScreen ? "active" : null)" @onclick="Shell.ToggleFullScreenAsync" aria-pressed="@(Shell.FullScreen ? "true" : "false")" title="@(Shell.FullScreen ? "Exit full-width: restore the side margins" : "Full-width: remove the side margins")">
+            @if (Shell.FullScreen)
             {
-                @* Same transparent backdrop the Settings menu uses: a click anywhere else closes this. *@
-                <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="() => showAccount = false"></div>
-
-                <div class="card position-absolute end-0 mt-1 py-1 shadow" style="z-index: 1080; min-width: 240px;">
-                    <div class="px-3 py-2 border-bottom">
-                        <div class="text-body-secondary" style="font-size: .75rem;">Signed in as</div>
-                        <div class="text-truncate" title="@Account.DisplayName">@Account.DisplayName</div>
-                    </div>
-
-                    @* Real links and a real form, not click handlers: these leave the WebAssembly app for
-                       server-rendered pages, and signing out has to be a POST the server can verify. *@
-                    <a class="dropdown-item px-3 py-2 text-decoration-none" href="/account">Account settings</a>
-
-                    <form method="post" action="/logout" class="m-0">
-                        <input type="hidden" name="__RequestVerificationToken" value="@Account.AntiforgeryToken" />
-                        <button type="submit" class="dropdown-item px-3 py-2 text-danger">Sign out</button>
-                    </form>
-                </div>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
+                    <path d="M5.5 0a.5.5 0 0 1 .5.5v4A1.5 1.5 0 0 1 4.5 6h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5m5 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 10 4.5v-4a.5.5 0 0 1 .5-.5M0 10.5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 6 11.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5m10 1a1.5 1.5 0 0 1 1.5-1.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0z"/>
+                </svg>
             }
-        </div>
-    }
+            else
+            {
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
+                    <path d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5M.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5m15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5"/>
+                </svg>
+            }
+        </button>
 
+        @* What the current page puts among the bar's own icons: the standalone viewer's Share (ShellState.ToolbarIcons). *@
+        @Shell.ToolbarIcons
+
+        @* While Claude is linked to this tab over the MCP server (LiveLink, 2026-11-03, GDS Viewer's chip): say so, and open AI
+           settings, whose card ends it. Closing AI settings leaves the link up, so this is where it shows. *@
+        @if (Shell.Link.State == LiveLinkState.Linked)
+        {
+            <button type="button" class="btn btn-outline-success btn-sm gdbv-bar-icon ms-2" @onclick="ShowLlmSettingsFromMenu"
+                    title="Linked to Claude over the MCP server: open AI settings to see its calls or end it" aria-label="Linked to Claude"
+                    data-testid="live-link-chip"><i class="bi bi-plug-fill" aria-hidden="true"></i></button>
+        }
+
+        @* The bell (the notifications spec): for a host that publishes notifications and somebody signed in. The standalone
+           viewer registers no feed, so it has none. *@
+        @if (Feed != null && Account?.SignedIn == true)
+        {
+            <NotificationBell Feed="Feed" />
+        }
+
+        @* One menu where there are accounts (2026-10-26): the Settings dropdown and the account dropdown were two buttons
+           side by side, and are now one, in three sections. Who is signed in comes first, with their picture; the settings
+           rows come next, with the gear for the section; the account's own two entries come last. A host with no accounts
+           has no one to be, so it keeps the Settings button on its own: the gear alone, as the bar's other icons are, with
+           no words and no arrow (2026-11-02, the user). *@
+        @if (Account == null)
+        {
+            @* Close up to Share before it, the full-width toggle keeping its room (2026-11-05, the user). *@
+            <div class="position-relative ms-1">
+                <button class="btn btn-outline-secondary btn-sm text-body-emphasis gdbv-bar-icon @(showSettings ? "active" : null)" @onclick="() => showSettings = !showSettings" title="Settings" aria-label="Settings" aria-expanded="@(showSettings ? "true" : "false")" data-testid="shell-settings">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492M5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0"/>
+                        <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 0 0 1.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 0 0 3.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.115z"/>
+                    </svg>
+                </button>
+
+                @if (showSettings)
+                {
+                    @* Transparent full-viewport backdrop: a click anywhere outside the menu closes it. *@
+                    <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="CloseSettings"></div>
+
+                    <div class="card position-absolute end-0 mt-1 py-1 shadow" style="z-index: 1080;">
+                        @SettingsRows
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="position-relative ms-2" @onmouseenter="EnterAccount" @onmouseleave="LeaveAccountAsync">
+                @* The avatar alone, no frame and no arrow (2026-10-28), as big as the bar's square buttons. Hovering it opens the
+                   menu, as hovering the Plugins button opens its list (2026-10-29); a click opens or closes it too. *@
+                <button class="btn p-0 border-0 rounded-circle d-flex"
+                        @onclick="() => showAccount = !showAccount"
+                        aria-label="@($"Signed in as {Account.DisplayName}")"
+                        aria-haspopup="true" aria-expanded="@(showAccount ? "true" : "false")" data-testid="shell-account">
+                    <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary text-white"
+                          style="width: 31px; height: 31px; font-size: .9rem; font-weight: 600;" aria-hidden="true">@Account.Initial</span>
+                </button>
+
+                @if (showAccount)
+                {
+                    @* The padding bridges the gap under the avatar, so the mouse crossing it stays inside; the menu closes
+                       when the mouse leaves it, and when a row is clicked. *@
+                    <div class="position-absolute end-0 pt-1" style="top: 100%; z-index: 1080;">
+                    <div class="card py-1 shadow" style="min-width: 270px;" data-testid="shell-account-menu">
+                        @* Who is signed in, with their picture: the sections' icons share one column, this one's the avatar. *@
+                        <div class="d-flex align-items-center gdbv-menu-row gdbv-menu-lead border-bottom py-2">
+                            <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-primary text-white flex-shrink-0"
+                                  style="width: 2.2rem; height: 2.2rem; font-size: .9rem; font-weight: 600;" aria-hidden="true">@Account.Initial</span>
+                            <div style="min-width: 0;">
+                                <div class="text-body-secondary" style="font-size: .75rem;">Signed in as</div>
+                                <div class="text-truncate" title="@Account.DisplayName">@Account.DisplayName</div>
+                            </div>
+                        </div>
+
+                        @* The settings: a bar of their own, the gear and the word in the same two columns as the
+                           picture and the name above it, and the rows hanging underneath, under the word. *@
+                        <div class="border-bottom">
+                            <div class="d-flex align-items-center gdbv-menu-row gdbv-menu-lead border-bottom fw-semibold" style="font-size: .8rem; padding-top: .1rem; padding-bottom: .1rem;">
+                                <span class="gdbv-menu-icon" style="font-size: .95rem;" aria-hidden="true"><i class="bi bi-gear"></i></span>
+                                Settings
+                            </div>
+
+                            <div style="padding-left: 2.9rem;">
+                                @SettingsRows
+                            </div>
+                        </div>
+
+                        @* Real links and a real form, not click handlers: these leave the WebAssembly app for
+                           server-rendered pages, and signing out has to be a POST the server can verify. *@
+                        <a class="dropdown-item gdbv-menu-row gdbv-menu-lead d-flex align-items-center text-decoration-none text-body" href="/account">
+                            <span class="gdbv-menu-icon" aria-hidden="true"><i class="bi bi-person-gear"></i></span>
+                            Account settings
+                        </a>
+
+                        <form method="post" action="/logout" class="m-0">
+                            <input type="hidden" name="__RequestVerificationToken" value="@Account.AntiforgeryToken" />
+                            <button type="submit" class="dropdown-item gdbv-menu-row gdbv-menu-lead d-flex align-items-center text-danger">
+                                <span class="gdbv-menu-icon" aria-hidden="true"><i class="bi bi-box-arrow-right"></i></span>
+                                Sign out
+                            </button>
+                        </form>
+                    </div>
+                    </div>
+                }
+            </div>
+        }
+
+    </div>
 </div>
 
 @* The shell's dialogs, opened from the menu above. They render as fixed-position overlays, so being
@@ -169,17 +230,238 @@
 
 <ShowcaseModal Visible="showShowcase" OnClose="() => showShowcase = false" />
 
+@* The walk through the viewer's parts (2026-11-03, the user: GDS Viewer's walkthrough, not just the showcase): started by
+   "Show me" below or from the settings menu, never on its own. Or a page's own stops, which a plugin's page asks for when
+   the Plugins page's Take the tour opens it (ShellState.StartTourIfAsked, 2026-11-07). *@
+<GuidedTour Visible="showTour" Stops="tourStops" OnClose="() => showTour = false" />
+
+@* Asked as the app opens, on a host with a showcase, until it is told not to (ShellState.AskTour, 2026-11-03, the user):
+   whether a tour is wanted, which walks through the viewer's parts (GuidedTour, 2026-11-03, the user; it opened the
+   showcase). Settings keeps both for later. *@
+@if (Shell.AskTour && !string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);" role="dialog" aria-modal="true" aria-labelledby="gdbv-tour-title" data-testid="tour-prompt">
+        <div class="modal-dialog modal-dialog-centered" style="max-width: 28rem;">
+            <div class="modal-content overflow-hidden">
+                @* A small picture of the viewer under the words, in the theme's colors (2026-11-03, the user: it looked
+                   bland without anything). The box shares the buttons' row. *@
+                <div class="modal-body">
+                    <h5 class="modal-title mb-2" id="gdbv-tour-title">Want a tour?</h5>
+                    <p class="text-body-secondary">A short walk through @HostOptions.AppName, one part at a time. It is in Settings too, whenever you want it.</p>
+                    @TourArt
+                </div>
+                <div class="modal-footer">
+                    <div class="form-check mb-0 me-auto">
+                        <input class="form-check-input" type="checkbox" id="gdbv-tour-never" @bind="tourNever" data-testid="tour-never" />
+                        <label class="form-check-label" for="gdbv-tour-never">Don't show this again</label>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary" @onclick="() => AnswerTourAsync(false)" data-testid="tour-no">No thanks</button>
+                    <button type="button" class="btn btn-primary" @onclick="() => AnswerTourAsync(true)" data-testid="tour-yes">Show me</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 <LlmSettingsModal Visible="showLlmSettings" OnClose="() => showLlmSettings = false" />
+<MapTilesDialog Visible="showMapTiles" OnClose="() => showMapTiles = false" />
 
 @code {
     ///<summary>Who is signed in, or null while that is still being asked / when the host has no accounts.</summary>
     [Parameter] public AccountInfo Account { get; set; }
 
+    ///<summary>The person's notifications, when the host has them: the app registers a feed, the standalone viewer none.</summary>
+    private INotificationFeed Feed => Services.GetService(typeof(INotificationFeed)) as INotificationFeed;
+
     ///<summary>
-    ///Whether the menu offers the Plugins page: a host that has the platform, and an account permitted
+    ///Whether the bar offers the Plugins page: a host that has the platform, and an account permitted
     ///to install. Null-account means the answer has not arrived yet, and nothing is offered until it has.
     ///</summary>
     private bool OfferPlugins => HostOptions.HasPlugins && Account != null && Account.Can(AccountInfo.PluginsInstall);
+
+    private IPageRegistry Registry => Services.GetService(typeof(IPageRegistry)) as IPageRegistry;
+
+    ///<summary>
+    ///Every plugin page this account may open, in the order the plugins registered: what the Plugins button's menu lists
+    ///and the tabs are made from. A disabled plugin has none, a page behind a permission the account lacks is left out,
+    ///and so is a route with parameters, which has no one place to go.
+    ///</summary>
+    private List<PluginPage> PluginPages
+    {
+        get
+        {
+            if (Registry == null || Account == null)
+                return new List<PluginPage>();
+
+            return Registry.Plugins
+                .Where(p => !p.Disabled)
+                .SelectMany(p => p.Pages)
+                .Where(page => !string.IsNullOrEmpty(page.Route) && !page.Route.Contains('{'))
+                .Where(page => page.Permission == null || Account.Can(page.Permission))
+                .ToList();
+        }
+    }
+
+    ///<summary>Whether the bar keeps tabs: a host with the plugin platform, and someone it has answered for.</summary>
+    private bool OfferTabs => HostOptions.HasPlugins && Account != null && Registry != null;
+
+    ///<summary>The pages open as tabs, in the order they were opened; a tab whose page is gone or hidden is not drawn.</summary>
+    private List<PluginPage> TabPages
+    {
+        get
+        {
+            var pages = PluginPages;
+
+            return Shell.Tabs
+                .Select(route => pages.FirstOrDefault(page => string.Equals(page.Route, route, StringComparison.OrdinalIgnoreCase)))
+                .Where(page => page != null)
+                .ToList();
+        }
+    }
+
+    //Whether the Plugins button's list of pages is open: while the mouse is over the button or the list, and for a
+    //moment after it leaves (HoverGrace), so a move toward the list that brushes past its edge keeps it.
+    private bool showPluginMenu;
+    private CancellationTokenSource pluginsLeave;
+
+    ///<summary>How long a hover menu stays after the mouse leaves it, for the mouse to come back (2026-10-29).</summary>
+    private static readonly TimeSpan HoverGrace = TimeSpan.FromMilliseconds(350);
+
+    private void EnterPlugins()
+    {
+        pluginsLeave?.Cancel();
+        pluginsLeave = null;
+        showPluginMenu = true;
+    }
+
+    private async Task LeavePluginsAsync()
+    {
+        if (await LeftForGoodAsync(pluginsLeave, cts => pluginsLeave = cts))
+            showPluginMenu = false;
+    }
+
+    ///<summary>
+    ///Waits the grace out after the mouse leaves a hover menu; true when it has not come back by then. Coming back
+    ///cancels the wait (EnterPlugins, EnterAccount), as does leaving again, which starts a new one.
+    ///</summary>
+    private static async Task<bool> LeftForGoodAsync(CancellationTokenSource previous, Action<CancellationTokenSource> keep)
+    {
+        previous?.Cancel();
+
+        var wait = new CancellationTokenSource();
+        keep(wait);
+
+        try
+        {
+            await Task.Delay(HoverGrace, wait.Token);
+        }
+        catch (TaskCanceledException)
+        {
+            return false;
+        }
+
+        return !wait.IsCancellationRequested;
+    }
+
+    ///<summary>The route the browser is on, without its query or fragment.</summary>
+    private string CurrentRoute
+    {
+        get
+        {
+            var path = Nav.ToBaseRelativePath(Nav.Uri);
+            var cut = path.IndexOfAny(['?', '#']);
+
+            if (cut >= 0)
+                path = path.Substring(0, cut);
+
+            return "/" + path.TrimEnd('/');
+        }
+    }
+
+    ///<summary>
+    ///The plugin page the browser is on: the one whose route is the address, or the start of it up to a slash, the longest
+    ///such route winning (2026-11-07). The Digitizer's pages all sit beneath /digitizer, and its tab stays raised on them;
+    ///Manufacturing's /manufacturing/labels is a page of its own beside /manufacturing, and is its own tab; and the
+    ///viewer's "/" is current only on itself, as every address begins with it. Null on a page that is no plugin's.
+    ///</summary>
+    private string CurrentPageRoute
+    {
+        get
+        {
+            var address = CurrentRoute.TrimEnd('/');
+            string best = null;
+
+            foreach (var page in PluginPages)
+            {
+                var route = page.Route.TrimEnd('/');
+                var matches = string.Equals(route, address, StringComparison.OrdinalIgnoreCase);
+
+                if (!matches && route.Length > 0)
+                    matches = address.StartsWith(route + "/", StringComparison.OrdinalIgnoreCase);
+
+                if (matches && (best == null || route.Length > best.Length))
+                    best = route;
+            }
+
+            return best;
+        }
+    }
+
+    private bool IsCurrent(string route)
+    {
+        return string.Equals(route.TrimEnd('/'), CurrentPageRoute, StringComparison.OrdinalIgnoreCase);
+    }
+
+    ///<summary>Opens a tab for the page the browser is on, when it is a plugin page this account may open.</summary>
+    private async Task OpenCurrentTabAsync()
+    {
+        if (!OfferTabs)
+            return;
+
+        var page = PluginPages.FirstOrDefault(p => IsCurrent(p.Route));
+
+        if (page != null)
+            await Shell.OpenTabAsync(page.Route);
+    }
+
+    ///<summary>
+    ///Closes a page's tab. Closing the one being looked at goes to the tab beside it, the one before when there is one;
+    ///the last tab closed leaves the page where it is.
+    ///</summary>
+    private async Task CloseTabAsync(string route)
+    {
+        var open = TabPages;
+        var at = open.FindIndex(p => string.Equals(p.Route, route, StringComparison.OrdinalIgnoreCase));
+        string next = null;
+
+        if (IsCurrent(route) && open.Count > 1)
+        {
+            if (at > 0)
+                next = open[at - 1].Route;
+            else
+                next = open[at + 1].Route;
+        }
+
+        await Shell.CloseTabAsync(route);
+
+        if (next != null)
+            Nav.NavigateTo(next);
+    }
+
+    private void OnLocationChanged(object sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await OpenCurrentTabAsync();
+            StateHasChanged();
+        });
+    }
+
+    ///<summary>The account arrives after the bar is drawn, and only then is it known which pages it may open.</summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        await OpenCurrentTabAsync();
+    }
 
     ///<summary>The instance-graph settings, for who may configure it — same reasoning as Plugins.</summary>
     private bool OfferInstanceGraph => HostOptions.HasPlugins && Account != null && Account.Can(AccountInfo.InstanceConfigure);
@@ -189,13 +471,32 @@
     //page exists to answer and it is not an editing one.
     private bool OfferBackups => HostOptions.HasServerRoute && Account != null && Account.Can(BackupsContract.PermissionRead);
 
-    //Whether the Settings dropdown is open. The theme switch keeps it open (a live toggle);
-    //About closes it since it opens a modal.
+    //Whether the Settings dropdown is open. The sticky-bar switch keeps it open (a live toggle); picking
+    //a theme closes it, and so does About, since it opens a modal.
     private bool showSettings;
 
-    //Whether the account menu is open. Both of its items leave the page, so nothing closes it by hand.
+    //Whether the account menu is open: on hovering the avatar, for a moment after the mouse leaves (HoverGrace), and
+    //on a click. Both of its items leave the page, so nothing closes it by hand.
     private bool showAccount;
+    private CancellationTokenSource accountLeave;
 
+    private void EnterAccount()
+    {
+        accountLeave?.Cancel();
+        accountLeave = null;
+        showAccount = true;
+    }
+
+    private async Task LeaveAccountAsync()
+    {
+        if (await LeftForGoodAsync(accountLeave, cts => accountLeave = cts))
+        {
+            showAccount = false;
+            CloseAppearance();
+        }
+    }
+
+    private bool showAppearance;
     private bool showThemes;
 
     //The shell's own dialogs: About, the full-screen showcase overlay (when the host bundles one), and
@@ -203,15 +504,138 @@
     //them, so every page has them (application-shell spec).
     private bool showAbout;
     private bool showShowcase;
+    private bool showTour;
     private bool showLlmSettings;
+    private bool showMapTiles;
 
-    ///<summary>The three themes, in the order the menu lists them.</summary>
+    ///<summary>The stops the tour walks: a page's own, or null for the viewer's, which Settings and the opening question start.</summary>
+    private IReadOnlyList<TourStop>? tourStops;
+
+    ///<summary>
+    ///The settings menu's rows: Appearance, AI settings, the instance's own pages and About. One list, drawn in the
+    ///Settings dropdown of a host with no accounts and inside the account menu of one that has them, so the two can
+    ///never drift apart. Shell-only: a page cannot add to it, which is what keeps it the same on every page.
+    ///</summary>
+    private RenderFragment SettingsRows => @<text>
+            @* Appearance: how the app looks, the theme and whether the bar stays on screen. Its
+               choices fly out beside the row rather than pushing everything below them down the
+               menu, so the card keeps its height whatever is open, and the theme flies out beside
+               them in turn. Hovering a row opens its flyout and leaving the row or the flyout closes
+               it; each flyout sits inside its row's element, so crossing from one to the other never
+               leaves it. The click is kept for touch, where there is no hover to have. *@
+            <div class="position-relative border-bottom" @onmouseenter="() => showAppearance = true" @onmouseleave="CloseAppearance">
+                <button class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row" @onclick="() => showAppearance = !showAppearance">
+                    @* The arrow leads the row and points the way the flyout opens; the rows below indent by it, so the
+                       icons stay in one column. *@
+                    <span class="gdbv-menu-arrow">◀</span>
+                    <i class="bi bi-palette gdbv-menu-row-icon" aria-hidden="true"></i>
+                    <span>Appearance</span>
+                </button>
+
+                @if (showAppearance)
+                {
+                    <div class="card position-absolute top-0 end-100 py-1 shadow" style="z-index: 1090;" data-testid="shell-appearance">
+                        <div class="position-relative" @onmouseenter="() => showThemes = true" @onmouseleave="() => showThemes = false">
+                            <button class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row" @onclick="() => showThemes = !showThemes">
+                                <span class="gdbv-menu-arrow">◀</span>
+                                <span>Theme</span>
+                                <span class="ms-auto small text-body-secondary">@ThemeLabel</span>
+                            </button>
+
+                            @if (showThemes)
+                            {
+                                @* Compact: as wide as its longest name, and the theme that is on is highlighted
+                                   rather than ticked, so no column is kept for a tick. The highlight is spelled
+                                   out because Bootstrap's "active" draws only inside a .dropdown-menu. *@
+                                <div class="card position-absolute top-0 end-100 p-1 shadow" style="z-index: 1100;">
+                                    @foreach (var choice in ThemeChoices)
+                                    {
+                                        <button class="dropdown-item rounded gdbv-menu-row @(Shell.Theme == choice.Key ? "bg-primary-subtle text-primary-emphasis fw-semibold" : "")" aria-pressed="@(Shell.Theme == choice.Key ? "true" : "false")" @onclick="() => PickThemeAsync(choice.Key)">@choice.Label</button>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        @* A switch rather than a choice, so it leaves the menu open: what it did is
+                           on screen the moment the page is scrolled. What it does is its tooltip, so
+                           the flyout is no taller than its rows. *@
+                        <div class="border-top mt-1 gdbv-menu-row">
+                            <div class="form-check form-switch mb-0 text-nowrap" title="Keeps the bar on screen while the page scrolls under it.">
+                                <input class="form-check-input" type="checkbox" role="switch" id="gdbv-sticky-bar" checked="@Shell.StickyBar" @onchange="SetStickyBarAsync" data-testid="shell-sticky-bar" />
+                                <label class="form-check-label" for="gdbv-sticky-bar">Sticky toolbar</label>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <button class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row border-bottom" @onclick="ShowLlmSettingsFromMenu"><i class="bi bi-stars gdbv-menu-row-icon" aria-hidden="true"></i>AI settings</button>
+
+            @* Where the Map and the Globe take their earth from: the built-in images, or a tile server (2026-11-05). *@
+            <button class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row border-bottom" @onclick="ShowMapTilesFromMenu" data-testid="shell-map-tiles"><i class="bi bi-map gdbv-menu-row-icon" aria-hidden="true"></i>Map settings</button>
+
+            @* Only a host with the plugin platform gets this — the standalone web-only viewer must
+               show no trace of it — and only for accounts holding the permission each screen
+               takes: the app does not offer what the server would refuse (accounts-and-roles
+               task 20). Hiding is a courtesy; the refusal itself is the server's. *@
+            @if (OfferInstanceGraph)
+            {
+                @* Closes the menu itself: the bar survives the navigation now, so nothing else
+                   would — the menu would still be open on the page this lands on. *@
+                <a class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row text-decoration-none text-body border-bottom" href="/instance-graph" @onclick="CloseSettings"><i class="bi bi-diagram-3 gdbv-menu-row-icon" aria-hidden="true"></i>Instance graph</a>
+            }
+
+            @if (OfferBackups)
+            {
+                <a class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row text-decoration-none text-body border-bottom" href="/backups" @onclick="CloseSettings"><i class="bi bi-archive gdbv-menu-row-icon" aria-hidden="true"></i>Backups</a>
+            }
+
+            @* The walk through the viewer's parts, on every edition (2026-11-03, the user). *@
+            <button class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row border-bottom" @onclick="ShowTourFromMenu" data-testid="shell-tour"><i class="bi bi-compass gdbv-menu-row-icon" aria-hidden="true"></i>Take the tour</button>
+
+            @* The host's documentation, in a tab of its own so the app stays where it was. A plain link: the wiki is a
+               static site beside the app, not one of its pages. *@
+            @if (HostOptions.WikiUrl != null)
+            {
+                <a class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row text-decoration-none text-body border-bottom" href="@HostOptions.WikiUrl" target="_blank" rel="noopener" @onclick="CloseSettings" data-testid="shell-wiki"><i class="bi bi-book gdbv-menu-row-icon" aria-hidden="true"></i>Wiki</a>
+            }
+
+            @* The showcase, for a host that bundles one: what the tour question at the start opens, kept here for later
+               (2026-11-03, the user; it was a button in the bar). *@
+            @if (!string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
+            {
+                <button class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row border-bottom" @onclick="ShowShowcaseFromMenu" data-testid="shell-showcase"><i class="bi bi-collection-play gdbv-menu-row-icon" aria-hidden="true"></i>Feature showcase</button>
+            }
+
+            @* About last, on every edition. Each row has its icon, in one column (2026-11-03, the user). *@
+            <button class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row" @onclick="ShowAboutFromMenu"><i class="bi bi-info-circle gdbv-menu-row-icon" aria-hidden="true"></i>About</button>
+    </text>;
+
+    ///<summary>The six themes, in the order the menu lists them: the greens, then the blues (2026-10-29).</summary>
     private static readonly (string Key, string Label)[] ThemeChoices =
     [
-        ("dark", "Dark"),
-        ("light", "Light 1"),
-        ("light-tinted", "Light 2")
+        (ShellState.ThemeDark, "Dark green"),
+        (ShellState.ThemeLight, "Light green 1"),
+        (ShellState.ThemeLightTinted, "Light green 2"),
+        (ShellState.ThemeDarkBlue, "Dark blue"),
+        (ShellState.ThemeLightBlue, "Light blue 1"),
+        (ShellState.ThemeLightBlueTinted, "Light blue 2")
     ];
+
+    ///<summary>The host's mark for the theme that is on: its dark one on the dark theme, when it has one.</summary>
+    private string LogoPath
+    {
+        get
+        {
+            if (Shell.DarkMode && HostOptions.DarkLogoPath != null)
+                return HostOptions.DarkLogoPath;
+            else
+                return HostOptions.LogoPath;
+        }
+    }
+
+    ///<summary>The theme that is on, by the name the menu gives it, shown beside the Theme row.</summary>
+    private string ThemeLabel => ThemeChoices.FirstOrDefault(c => c.Key == Shell.Theme).Label;
 
     protected override void OnInitialized()
     {
@@ -219,6 +643,10 @@
         //here, and both change outside this component — re-render when either does.
         Shell.Changed += OnShellChanged;
         Shell.ToolbarChanged += OnShellChanged;
+        Shell.AiSettingsRequested += OnAiSettingsRequested;
+        Shell.TourRequested += OnTourRequested;
+        Shell.Link.Changed += OnLinkChangedAsync;
+        Nav.LocationChanged += OnLocationChanged;
     }
 
     private void OnShellChanged()
@@ -226,30 +654,160 @@
         _ = InvokeAsync(StateHasChanged);
     }
 
+    //The MCP link linked or ended, which shows or takes away its chip.
+    private async Task OnLinkChangedAsync()
+    {
+        await InvokeAsync(StateHasChanged);
+    }
+
+    //Ask AI's Manage models and its /settings, which open these settings from the page. Drawn again here, since the
+    //request comes from outside this component's own events.
+    private void OnAiSettingsRequested()
+    {
+        _ = InvokeAsync(() =>
+        {
+            ShowLlmSettingsFromMenu();
+            StateHasChanged();
+        });
+    }
+
+    //A page asking for its tour, opened to take it from the Plugins page: the viewer, or a plugin's page with its own stops.
+    private void OnTourRequested(IReadOnlyList<TourStop>? stops)
+    {
+        _ = InvokeAsync(() =>
+        {
+            tourStops = stops;
+            showTour = true;
+            StateHasChanged();
+        });
+    }
+
     public void Dispose()
     {
         Shell.Changed -= OnShellChanged;
         Shell.ToolbarChanged -= OnShellChanged;
+        Shell.AiSettingsRequested -= OnAiSettingsRequested;
+        Shell.TourRequested -= OnTourRequested;
+        Shell.Link.Changed -= OnLinkChangedAsync;
+        Nav.LocationChanged -= OnLocationChanged;
     }
 
     private void ShowLlmSettingsFromMenu()
     {
-        showSettings = false;
+        CloseSettings();
         showLlmSettings = true;
+    }
+
+    private void ShowMapTilesFromMenu()
+    {
+        CloseSettings();
+        showMapTiles = true;
+    }
+
+    private void CloseSettings()
+    {
+        showSettings = false;
+        showAccount = false;
+        CloseAppearance();
+    }
+
+    private void CloseAppearance()
+    {
+        showAppearance = false;
+        showThemes = false;
     }
 
     private async Task PickThemeAsync(string key)
     {
-        showSettings = false;
-        showThemes = false;
+        CloseSettings();
         await Shell.SetThemeAsync(key);
+    }
+
+    private async Task SetStickyBarAsync(ChangeEventArgs e)
+    {
+        await Shell.SetStickyBarAsync(e.Value is true);
     }
 
     private void ShowAboutFromMenu()
     {
-        showSettings = false;
+        CloseSettings();
         showAbout = true;
     }
+
+    private void ShowShowcaseFromMenu()
+    {
+        CloseSettings();
+        showShowcase = true;
+    }
+
+    //The viewer's walk, on whichever page Settings is opened: a page's own tour is the page's to start.
+    private void ShowTourFromMenu()
+    {
+        CloseSettings();
+        tourStops = null;
+        showTour = true;
+    }
+
+    //The tour question's "don't show this again" box.
+    private bool tourNever;
+
+    //Either answer puts the question away, for good when the box is ticked; "Show me" starts the viewer's walk.
+    private async Task AnswerTourAsync(bool tour)
+    {
+        await Shell.AnswerTourAsync(tourNever);
+        tourStops = null;
+        showTour = tour;
+    }
+
+    //The tour question's picture: the viewer in small, a window with its tabs, a graph of two groups around their hubs, each
+    //group in a color as the viewer colors labels, and the properties panel beside it.
+    private static readonly (int X, int Y, int R, string Color)[] TourNodes =
+    [
+        (100, 88, 11, "primary"),
+        (52, 62, 6, "info"),
+        (44, 108, 6, "info"),
+        (84, 134, 6, "info"),
+        (104, 42, 6, "info"),
+        (238, 92, 11, "success"),
+        (276, 54, 6, "warning"),
+        (290, 104, 6, "warning"),
+        (252, 136, 6, "warning"),
+        (214, 46, 6, "warning"),
+        (168, 122, 7, "danger")
+    ];
+
+    private static readonly (int From, int To)[] TourEdges =
+    [
+        (0, 1), (0, 2), (0, 3), (0, 4), (5, 6), (5, 7), (5, 8), (5, 9), (0, 5), (0, 10), (10, 5), (4, 9)
+    ];
+
+    private static readonly int[] TourPanelRows = [44, 30, 50, 36, 24];
+
+    private RenderFragment TourArt => @<svg class="d-block w-100 mt-3" viewBox="0 0 400 150" aria-hidden="true" data-testid="tour-art">
+        <rect x="0.5" y="0.5" width="399" height="149" rx="8" stroke-width="1" style="fill: var(--bs-body-bg); stroke: var(--bs-border-color);" />
+        <path d="M0.5 22 V8.5 A8 8 0 0 1 8.5 0.5 H391.5 A8 8 0 0 1 399.5 8.5 V22 Z" style="fill: var(--bs-tertiary-bg);" />
+        <line x1="0.5" y1="22" x2="399.5" y2="22" stroke-width="1" style="stroke: var(--bs-border-color);" />
+        <rect x="12" y="7" width="44" height="9" rx="3" style="fill: var(--bs-primary);" />
+        <rect x="62" y="7" width="36" height="9" rx="3" style="fill: var(--bs-secondary-color); fill-opacity: 0.3;" />
+        <rect x="104" y="7" width="36" height="9" rx="3" style="fill: var(--bs-secondary-color); fill-opacity: 0.3;" />
+
+        @foreach (var (from, to) in TourEdges)
+        {
+            <line x1="@TourNodes[from].X" y1="@TourNodes[from].Y" x2="@TourNodes[to].X" y2="@TourNodes[to].Y" stroke-width="1.5" style="stroke: var(--bs-secondary-color); stroke-opacity: 0.5;" />
+        }
+
+        @foreach (var node in TourNodes)
+        {
+            <circle cx="@node.X" cy="@node.Y" r="@node.R" stroke-width="2" style="fill: var(--bs-@node.Color); stroke: var(--bs-body-bg);" />
+        }
+
+        <rect x="318" y="32" width="72" height="108" rx="4" style="fill: var(--bs-tertiary-bg);" />
+        <rect x="326" y="40" width="40" height="7" rx="2" style="fill: var(--bs-primary);" />
+        @for (var i = 0; i < TourPanelRows.Length; i++)
+        {
+            <rect x="326" y="@(58 + i * 16)" width="@TourPanelRows[i]" height="6" rx="2" style="fill: var(--bs-secondary-color); fill-opacity: 0.35;" />
+        }
+    </svg>;
 
     //Opening the showcase from the About dialog closes About first, so the two overlays do not stack.
     private void OpenShowcaseFromAbout()

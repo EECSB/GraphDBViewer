@@ -6,20 +6,32 @@
 @inject NavigationManager Nav
 @inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
 
-@if (Visible && !string.IsNullOrEmpty(HostOptions.ShowcaseUrl))
+@if (Visible && !string.IsNullOrEmpty(Address))
 {
     <div style="position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; background: var(--bs-body-bg);">
         <div class="d-flex align-items-center justify-content-between px-3 py-2 border-bottom" style="flex-shrink: 0;">
-            <span class="fw-bold d-inline-flex align-items-center gap-2">✨ @HostOptions.AppName: feature showcase</span>
+            <span class="fw-bold d-inline-flex align-items-center gap-2" data-testid="showcase-title">✨ @(Name ?? HostOptions.AppName): feature showcase</span>
             <button type="button" class="btn-close" @onclick="OnClose" title="Close the showcase"></button>
         </div>
-        <iframe src="@ShowcaseSrc" title="@($"{HostOptions.AppName} feature showcase")" style="flex: 1 1 auto; width: 100%; height: 100%; border: 0;"></iframe>
+        @* The bar scrolls away with the page rather than staying put (2026-11-03, the user): it rises by as much as the
+           page has scrolled, up to its own height, and comes back at the top. A showcase on another origin cannot be
+           listened to, and keeps the bar. *@
+        <iframe src="@ShowcaseSrc" title="@($"{Name ?? HostOptions.AppName} feature showcase")" style="flex: 1 1 auto; width: 100%; height: 100%; border: 0;"
+                onload="var bar = this.previousElementSibling, page = this.contentWindow; try { page.addEventListener('scroll', function () { bar.style.marginTop = -Math.min(page.scrollY, bar.offsetHeight) + 'px'; }); } catch (e) { }"></iframe>
     </div>
 }
 
 @code {
     [Parameter] public bool Visible { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
+
+    ///<summary>A plugin's showcase, shown from the Plugins page (2026-11-06); the host's own when none is given.</summary>
+    [Parameter] public string Url { get; set; }
+
+    ///<summary>Whose features they are, for the bar: the plugin's name; the app's when none is given.</summary>
+    [Parameter] public string Name { get; set; }
+
+    private string Address => Url ?? HostOptions.ShowcaseUrl;
 
     ///<summary>
     ///An absolute URL is used as given. A relative one resolves against the app base URI rather than
@@ -30,10 +42,10 @@
     {
         get
         {
-            if (Uri.IsWellFormedUriString(HostOptions.ShowcaseUrl, UriKind.Absolute))
-                return HostOptions.ShowcaseUrl;
+            if (Uri.IsWellFormedUriString(Address, UriKind.Absolute))
+                return Address;
             else
-                return $"{Nav.BaseUri}{HostOptions.ShowcaseUrl.TrimStart('/')}";
+                return $"{Nav.BaseUri}{Address.TrimStart('/')}";
         }
     }
 }

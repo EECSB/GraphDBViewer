@@ -174,15 +174,12 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var node in table.Nodes)
-        {
             if (node.Properties.TryGetValue(NamePredicate, out var name) && !string.IsNullOrWhiteSpace(name))
                 names[node.Id] = name;
             else
                 names[node.Id] = node.Id;
-        }
 
         foreach (var edge in table.Edges)
-        {
             //Which end is "the other one" depends on the direction the query asked in; the panel keeps the
             //two lists apart, so the far end is simply whichever is not this query's subject. In-edge
             //blocks name the source, out-edge blocks the target, and both read the same way here.
@@ -195,7 +192,6 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
                 OtherNodeId = OtherEnd(edge, table),
                 OtherNodeLabel = NameOf(names, OtherEnd(edge, table))
             });
-        }
 
         return edges;
     }
@@ -319,33 +315,39 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
     ///</summary>
     public string AddEdgeWithProperties(string sourceId, string label, string targetId, IReadOnlyDictionary<string, string> properties)
     {
-        //An endpoint that is not a uid is an imported id, so the link is made by finding both ends by that
-        //id — the same upsert the imported nodes were written with, and the reason they carry it.
-        bool imported = !IsUid(sourceId) || !IsUid(targetId);
+        //An end that is not a uid is an imported id, so that end is found by the id — the same upsert the
+        //imported nodes were written with, and the reason they carry it. Each end is decided on its own
+        //(2026-11-07): an edge from a loaded node to a staged import names the uid as the uid it is, where
+        //looking it up by the import id would match nothing and have the upsert make a blank node in its place.
+        var clauses = new List<string>();
+
+        var edge = new Dictionary<string, object>();
+        EdgeEnd(edge, sourceId, SourceVariable, clauses);
 
         var target = new Dictionary<string, object>();
-
-        if (imported)
-            target["uid"] = UpsertVariable(TargetVariable);
-        else
-            target["uid"] = Uid(targetId);
+        EdgeEnd(target, targetId, TargetVariable, clauses);
 
         foreach (var pair in properties)
             target[Facet(label, pair.Key)] = pair.Value;
 
-        var edge = new Dictionary<string, object>();
-
-        if (imported)
-            edge["uid"] = UpsertVariable(SourceVariable);
-        else
-            edge["uid"] = Uid(sourceId);
-
         edge[label] = new[] { target };
 
-        if (!imported)
+        if (clauses.Count == 0)
             return Set(edge);
 
-        return Upsert(edge, MatchClause(SourceVariable, sourceId), MatchClause(TargetVariable, targetId));
+        return Upsert(edge, clauses.ToArray());
+    }
+
+    //One end of a link: a uid as itself, an imported id as the variable the match clause added here binds.
+    private static void EdgeEnd(Dictionary<string, object> node, string id, string variable, List<string> clauses)
+    {
+        if (IsUid(id))
+            node["uid"] = Uid(id);
+        else
+        {
+            node["uid"] = UpsertVariable(variable);
+            clauses.Add(MatchClause(variable, id));
+        }
     }
 
     ///<summary>How a facet is named in a mutation and in an answer: the predicate, a bar, and the key.</summary>
@@ -499,9 +501,11 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
 
     //── Guards and parsing ──────────────────────────────────────────────
 
+    //Every write the driver performs: a mutation, and the schema change the viewer marks for itself, which goes
+    //to /alter rather than /mutate but changes the database all the same.
     public bool IsMutating(string query)
     {
-        return DgraphDb.IsMutation(query);
+        return DgraphDb.IsMutation(query) || (query ?? "").StartsWith(DgraphDb.AlterPrefix, StringComparison.Ordinal);
     }
 
     public List<GraphEdit> ParseEdits(string buffer)
@@ -556,8 +560,9 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
     }
 
     ///<summary>
-    ///A uid as a query can use it. Dgraph's are hexadecimal (<c>0x1</c>); anything else is quoted so a
-    ///stray id is a query that finds nothing rather than one that will not parse.
+    ///A uid as a query can use it. Dgraph's are hexadecimal (<c>0x1</c>), hexadecimal digits after the
+    ///<c>0x</c> and nothing else; anything else becomes the uid that matches nothing, so a stray id is a
+    ///query that finds nothing rather than one that will not parse.
     ///</summary>
     public static string Uid(string id)
     {
@@ -566,7 +571,7 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
         if (text.Length == 0)
             return "0x0";
 
-        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && text.Length > 2)
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && text.Length > 2 && text.Skip(2).All(char.IsAsciiHexDigit))
             return text;
 
         if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))

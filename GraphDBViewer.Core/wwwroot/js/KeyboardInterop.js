@@ -6,9 +6,8 @@ window.keyboardInterop = {
     attach: function (ref) {
         this.dotNetRef = ref;
 
-        if (this.handler) {
+        if (this.handler)
             document.removeEventListener('keydown', this.handler);
-        }
 
         const self = this;
         this.handler = function (e) {
@@ -16,9 +15,8 @@ window.keyboardInterop = {
             const target = e.target;
             if (target) {
                 const tag = target.tagName;
-                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) {
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable)
                     return;
-                }
             }
 
             //While the debugger's Steps tab is open, arrow keys drive the step cursor (matching the ◀ ▶ ▲ ▼
@@ -42,11 +40,9 @@ window.keyboardInterop = {
                 }
             }
 
-            if (e.key === 'Delete') {
-                if (self.dotNetRef) {
+            if (e.key === 'Delete')
+                if (self.dotNetRef)
                     self.dotNetRef.invokeMethodAsync('OnDeleteKeyPressed');
-                }
-            }
         };
 
         document.addEventListener('keydown', this.handler);

@@ -92,13 +92,12 @@ public class GremlinDebugQueriesTests
         Assert.Equal(new[] { "out", "hasLabel" }, names);
     }
 
-    [Theory]
-    [InlineData("964", "964")]
-    [InlineData("abc", "'abc'")]
-    [InlineData("v1", "'v1'")]
-    public void FormatDebugId_QuotesNonNumeric(string id, string expected)
+    //Digits not in a number's own form are a string id: bare, 007 is the octal 7 to Groovy. The debugger writes an id
+    //by the rule every query does, whose own rows are GremlinQueryBuilderTests' FormatId tests.
+    [Fact]
+    public void FormatDebugId_QuotesDigitsNotInANumbersOwnForm_AsEveryQueryDoes()
     {
-        Assert.Equal(expected, GremlinDebugQueries.FormatDebugId(id));
+        Assert.Equal("'007'", GremlinDebugQueries.FormatDebugId("007"));
     }
 
     [Fact]

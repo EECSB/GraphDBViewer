@@ -25,18 +25,40 @@ public class FallbackAppStorage : IAppStorage
     ///</summary>
     public const string PendingKey = "graphdbviewer:__pendingSync";
 
+    ///<summary>
+    ///Whose mirror this is, kept in the local store: the id of the account the app last booted as. Checked
+    ///against who is signed in now before anything is read, and a different answer empties the mirror
+    ///first. Without it a second account on the same browser was handed the first one's workspace — the
+    ///server had nothing under the new account, and "nothing on the server" meant "adopt the local copy"
+    ///(the 2026-09-17 audit, reproduced end to end; fixed 2026-09-18).
+    ///</summary>
+    public const string OwnerKey = "graphdbviewer:__owner";
+
     private readonly IAppStorage _primary;
     private readonly IAppStorage _backup;
+    private readonly Func<Task<string>> _accountAsync;
 
     //key → true when what is pending is a delete rather than a write. Loaded once, then kept in memory and
     //persisted only when it changes — which, while the server is reachable, is never.
     private Dictionary<string, bool> _pending;
     private bool _flushing;
 
-    public FallbackAppStorage(IAppStorage primary, IAppStorage backup)
+    //The account the mirror is known to belong to, once the host has said who is signed in; null until then.
+    private string _owner;
+    private Task _claiming;
+
+    ///<param name="accountAsync">
+    ///Who is signed in, as the host knows it — the id, or null while the host cannot be asked. Left out
+    ///where there are no accounts (the web-only edition), and then the mirror is simply the browser's.
+    ///</param>
+    public FallbackAppStorage(IAppStorage primary, IAppStorage backup, Func<Task<string>> accountAsync = null)
     {
+        if (accountAsync != null && backup is not IMirrorStorage)
+            throw new ArgumentException("A mirror claimed by an account has to be one that can be emptied for the next one.", nameof(backup));
+
         _primary = primary;
         _backup = backup;
+        _accountAsync = accountAsync;
 
         //A quota belongs to the browser, so the warning comes from the local half.
         _backup.StorageQuotaExceeded += () => StorageQuotaExceeded?.Invoke();
@@ -67,19 +89,7 @@ public class FallbackAppStorage : IAppStorage
 
     public async Task<T> GetAsync<T>(string key)
     {
-        var json = await GetStringAsync(key);
-
-        if (string.IsNullOrEmpty(json))
-            return default;
-
-        try
-        {
-            return JsonSerializer.Deserialize<T>(json);
-        }
-        catch
-        {
-            return default;
-        }
+        return StoredJson.Read<T>(await GetStringAsync(key));
     }
 
     public async Task SetAsync<T>(string key, T value)
@@ -89,7 +99,7 @@ public class FallbackAppStorage : IAppStorage
 
     public async Task<string> GetStringAsync(string key)
     {
-        await EnsurePendingLoadedAsync();
+        await EnsureReadyAsync();
 
         //A backlog is cleared before it is read around, and this is also the only thing that notices the
         //server came back during a session that never writes — a reload straight into offline reads would
@@ -129,10 +139,17 @@ public class FallbackAppStorage : IAppStorage
     ///emptiness over what they had.
     ///
     ///So local wins when the server is silent, and is pushed up so the next read finds it there. It cannot
-    ///resurrect a deletion: a delete removes the local copy too, so there is nothing left to adopt.
+    ///resurrect a deletion: a delete removes the local copy too, so there is nothing left to adopt. And it
+    ///cannot hand one account another's: the mirror is stamped with whose it is (<see cref="OwnerKey"/>),
+    ///and a different account signing in on this browser empties it before anything is read.
     ///</summary>
     private async Task<string> AdoptLocalAsync(string key)
     {
+        //Not while it is unknown whose copy this is: adopting it would push another account's workspace
+        //up as this one's, which is the bug the owner stamp exists to end.
+        if (_accountAsync != null && _owner == null)
+            return null;
+
         var local = await _backup.GetStringAsync(key);
 
         if (local == null)
@@ -152,7 +169,7 @@ public class FallbackAppStorage : IAppStorage
 
     public async Task SetStringAsync(string key, string value)
     {
-        await EnsurePendingLoadedAsync();
+        await EnsureReadyAsync();
 
         //Local first and unconditionally: the copy must never be the one that is behind.
         await _backup.SetStringAsync(key, value);
@@ -175,7 +192,7 @@ public class FallbackAppStorage : IAppStorage
 
     public async Task RemoveAsync(string key)
     {
-        await EnsurePendingLoadedAsync();
+        await EnsureReadyAsync();
 
         await _backup.RemoveAsync(key);
 
@@ -196,6 +213,82 @@ public class FallbackAppStorage : IAppStorage
             MarkUnreachable();
         }
     }
+
+    #region Whose mirror it is
+
+    private async Task EnsureReadyAsync()
+    {
+        await ClaimAsync();
+        await EnsurePendingLoadedAsync();
+    }
+
+    ///<summary>
+    ///Makes the mirror the signed-in account's before anything reads it. Asked of the host once; while the
+    ///host cannot say (it is not answering), the mirror stays whoever's it was — a read may still fall back
+    ///to it, since offline it is all there is — and nothing in it is pushed up until the answer comes.
+    ///Asked again on the next call until it does.
+    ///</summary>
+    private async Task ClaimAsync()
+    {
+        if (_accountAsync == null || _owner != null)
+            return;
+
+        //Callers landing here together share one ask. The in-flight task is let go by whoever finishes
+        //awaiting it, and only if it is still the one they started — a claim that completes on the spot
+        //(a cached answer) must not be kept as "in flight" and answered from forever after.
+        var claiming = _claiming;
+
+        if (claiming == null)
+        {
+            claiming = ClaimCoreAsync();
+            _claiming = claiming;
+        }
+
+        try
+        {
+            await claiming;
+        }
+        finally
+        {
+            if (ReferenceEquals(_claiming, claiming))
+                _claiming = null;
+        }
+    }
+
+    private async Task ClaimCoreAsync()
+    {
+        string account;
+
+        try
+        {
+            account = await _accountAsync();
+        }
+        catch
+        {
+            account = null;
+        }
+
+        if (string.IsNullOrEmpty(account))
+            return;
+
+        var stamped = await _backup.GetStringAsync(OwnerKey);
+
+        if (stamped != null && stamped != account)
+        {
+            //Somebody else's. Emptied whole, the pending set with it: what that account wrote offline was
+            //theirs to push, and this account is not them.
+            await ((IMirrorStorage)_backup).ClearAsync();
+
+            _pending = new();
+        }
+
+        if (stamped != account)
+            await _backup.SetStringAsync(OwnerKey, account);
+
+        _owner = account;
+    }
+
+    #endregion
 
     #region The pending set
 
@@ -271,11 +364,15 @@ public class FallbackAppStorage : IAppStorage
     ///</summary>
     public async Task FlushPendingAsync()
     {
-        await EnsurePendingLoadedAsync();
+        await EnsureReadyAsync();
 
         //Re-entrancy guard: the pushes below go through _primary directly, but a caller could still land
         //here from two directions at once.
         if (_flushing || _pending.Count == 0)
+            return;
+
+        //Nothing is pushed up until the host has said whose mirror this is (see ClaimAsync).
+        if (_accountAsync != null && _owner == null)
             return;
 
         _flushing = true;
@@ -283,13 +380,12 @@ public class FallbackAppStorage : IAppStorage
         try
         {
             foreach (var (key, isDelete) in _pending.ToList())
-            {
                 try
                 {
                     if (isDelete)
                         await _primary.RemoveAsync(key);
                     else
-                        await _primary.SetStringAsync(key, await _backup.GetStringAsync(key));
+                        await PushAsync(key);
 
                     _pending.Remove(key);
                     MarkReachable();
@@ -300,7 +396,6 @@ public class FallbackAppStorage : IAppStorage
                     MarkUnreachable();
                     break;
                 }
-            }
 
             await SavePendingAsync();
         }
@@ -308,6 +403,18 @@ public class FallbackAppStorage : IAppStorage
         {
             _flushing = false;
         }
+    }
+
+    //A pending key whose local copy has since gone — evicted, or cleared by the browser — has nothing to
+    //push, and pushing the nothing would have overwritten the server's real value with an empty one.
+    private async Task PushAsync(string key)
+    {
+        var local = await _backup.GetStringAsync(key);
+
+        if (local == null)
+            return;
+
+        await _primary.SetStringAsync(key, local);
     }
 
     #endregion

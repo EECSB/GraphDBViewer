@@ -1,0 +1,25 @@
+@namespace GraphDBViewerWeb.Components
+@using GraphDBViewerWeb.Code
+@inject NavigationManager Navigation
+
+@*A plugin page's icon where the shell lists pages small, the Plugins button's menu and the bar's tabs: its glyph, as the
+   page's own header wears it, else its drawn icon, else a puzzle piece. The drawn icon is cut out of the text color
+   (a CSS mask) rather than shown in its own colors, so it sits among the glyphs as one of them (2026-10-29). The
+   address is made absolute first: a url() in a custom property resolves against the stylesheet that reads it, not
+   the page, and the stylesheet sits in a folder of its own.*@
+@if (!string.IsNullOrEmpty(Page?.Glyph))
+{
+    <i class="bi @Page.Glyph gdbv-page-icon" aria-hidden="true"></i>
+}
+else if (!string.IsNullOrEmpty(Page?.Icon))
+{
+    <span class="gdbv-page-icon gdbv-page-icon-drawn" style="--gdbv-icon: url('@Navigation.ToAbsoluteUri(Page.Icon)');" aria-hidden="true"></span>
+}
+else
+{
+    <i class="bi bi-puzzle gdbv-page-icon" aria-hidden="true"></i>
+}
+
+@code {
+    [Parameter] public PluginPage Page { get; set; }
+}

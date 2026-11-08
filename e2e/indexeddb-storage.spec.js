@@ -38,7 +38,7 @@ test('migrates existing localStorage data into IndexedDB and keeps it across rel
 
     //Reload: the data must survive (IndexedDB persists), and the second boot must NOT re-migrate (flag guards it).
     await page.reload();
-    await expect(page.getByRole('button', { name: /Import \/ Export/ })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole('button', { name: /Import\/Export/ })).toBeVisible({ timeout: 60000 });
     await expect.poll(async () => {
         return await page.evaluate(() => document.documentElement.getAttribute('data-bs-theme'));
     }).toBe('light');

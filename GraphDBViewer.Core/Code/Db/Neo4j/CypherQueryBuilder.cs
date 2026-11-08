@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 
 namespace GraphDBViewerWeb.Code;
@@ -30,10 +31,15 @@ public sealed class CypherQueryBuilder : IGraphQueryBuilder
 
     //── Escaping ────────────────────────────────────────────────────────
 
-    ///<summary>Escapes a value for a single-quoted Cypher string literal.</summary>
+    ///<summary>
+    ///Escapes a value for a single-quoted Cypher string literal. A line break is written as its escape:
+    ///the Generated buffer is committed by splitting on newlines, so a value with a raw one became two
+    ///broken statements. Gremlin's Escape has done this since 2026-09-15; this one caught up on
+    ///2026-09-18, and <see cref="StagedLiteral.Unescape"/> reads it back.
+    ///</summary>
     public static string Escape(string value)
     {
-        return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "\\'");
+        return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "\\r").Replace("\n", "\\n");
     }
 
     ///<summary>
@@ -81,6 +87,17 @@ public sealed class CypherQueryBuilder : IGraphQueryBuilder
     public string LimitedVertices(int limit)
     {
         return $"MATCH (n) RETURN n LIMIT {limit}";
+    }
+
+    ///<summary>
+    ///Nodes of one label carrying one of these names — what a generated entity is matched against so a
+    ///second Acme is not written beside the one the graph already has. One query for the whole label.
+    ///</summary>
+    public string VerticesByName(string label, IReadOnlyList<string> names, int limit)
+    {
+        var quoted = string.Join(", ", names.Select(Literal));
+
+        return $"MATCH (n:{QuoteIdentifier(label)}) WHERE n.name IN [{quoted}] RETURN n LIMIT {limit}";
     }
 
     ///<summary>
@@ -151,7 +168,6 @@ RETURN {DisplayLabel("n")} AS label";
             return edges;
 
         foreach (var row in result.Table.Rows)
-        {
             edges.Add(new EdgeInfo
             {
                 EdgeId = Cell(row, "eId"),
@@ -161,7 +177,6 @@ RETURN {DisplayLabel("n")} AS label";
                 OtherNodeId = Cell(row, "vId"),
                 OtherNodeLabel = Cell(row, "vLabel")
             });
-        }
 
         return edges;
     }

@@ -33,24 +33,11 @@ public static class InstanceGraphContract
     public const string TestPath = "api/graph/instance/test";
 
     ///<summary>
-    ///Save now (the instance-graph-backend research, question 5): writes a file-backed TinkerGraph to its
-    ///own file on demand, so a crash loses "since the last save" rather than everything since the last
-    ///start. Gated like config — it writes the server's disk. Answers <see cref="InstanceGraphSaveResult"/>.
-    ///</summary>
-    public const string SavePath = "api/graph/instance/save";
-
-    ///<summary>
-    ///The autosave interval, and what the last one this server ran did. Gated like config: it decides
-    ///how often the server rewrites its own disk. GET answers <see cref="InstanceGraphAutosaveState"/>,
-    ///PUT takes <see cref="InstanceGraphAutosaveSetting"/>.
-    ///</summary>
-    public const string AutosavePath = "api/graph/instance/autosave";
-
-    ///<summary>
     ///Declare the schema (the JanusGraph recipe): property keys with their datatypes and the indexes,
     ///generated from the vocabularies. JanusGraph needs both declared and TinkerGraph needs neither, so
     ///this refuses on anything else. Gated like config — it changes what the server will accept.
-    ///Answers <see cref="InstanceGraphSchemaResult"/>.
+    ///POST declares and answers <see cref="InstanceGraphSchemaResult"/>; GET only asks whether the graph
+    ///has that schema and answers <see cref="InstanceGraphSchemaState"/>.
     ///</summary>
     public const string SchemaPath = "api/graph/instance/schema";
 
@@ -61,73 +48,32 @@ public static class InstanceGraphContract
     ///</summary>
     public const string SearchHealthPath = "api/graph/instance/search-health";
 
-    ///<summary>Where the interval lives in instance state — a number of minutes, and no credential, so it is not reserved.</summary>
-    public const string AutosaveKey = "instance:graph:autosave";
-
-    ///<summary>What an instance that has never been told runs at: five minutes, the user's call of 2026-09-07.</summary>
-    public const int AutosaveDefaultMinutes = 5;
-
-    ///<summary>The shortest interval accepted. A save is a full rewrite of the whole graph.</summary>
-    public const int AutosaveFloorMinutes = 5;
-
-    ///<summary>A day. Longer than this is off in all but name, and off says so plainly.</summary>
-    public const int AutosaveCeilingMinutes = 1440;
-
-    ///<summary>What the settings page offers, in order. Zero is off; any other value in range is accepted by the endpoint.</summary>
-    public static readonly int[] AutosaveChoices = [0, 5, 15, 30, 60, 240, 720, 1440];
-
-    ///<summary>Why an interval is refused, or null when it is fine. Refusals name the number, so an administrator learns the rule rather than the fact that one exists.</summary>
-    public static string ValidateAutosave(int minutes)
-    {
-        if (minutes == 0)
-            return null;
-
-        if (minutes < 0)
-            return "An autosave interval cannot be negative. Use 0 to turn it off.";
-
-        if (minutes < AutosaveFloorMinutes)
-            return $"An autosave interval is 0 (off) or at least {AutosaveFloorMinutes} minutes: every save rewrites the whole graph, and a shorter one would spend the server on writing rather than answering.";
-
-        if (minutes > AutosaveCeilingMinutes)
-            return $"An autosave interval of more than {AutosaveCeilingMinutes} minutes is off in all but name. Use 0, which says so.";
-
-        return null;
-    }
-
-    ///<summary>How an interval reads in a sentence — "off", or the number of minutes, hours or days it is.</summary>
-    public static string AutosaveLabel(int minutes)
-    {
-        if (minutes <= 0)
-            return "Off";
-
-        if (minutes < 60)
-            return $"Every {minutes} minutes";
-
-        if (minutes == 60)
-            return "Every hour";
-
-        if (minutes < 1440)
-            return $"Every {minutes / 60} hours";
-
-        return "Every day";
-    }
+    ///<summary>
+    ///The example project (example-project spec): records an instance can be shown with, made by the app's own
+    ///endpoints and taken out again whole. GET answers <see cref="InstanceGraphExampleState"/>; POST starts loading
+    ///it and DELETE removes it, each answering the same. Gated like config: it writes the whole graph.
+    ///</summary>
+    public const string ExamplePath = "api/graph/instance/example";
 
     ///<summary>
-    ///Whether an engine can host the instance graph. TinkerPop and Cosmos speak the platform's own
-    ///Gremlin and can do everything the app knows how to do; everything else is refused with the
+    ///Whether an engine can host the instance graph. Only TinkerPop can: it speaks the platform's own
+    ///Gremlin and can do everything the app knows how to do. Everything else is refused with the
     ///reason, never silently hidden (ADR 0009 — multi-engine support is the standalone viewer's
-    ///feature, not the platform's).
+    ///feature, not the platform's). That includes Cosmos DB since 2026-09-18, although it speaks the
+    ///same query language: the platform's batches are Groovy scripts and its dates typed values, and
+    ///Cosmos runs neither.
     ///</summary>
     public static bool CanHost(string databaseType, out string reason)
     {
-        if (databaseType == GraphDbProviders.TinkerPop || databaseType == GraphDbProviders.CosmosDb)
+        if (databaseType == GraphDbProviders.TinkerPop)
         {
             reason = null;
 
             return true;
         }
-
-        if (databaseType == GraphDbProviders.Sparql)
+        else if (databaseType == GraphDbProviders.CosmosDb)
+            reason = "Cosmos DB cannot host the instance graph: the platform writes through Groovy scripts and stores dates as typed values, and Cosmos's Gremlin API takes neither. The viewer can still browse one.";
+        else if (databaseType == GraphDbProviders.Sparql)
             reason = "SPARQL endpoints cannot host the instance graph: there is no query builder for them, so nothing could compose a query on a plugin's behalf — and no writes.";
         else if (databaseType == GraphDbProviders.Gun)
             reason = "GUN cannot host the instance graph: it cannot enumerate itself, so there is no way to load what plugins stored.";
@@ -149,39 +95,19 @@ public sealed class InstanceGraphStatus
 
     ///<summary>The host it points at — display only, so an administrator recognizes which server.</summary>
     public string Host { get; set; }
+
+    ///<summary>
+    ///What is wrong with the graph's schema, in a sentence, or null when nothing is known to be. Only a
+    ///JanusGraph ever has one: it is the engine that fixes a property's datatype from the first value it
+    ///stores, so a plugin page shows this before anybody writes into a graph nobody declared.
+    ///</summary>
+    public string SchemaWarning { get; set; }
 }
 
 ///<summary>The execute endpoint's body: just the query — the connection is the server's business.</summary>
 public sealed class InstanceGraphQuery
 {
     public string Query { get; set; }
-}
-
-///<summary>What Save now did — or why it did not, in a sentence the page shows as it is.</summary>
-public sealed class InstanceGraphSaveResult
-{
-    public bool Saved { get; set; }
-
-    ///<summary>Why nothing was written: no graph, a graph that persists on its own, a TinkerGraph with no
-    ///file, or a server that failed mid-write — in which case the file it had is untouched.</summary>
-    public string Error { get; set; }
-
-    ///<summary>The file, as the server sees it.</summary>
-    public string Location { get; set; }
-
-    ///<summary>The format written — the one the graph is configured to read at its next start.</summary>
-    public string Format { get; set; }
-
-    public long Bytes { get; set; }
-
-    public long Vertices { get; set; }
-
-    public long Edges { get; set; }
-
-    public static InstanceGraphSaveResult Refused(string error)
-    {
-        return new InstanceGraphSaveResult { Saved = false, Error = error };
-    }
 }
 
 ///<summary>One statement of the schema declaration and what it did, as the report lists it.</summary>
@@ -215,35 +141,65 @@ public sealed class InstanceGraphSchemaResult
 }
 
 ///<summary>
-///The autosave's setting and its last run (the instance-graph-backend research, question 5's other
-///half). The interval is what the server keeps; the rest describes this server's own run, so a
-///restart shows nothing until the first one has happened.
+///Whether the graph has the schema this version would declare, asked without declaring anything: which
+///of the property keys and indexes are missing, which keys already hold another datatype, and whether
+///anything has been written yet. A graph that is not a JanusGraph needs no declared schema and has
+///nothing to report.
 ///</summary>
-public sealed class InstanceGraphAutosaveState
+public sealed class InstanceGraphSchemaState
 {
-    ///<summary>Minutes between saves. Zero is off.</summary>
-    public int Minutes { get; set; }
+    public bool JanusGraph { get; set; }
 
-    ///<summary>When the next one falls due, or null when the interval is off.</summary>
-    public DateTimeOffset? NextRunAt { get; set; }
+    public bool HoldsData { get; set; }
 
-    ///<summary>When the last one ran, or null when none has on this server.</summary>
-    public DateTimeOffset? LastRunAt { get; set; }
+    public List<string> MissingKeys { get; set; } = new();
 
-    public bool LastSaved { get; set; }
+    ///<summary>Each as a sentence: the key, what it holds, and what the vocabulary says it should.</summary>
+    public List<string> WrongKeys { get; set; } = new();
 
-    ///<summary>Why the last one wrote nothing — the same sentence <em>Save now</em> would have shown.</summary>
-    public string LastError { get; set; }
+    public List<string> MissingIndexes { get; set; } = new();
 
-    public long LastVertices { get; set; }
+    ///<summary>What a page shows, or null when there is nothing to warn about.</summary>
+    public string Warning { get; set; }
 
-    public long LastEdges { get; set; }
-
-    public long LastBytes { get; set; }
+    ///<summary>Why the graph could not be asked, or null when it answered.</summary>
+    public string Error { get; set; }
 }
 
-///<summary>The autosave endpoint's body: the interval, in minutes, and nothing else.</summary>
-public sealed class InstanceGraphAutosaveSetting
+///<summary>The example project, as the instance graph's page shows it: whether it can be loaded, is loading, or is in the graph.</summary>
+public sealed class InstanceGraphExampleState
 {
-    public int Minutes { get; set; }
+    ///<summary>What the example is, in a few words, and a sentence about what it holds.</summary>
+    public string Title { get; set; }
+
+    public string Description { get; set; }
+
+    ///<summary>Whether an instance graph is configured at all; nothing else is asked without one.</summary>
+    public bool Configured { get; set; }
+
+    ///<summary>Whether the graph holds no records at all: an instance just set up, where the example is offered.</summary>
+    public bool Empty { get; set; }
+
+    ///<summary>Whether the example's records are in the graph, wholly or in part.</summary>
+    public bool Loaded { get; set; }
+
+    ///<summary>When it was loaded and by whom, while it is in the graph.</summary>
+    public DateTimeOffset? LoadedAt { get; set; }
+
+    public string LoadedBy { get; set; }
+
+    ///<summary>Whether a load is running now, and how far it has got: the steps done of all of them, and the one it is on.</summary>
+    public bool Running { get; set; }
+
+    public int Done { get; set; }
+
+    public int Total { get; set; }
+
+    public string Step { get; set; }
+
+    ///<summary>Why the last load or removal stopped, or why one is refused; null when nothing went wrong.</summary>
+    public string Error { get; set; }
+
+    ///<summary>What the last removal took out: the records, and the change records with them.</summary>
+    public long Removed { get; set; }
 }

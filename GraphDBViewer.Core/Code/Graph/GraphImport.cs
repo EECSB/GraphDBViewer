@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -9,8 +10,9 @@ namespace GraphDBViewerWeb.Code;
 ///<summary>
 ///Parses a human-written graph description (Graphviz DOT or Mermaid flowchart) into a
 ///simple node/edge model, then converts it to the render JSON the viewer understands
-///and to addV/addE Gremlin. Conventions: a DOT "type=" attribute becomes the Gremlin
-///vertex label; a DOT/Mermaid display label becomes the "name" property.
+///and to the connected engine's own write queries, through its builder (<see cref="ToQueries"/>).
+///Conventions: a DOT "type=" attribute becomes the vertex label; a DOT/Mermaid display label
+///becomes the "name" property.
 ///</summary>
 public static class GraphImport
 {
@@ -215,13 +217,14 @@ public static class GraphImport
 
     #region DOT
 
+    //Comments, statement ends and the edge operator are looked for outside double-quoted strings only (2026-11-07):
+    //the export quotes every name, and a name holding a #, a //, a ; or a -> is a name, not a comment, two
+    //statements or an edge.
     private static Graph ParseDot(string text)
     {
         var g = new Graph();
 
-        text = Regex.Replace(text, @"/\*.*?\*/", " ", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"//[^\n]*", " ");
-        text = Regex.Replace(text, @"#[^\n]*", " ");
+        text = StripDotComments(text);
 
         int open = text.IndexOf('{');
         int close = text.LastIndexOf('}');
@@ -232,9 +235,7 @@ public static class GraphImport
         else
             body = text;
 
-        var statements = body.Split(new[] { ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (var raw in statements)
+        foreach (var raw in SplitDotStatements(body))
         {
             var stmt = raw.Trim();
             if (stmt.Length == 0)
@@ -250,17 +251,133 @@ public static class GraphImport
             if (lower.StartsWith("graph ") || lower.StartsWith("graph[") || lower.StartsWith("graph ["))
                 continue;
 
+            bool isEdge = DotEdgeOperator(stmt, 0) >= 0;
+
             //Bare graph attribute such as rankdir=LR (no edge operator, no node brackets).
-            if (!stmt.Contains("->") && !stmt.Contains("--") && stmt.Contains("=") && !stmt.Contains("["))
+            if (!isEdge && stmt.Contains("=") && !stmt.Contains("["))
                 continue;
 
-            if (stmt.Contains("->") || stmt.Contains("--"))
+            if (isEdge)
                 ParseDotEdge(g, stmt);
             else
                 ParseDotNode(g, stmt);
         }
 
         return g;
+    }
+
+    //Where the double-quoted string opening at i ends: the index after its closing quote, or the text's end when it
+    //never closes. A backslash escapes the character after it, as DotQuote writes \" and \\.
+    private static int DotStringEnd(string text, int i)
+    {
+        i++;
+
+        while (i < text.Length)
+        {
+            if (text[i] == '\\')
+                i += 2;
+            else if (text[i] == '"')
+                return i + 1;
+            else
+                i++;
+        }
+
+        return text.Length;
+    }
+
+    //A /* */ comment, or a // or # one to the end of its line, each replaced by a space; what is in a string stays.
+    private static string StripDotComments(string text)
+    {
+        var sb = new StringBuilder(text.Length);
+        int i = 0;
+
+        while (i < text.Length)
+        {
+            char c = text[i];
+            int end;
+
+            if (c == '"')
+            {
+                end = DotStringEnd(text, i);
+                sb.Append(text, i, end - i);
+                i = end;
+            }
+            else if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                end = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+
+                if (end < 0)
+                    i = text.Length;
+                else
+                    i = end + 2;
+
+                sb.Append(' ');
+            }
+            else if (c == '#' || (c == '/' && i + 1 < text.Length && text[i + 1] == '/'))
+            {
+                end = text.IndexOf('\n', i);
+
+                if (end < 0)
+                    i = text.Length;
+                else
+                    i = end;
+
+                sb.Append(' ');
+            }
+            else
+            {
+                sb.Append(c);
+                i++;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    //The statements, ended by a ; or a line break outside a string.
+    private static List<string> SplitDotStatements(string body)
+    {
+        var statements = new List<string>();
+        int start = 0;
+        int i = 0;
+
+        while (i < body.Length)
+        {
+            char c = body[i];
+
+            if (c == '"')
+                i = DotStringEnd(body, i);
+            else if (c == ';' || c == '\n' || c == '\r')
+            {
+                statements.Add(body.Substring(start, i - start));
+                i++;
+                start = i;
+            }
+            else
+                i++;
+        }
+
+        statements.Add(body.Substring(start));
+
+        return statements;
+    }
+
+    //The index of the first -> or -- at or after from that is outside a string, or -1 when there is none.
+    private static int DotEdgeOperator(string text, int from)
+    {
+        int i = from;
+
+        while (i < text.Length)
+        {
+            if (text[i] == '"')
+                i = DotStringEnd(text, i);
+            else if (text[i] == '-' && i + 1 < text.Length && (text[i + 1] == '>' || text[i + 1] == '-'))
+                return i;
+            else
+                i++;
+        }
+
+        return -1;
     }
 
     private static void ParseDotEdge(Graph g, string stmt)
@@ -275,10 +392,19 @@ public static class GraphImport
             chain = stmt.Substring(0, m.Index);
         }
 
-        var ids = Regex.Split(chain, @"\s*(?:->|--)\s*")
-            .Select(p => Unquote(p.Trim()))
-            .Where(s => !string.IsNullOrEmpty(s))
-            .ToList();
+        var ids = new List<string>();
+        int from = 0;
+        int at = DotEdgeOperator(chain, 0);
+
+        while (at >= 0)
+        {
+            ids.Add(Unquote(chain.Substring(from, at - from)));
+            from = at + 2;
+            at = DotEdgeOperator(chain, from);
+        }
+
+        ids.Add(Unquote(chain.Substring(from)));
+        ids.RemoveAll(string.IsNullOrEmpty);
 
         var props = ParseDotAttrs(attrs);
 
@@ -325,7 +451,6 @@ public static class GraphImport
     private static void ApplyNodeAttrs(Node node, Dictionary<string, string> attrs)
     {
         foreach (var kv in attrs)
-        {
             if (kv.Key.Equals("type", StringComparison.OrdinalIgnoreCase))
                 node.Label = kv.Value;
             else if (kv.Key.Equals("label", StringComparison.OrdinalIgnoreCase))
@@ -335,7 +460,6 @@ public static class GraphImport
             }
             else
                 node.Properties[kv.Key] = kv.Value;
-        }
     }
 
     private static Dictionary<string, string> ParseDotAttrs(string attrs)
@@ -449,15 +573,47 @@ public static class GraphImport
 
     #endregion
 
+    //A double-quoted value without its quotes, the escapes DotQuote writes read back in one pass: \" a quote, \\ a
+    //backslash and \n a line break, so \\n is a backslash and an n rather than a line break. Any other backslash stays.
     private static string Unquote(string value)
     {
         if (value == null)
             return null;
 
         var v = value.Trim();
-        if (v.Length >= 2 && v[0] == '"' && v[v.Length - 1] == '"')
-            return v.Substring(1, v.Length - 2).Replace("\\\"", "\"").Replace("\\\\", "\\");
+        if (v.Length < 2 || v[0] != '"' || v[v.Length - 1] != '"')
+            return v;
 
-        return v;
+        var sb = new StringBuilder(v.Length);
+        int end = v.Length - 1;
+        int i = 1;
+
+        while (i < end)
+        {
+            char c = v[i];
+
+            if (c != '\\' || i + 1 >= end)
+            {
+                sb.Append(c);
+                i++;
+            }
+            else if (v[i + 1] == 'n')
+            {
+                sb.Append('\n');
+                i += 2;
+            }
+            else if (v[i + 1] == '"' || v[i + 1] == '\\')
+            {
+                sb.Append(v[i + 1]);
+                i += 2;
+            }
+            else
+            {
+                sb.Append(c);
+                i++;
+            }
+        }
+
+        return sb.ToString();
     }
 }

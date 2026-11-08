@@ -164,32 +164,13 @@ public static class Neo4jConverter
 
         foreach (var prop in bag.EnumerateObject())
         {
-            string? value = Stringify(prop.Value);
+            string? value = GraphWireText.Stringify(prop.Value);
 
             if (value != null)
                 props[prop.Name] = value;
         }
 
         return props;
-    }
-
-    //Flattens a JSON value to the string the graph's property map (and the table's cells) hold. Numbers
-    //keep their exact text so a Long doesn't pick up a decimal point; a nested list or map keeps its JSON.
-    private static string? Stringify(JsonElement value)
-    {
-        if (value.ValueKind == JsonValueKind.String)
-            return value.GetString();
-
-        if (value.ValueKind == JsonValueKind.Null)
-            return null;
-
-        if (value.ValueKind == JsonValueKind.True)
-            return "true";
-
-        if (value.ValueKind == JsonValueKind.False)
-            return "false";
-
-        return value.GetRawText();
     }
 
     private static GraphDbResult BuildTable(List<string> columns, List<JsonElement> records)
@@ -201,12 +182,10 @@ public static class Neo4jConverter
             var row = new Dictionary<string, string>();
 
             foreach (var column in columns)
-            {
                 if (record.ValueKind == JsonValueKind.Object && record.TryGetProperty(column, out var cell))
-                    row[column] = Stringify(cell) ?? "";
+                    row[column] = GraphWireText.Stringify(cell) ?? "";
                 else
                     row[column] = "";
-            }
 
             table.Rows.Add(row);
         }

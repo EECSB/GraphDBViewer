@@ -1,0 +1,86 @@
+@using GraphDBViewerWeb.Code
+@inject IEnumerable<IAssetPreview> Previews
+@inject IServiceProvider Services
+
+@*The selected element's model on the graph page, beside the graph: drawn by a plugin's preview when one draws the file
+   (the BIM viewer's, for an IFC building or a STEP, IGES or GLB part; ADR 0019), else by the viewer's own OBJ preview.
+   The file is named by its URL's last segment; a URL that names no file a preview draws, such as a DAM asset's, is
+   asked of the asset source, which knows the file's name and type. With no plugin preview it is the OBJ preview at
+   once, as it always was.*@
+@if (decided == null)
+{
+    @*Still asking the source what the file is.*@
+}
+else if (decided.Preview != null)
+{
+    <div class="asset-model-preview" data-testid="asset-model-preview">
+        <DynamicComponent @key="decided.Url" Type="decided.Preview.Component" Parameters="AssetPreviews.Parameters(decided.Url, decided.Name, decided.MediaType)" />
+    </div>
+    <div class="form-text mt-0" style="font-size: 0.7em;">Shown here by a plugin's viewer. On the 3D graph, a node shows an .obj, .gltf or .glb model only.</div>
+}
+else
+{
+    <ModelPreview Url="@Url" Color="@Color" />
+}
+
+<style>
+    .asset-model-preview { height: 240px; border-radius: 4px; overflow: hidden; background: rgba(127, 127, 127, 0.08); }
+</style>
+
+@code {
+    [Parameter] public string Url { get; set; }
+
+    ///<summary>The node's color, which the OBJ preview draws the model in.</summary>
+    [Parameter] public string Color { get; set; }
+
+    private Decision decided;
+    private string askedFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (decided != null && Url == askedFor)
+            return;
+
+        var url = Url;
+
+        askedFor = url;
+        decided = null;
+
+        var decision = await DecideAsync(url);
+
+        //A later URL may have been asked about meanwhile, and its answer is the one shown.
+        if (url == askedFor)
+            decided = decision;
+    }
+
+    ///<summary>Which preview draws the file at a URL, and under what name and media type.</summary>
+    private async Task<Decision> DecideAsync(string url)
+    {
+        var name = AssetPreviews.NameInUrl(url);
+
+        if (!Previews.Any())
+            return new Decision(url, null, name, "");
+
+        var preview = AssetPreviews.For(Previews, "", name);
+
+        if (preview != null)
+            return new Decision(url, preview, name, "");
+
+        if (Services.GetService(typeof(IAssetSource)) is IAssetSource source)
+        {
+            var found = await source.LookupAsync(url, CancellationToken.None);
+
+            if (found.State == AssetLookupState.Found && found.Item != null)
+            {
+                preview = AssetPreviews.For(Previews, found.Item.MediaType, found.Item.Name);
+
+                if (preview != null)
+                    return new Decision(url, preview, found.Item.Name, found.Item.MediaType);
+            }
+        }
+
+        return new Decision(url, null, name, "");
+    }
+
+    private sealed record Decision(string Url, IAssetPreview Preview, string Name, string MediaType);
+}

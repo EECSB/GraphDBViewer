@@ -79,8 +79,12 @@ public sealed class DatasetRow
     [JsonPropertyName("series")]
     public string Series { get; set; }
 
-    [JsonPropertyName("at")]
-    public DateTimeOffset At { get; set; }
+    ///<summary>
+    ///When a series' row was received, which orders the rows (<c>received_at</c>, named so on 2026-10-05). Unset on a
+    ///table's row, whose time, when it has one, is one of its <see cref="Values"/>.
+    ///</summary>
+    [JsonPropertyName("receivedAt")]
+    public DateTimeOffset ReceivedAt { get; set; }
 
     ///<summary>The numeric value, when the row has one. A row is a number or a word.</summary>
     [JsonPropertyName("number")]
@@ -88,6 +92,22 @@ public sealed class DatasetRow
 
     [JsonPropertyName("state")]
     public string State { get; set; }
+
+    ///<summary>
+    ///When the row's source said it was, on a series' row whose device sends its own time and whose instance keeps it
+    ///(<c>recorded_at</c>, 2026-10-04); null otherwise. <see cref="ReceivedAt"/> is when it was received, and orders
+    ///the rows.
+    ///</summary>
+    [JsonPropertyName("recordedAt")]
+    public DateTimeOffset? RecordedAt { get; set; }
+
+    ///<summary>
+    ///A table's row: every declared column's value by the column's name, as the store handed it over. Null on
+    ///a series' row, whose values are the fields above. The panel draws a cell from here when a row has
+    ///it, so a table of any columns draws under the headings its declaration names (ADR 0016 question 5).
+    ///</summary>
+    [JsonPropertyName("values")]
+    public Dictionary<string, string> Values { get; set; }
 }
 
 ///<summary>
@@ -109,6 +129,14 @@ public sealed class DatasetRows
     ///<summary>Why there is nothing to draw, or null.</summary>
     [JsonPropertyName("problem")]
     public string Problem { get; set; }
+
+    ///<summary>
+    ///What the rows leave out, in a sentence said beside them, or null. A problem is why nothing is drawn; this is
+    ///why what is drawn is not all there is, as when one file of a table kept as files cannot be drawn and the rest
+    ///can (2026-09-24).
+    ///</summary>
+    [JsonPropertyName("note")]
+    public string Note { get; set; }
 
     ///<summary>Whether the answer hit the cap — so the panel can say it is showing the most recent rows rather than all of them.</summary>
     [JsonPropertyName("capped")]

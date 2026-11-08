@@ -76,6 +76,36 @@ public class WikipediaSourceTests
         Assert.Equal(WikipediaSource.ApiBase, source.ApiBase);
     }
 
+    ///<summary>
+    ///A link to a host that only ends in the letters of Wikipedia's is not a link to an article there: it is left as it was
+    ///typed, a title to ask the English Wikipedia for, as any other link that is not Wikipedia's is. From the audit of
+    ///2026-11-05, fixed 2026-11-07: the host was matched on its ending alone, so a link the model was given or made up had
+    ///the tool fetch from somebody else's server and answer the model with it.
+    ///</summary>
+    [Theory]
+    [InlineData("https://evilwikipedia.org/wiki/Secret")]
+    [InlineData("https://not-wikipedia.org/wiki/Secret")]
+    [InlineData("https://wikipedia.org.example/wiki/Secret")]
+    public void ALinkToAHostThatOnlyEndsLikeWikipedias_IsNotReadAsOneOfItsLinks(string link)
+    {
+        var source = WikipediaSource.ParseSource(link);
+
+        Assert.Equal(link, source.Title);
+        Assert.Equal(WikipediaSource.ApiBase, source.ApiBase);
+        Assert.False(WikipediaSource.IsWikipedia(new Uri(link).Host));
+    }
+
+    //Wikipedia's own hosts, bare and with a language or a mobile subdomain, are its.
+    [Theory]
+    [InlineData("wikipedia.org")]
+    [InlineData("en.wikipedia.org")]
+    [InlineData("de.m.wikipedia.org")]
+    [InlineData("EN.WIKIPEDIA.ORG")]
+    public void WikipediasOwnHosts_AreIts(string host)
+    {
+        Assert.True(WikipediaSource.IsWikipedia(host));
+    }
+
     //And the URL builder goes through the same reading, so pasting a link into the box actually fetches.
     [Fact]
     public void TheBuiltUrlAsksForTheTitleTheLinkNamed()

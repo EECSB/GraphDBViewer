@@ -89,6 +89,7 @@ window.graph3DInterop = {
     GLOBE_RADIUS: 220,
     GLOBE_FRAMING: 3.4,//the camera's distance from the center, in radii, when the globe is framed whole
     globeNodeFactor: 1,//how far the nodes are scaled down as the camera closes in (applyGlobeNodeScale)
+    globeNodeSize: 1,//Node size on map, as a multiple of the size the nodes keep at every height (setGlobeNodeSize)
     GLOBE_TEXTURE_WIDTH: 4096,//the detailed image is 8192 wide, for the 2D map's zoom; the globe never
     //shows more than half of it at once, and a texture that size is a fair share of a GPU
     EARTH_IMAGE_URL: '_content/GraphDBViewer.Core/img/earth-2048.jpg',
@@ -103,8 +104,158 @@ window.graph3DInterop = {
     earthOutline: null,//the coastline rings [[[lon, lat], ...], ...], once fetched
     earthLoading: {},
 
+    //The globe's own zoom (2026-11-05, the user: it was jagged). The library's controls move the camera by a share of its
+    //distance from the earth's center, so near the surface one notch of the wheel leapt across a country, and each notch
+    //landed at once. On the globe the wheel sets a height above the surface instead, by a share of that height, and the
+    //camera eases to it over a few frames (stepGlobeZoom, from the label loop), so a turn of the wheel is one glide.
+    GLOBE_ZOOM_STEP: 0.0015,//per pixel of the wheel: the height is multiplied by e to the wheel's deltaY times this
+    GLOBE_MIN_HEIGHT: 0.00008,//the closest the camera comes, in radii above the surface: about 500 m, a street's height
+    //(2026-11-05, the user; it was 0.02, some 130 km). What makes that close work: the nodes shrink with the height
+    //(applyGlobeNodeScale), the earth rises to meet them as they do (GLOBE_SURFACE_GAP), and the camera's near plane
+    //comes in with it so the ground is not cut away.
+    GLOBE_SURFACE_GAP: 0.015,//how far under the nodes' sphere the earth is drawn at full node size, in radii: a node's radius,
+    //so a node sits on the ground rather than half in it. It shrinks with the nodes, so near the ground the earth is
+    //where the nodes are.
+    globeNearBase: null,//the camera's own near plane while the globe has changed it, to put back when it goes
+    GLOBE_MAX_HEIGHT: 9,//the farthest, in radii above the surface
+    GLOBE_ZOOM_EASE: 0.2,//the share of the way to the height asked for that each frame covers
+    globeZoomTarget: null,//the height the camera is easing to, in radii above the surface, or null at rest
+    globeWheel: null,//the wheel listener while the globe is on, and the element it is on
+    globeWheelOn: null,
+
+    //The globe's drag turns it by less the lower the camera (2026-11-05, the user: close in it was too sensitive to
+    //steer). The library turns it by a fixed angle per pixel, which close to the ground swept the view across a
+    //continent; the turning speed goes with the height, so the ground under the pointer keeps about the same pace
+    //at every height. It is the library's own speed at the framing height and above.
+    globeRotateBase: null,//the controls' own rotateSpeed while the globe has changed it, to put back when it goes
+
+    //A tile server, when one is set in Settings (MapTilesPreference.cs): the earth is drawn from its Web Mercator tiles
+    //instead of the images, reprojected in strips onto equirectangular canvases (graphGeometry.geoTileStrips) that the
+    //sphere wears as textures. Two of them: the whole world at a low zoom, on the sphere itself, and a patch around the
+    //point the camera looks at, at the zoom the camera's distance calls for, on a piece of sphere of the same radius
+    //drawn over it. The patch follows the camera, rebuilt when the look moves off it or the zoom changes; while its tiles
+    //arrive it shows the world texture's part, then the nearest ancestors that have arrived, then its own.
+    GLOBE_TILE_BASE_ZOOM: 2,//the world texture: 16 tiles, 1024 × 512
+    GLOBE_TILE_MAX_ZOOM: 22,
+    GLOBE_TILE_PATCH_MOST: 4096,//the patch canvas's longest side; past it the patch takes a lower zoom
+    GLOBE_TILE_CACHE: 600,
+    globeTiles: null,//{ template, key, viewport, keep } while the earth comes from a tile server: setGlobeTiles
+    globeTileViewSay: null,//says the view shown while the tiles are Google's: reportGlobeTileView
+    globeTileCache: new Map(),//url → { image, ready, failed }, in the order last wanted
+    globeTileBase: null,//{ canvas, texture } of the whole world
+    globeTilePatch: null,//{ canvas, texture, mesh, z, west, east, north, south, centerLat, centerLon, span }
+    globeTileChecked: 0,//when the frame loop last asked whether the patch should move
+    globeTilePaint: 0,//the timer a repaint for arrived tiles is waiting on
+    globeTileReport: null,//'ready' or 'failed', last told to Home
+    globeTilePatchBuilds: 0,//patches built since the server was set, for tests
+
     isLocated: function (node) {
         return !!node && typeof node.geoLat === 'number' && typeof node.geoLng === 'number';
+    },
+
+    //The camera's height above the globe's surface, in radii.
+    globeHeight: function (graph) {
+        const cam = graph.camera();
+
+        return cam.position.length() / this.GLOBE_RADIUS - 1;
+    },
+
+    //Asks for a height, from where the camera is going if it is on its way, times factor, kept within reach.
+    zoomGlobeBy: function (graph, factor) {
+        let from = this.globeZoomTarget;
+
+        if (from === null)
+            from = this.globeHeight(graph);
+
+        this.globeZoomTarget = Math.min(this.GLOBE_MAX_HEIGHT, Math.max(this.GLOBE_MIN_HEIGHT, from * factor));
+    },
+
+    //One frame of the glide: the camera covers a share of the way to the height asked for, measured in proportion, so
+    //it slows as it closes in and arrives in the same few frames from any height.
+    stepGlobeZoom: function () {
+        if (this.globeZoomTarget === null || !this.instance)
+            return;
+
+        const cam = this.instance.camera();
+
+        if (!cam)
+            return;
+
+        const target = this.globeZoomTarget;
+        const height = Math.max(this.GLOBE_MIN_HEIGHT, this.globeHeight(this.instance));
+        let next = Math.exp(Math.log(height) + (Math.log(target) - Math.log(height)) * this.GLOBE_ZOOM_EASE);
+
+        if (Math.abs(Math.log(target / next)) < 0.002) {
+            next = target;
+            this.globeZoomTarget = null;
+        }
+
+        cam.position.setLength(this.GLOBE_RADIUS * (1 + next));
+    },
+
+    //Each frame: the drag's turning speed, the library's own times the height over the framing height, never above it.
+    applyGlobeRotateSpeed: function () {
+        if (this.globeRotateBase === null || !this.instance)
+            return;
+
+        const controls = this.instance.controls();
+
+        if (!controls)
+            return;
+
+        const share = Math.min(1, this.globeHeight(this.instance) / (this.GLOBE_FRAMING - 1));
+
+        controls.rotateSpeed = this.globeRotateBase * share;
+    },
+
+    enableGlobeZoom: function (graph) {
+        this.disableGlobeZoom(graph);
+
+        const controls = graph.controls();
+
+        if (controls) {
+            controls.noZoom = true;
+            this.globeRotateBase = controls.rotateSpeed;
+        }
+
+        const element = graph.renderer().domElement;
+        const self = this;
+
+        this.globeWheel = function (e) {
+            e.preventDefault();
+
+            let delta = e.deltaY;
+
+            if (e.deltaMode === 1)
+                delta *= 33;//lines
+            else if (e.deltaMode === 2)
+                delta *= 400;//pages
+
+            self.zoomGlobeBy(graph, Math.exp(delta * self.GLOBE_ZOOM_STEP));
+        };
+
+        this.globeWheelOn = element;
+        element.addEventListener('wheel', this.globeWheel, { passive: false });
+    },
+
+    disableGlobeZoom: function (graph) {
+        if (this.globeWheel && this.globeWheelOn)
+            this.globeWheelOn.removeEventListener('wheel', this.globeWheel);
+
+        this.globeWheel = null;
+        this.globeWheelOn = null;
+        this.globeZoomTarget = null;
+
+        const controls = graph && graph.controls();
+
+        if (controls) {
+            controls.noZoom = false;
+
+            if (this.globeRotateBase !== null)
+                controls.rotateSpeed = this.globeRotateBase;
+        }
+
+        this.globeRotateBase = null;
     },
 
     applyGlobe: function (graph) {
@@ -180,6 +331,22 @@ window.graph3DInterop = {
 
         frame();
         setTimeout(frame, 0);
+
+        this.enableGlobeZoom(graph);
+
+        //The node distance's slider gives way to Node size on map here, so nothing hidden by it stays hidden.
+        if (this.nodeDrawPercent < 100)
+            this.restoreNodeVisibility();
+    },
+
+    //Node size on map (2026-11-06, the user): how large the nodes are drawn on the globe, as a percentage of the size they
+    //keep as the camera moves (applyGlobeNodeScale), so they stay that size at every height. Their labels, images and
+    //arrowheads with them (the label loop). One setting with the map's.
+    setGlobeNodeSize: function (percent) {
+        this.globeNodeSize = Math.max(0.1, Math.min(10, (+percent || 100) / 100));
+
+        if (this.globeOn)
+            this.applyGlobeNodeScale();
     },
 
     //Every other layout: the flat curves back, the sphere gone, every node visible again (the label
@@ -189,6 +356,7 @@ window.graph3DInterop = {
             return;
 
         this.globeOn = false;
+        this.disableGlobeZoom(graph);
 
         const data = graph.graphData();
 
@@ -270,6 +438,555 @@ window.graph3DInterop = {
             this.ensureGlobeMesh(this.instance);
     },
 
+    //Where the earth comes from: null for the built-in images, or { template, key } for a tile server. Remembered for the
+    //next globe, as the style is; a new server forgets the old one's tiles and textures.
+    setGlobeTiles: function (source) {
+        let next = null;
+
+        if (source && source.template)
+            next = { template: source.template, key: source.key || '', viewport: !!source.viewport, keep: source.keep !== false };
+
+        if (!next && !this.globeTiles)
+            return;
+
+        //The same server with the memory switch flipped: its tiles stay, and turned off, all but those the globe shows
+        //are let go of at once (trimGlobeTiles).
+        if (next && this.globeTiles && next.template === this.globeTiles.template && next.key === this.globeTiles.key) {
+            if (next.keep !== this.globeTiles.keep) {
+                this.globeTiles.keep = next.keep;
+                this.trimGlobeTilesShown();
+            }
+
+            return;
+        }
+
+        this.clearGlobeTiles();
+        this.globeTiles = next;
+
+        if (this.globeOn && this.instance)
+            this.ensureGlobeMesh(this.instance);
+    },
+
+    clearGlobeTiles: function () {
+        const self = this;
+
+        this.globeTileCache.forEach(entry => self.dropGlobeTile(entry));
+        this.globeTileCache = new Map();
+        this.removeGlobeTilePatch();
+
+        if (this.globeTileBase) {
+            this.globeTileBase.texture.dispose();
+            this.globeTileBase = null;
+        }
+
+        this.globeTileReport = null;
+        this.globeTilePatchBuilds = 0;
+
+        if (this.globeTileViewSay)
+            this.globeTileViewSay.forget();
+    },
+
+    dropGlobeTile: function (entry) {
+        entry.image.onload = null;
+        entry.image.onerror = null;
+
+        if (!entry.ready && !entry.failed)
+            entry.image.src = '';
+    },
+
+    //The tile at a URL, asked for on first sight. Read across origins, as WebGL needs: a server that does not allow
+    //it sends no tiles here, which the corner says.
+    globeTileEntry: function (url) {
+        let entry = this.globeTileCache.get(url);
+
+        if (entry) {
+            this.globeTileCache.delete(url);
+            this.globeTileCache.set(url, entry);
+            return entry;
+        }
+
+        const self = this;
+        entry = { image: new Image(), ready: false, failed: false };
+        entry.image.crossOrigin = 'anonymous';
+        entry.image.onload = function () {
+            entry.ready = true;
+            self.reportGlobeTiles('ready');
+            self.repaintGlobeTilesSoon();
+        };
+        entry.image.onerror = function () {
+            entry.failed = true;
+
+            if (self.globeTileReport !== 'ready')
+                self.reportGlobeTiles('failed');
+        };
+        entry.image.src = url;
+        this.globeTileCache.set(url, entry);
+
+        return entry;
+    },
+
+    reportGlobeTiles: function (state) {
+        if (this.globeTileReport === state)
+            return;
+
+        this.globeTileReport = state;
+
+        if (!this.dotNetRef)
+            return;
+
+        this.dotNetRef.invokeMethodAsync('OnMapTiles', state).catch(() => { });
+    },
+
+    //Paints the tiles of `tiles` (from geoTileRange, at one zoom) that have arrived, or their nearest arrived ancestors'
+    //parts, onto ctx, whose equirectangular world is `world`. Says how many were their own and how many stood in.
+    paintGlobeTiles: function (ctx, world, tiles) {
+        const geo = window.graphGeometry;
+        const source = this.globeTiles;
+        const self = this;
+        let own = 0;
+        let standIns = 0;
+
+        const draw = function (image, t, u, v, part) {
+            const size = image.naturalWidth || 256;
+            const strips = geo.geoTileStrips(t.z, t.col, t.y, world, geo.geoTileStripCount(t.z, world.h));
+
+            strips.forEach(st => {
+                ctx.drawImage(image, u * size, (v + st.f0 * part) * size, part * size, (st.f1 - st.f0) * part * size, st.x, st.y, st.w + 0.5, st.h + 0.5);
+            });
+        };
+
+        tiles.forEach(t => {
+            const entry = self.globeTileEntry(geo.geoTileUrl(source.template, t.z, t.x, t.y, source.key));
+
+            if (entry.ready) {
+                draw(entry.image, t, 0, 0, 1);
+                own++;
+                return;
+            }
+
+            for (let k = 1; k <= t.z; k++) {
+                const ax = t.x >> k;
+                const ay = t.y >> k;
+                const ancestor = self.globeTileCache.get(geo.geoTileUrl(source.template, t.z - k, ax, ay, source.key));
+
+                if (ancestor && ancestor.ready) {
+                    const part = 1 / (1 << k);
+                    draw(ancestor.image, t, (t.x - (ax << k)) * part, (t.y - (ay << k)) * part, part);
+                    standIns++;
+                    return;
+                }
+            }
+        });
+
+        return { own: own, standIns: standIns };
+    },
+
+    //The whole world at the base zoom, on a canvas the sphere wears: the theme's ocean where Mercator ends at the poles.
+    paintGlobeTileBase: function () {
+        const THREE = window.THREE;
+        const geo = window.graphGeometry;
+
+        if (!this.globeTileBase) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256 * Math.pow(2, this.GLOBE_TILE_BASE_ZOOM);
+            canvas.height = canvas.width / 2;
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.colorSpace = THREE.SRGBColorSpace;
+
+            if (this.instance)
+                texture.anisotropy = this.instance.renderer().capabilities.getMaxAnisotropy();
+
+            this.globeTileBase = { canvas: canvas, texture: texture, own: 0 };
+        }
+
+        const base = this.globeTileBase;
+        const ctx = base.canvas.getContext('2d');
+        const world = { x: 0, y: 0, w: base.canvas.width, h: base.canvas.height };
+
+        ctx.fillStyle = this.globeOceanCss();
+        ctx.fillRect(0, 0, world.w, world.h);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        //The base's own zoom, with zoom 0 asked for first so something stands in for it at once.
+        this.globeTileEntry(geo.geoTileUrl(this.globeTiles.template, 0, 0, 0, this.globeTiles.key));
+        base.own = this.paintGlobeTiles(ctx, world, geo.geoTileRange(this.GLOBE_TILE_BASE_ZOOM, -180, 180, 90, -90)).own;
+        base.texture.needsUpdate = true;
+
+        return base.texture;
+    },
+
+    globeOceanCss: function () {
+        if (document.documentElement.getAttribute('data-bs-theme') === 'dark')
+            return '#121a2a';
+        else
+            return '#e4ebf3';
+    },
+
+    //Arrived tiles are painted a moment later, all that arrived meanwhile together: the patch's canvas can be 4096 on a
+    //side, and uploading it again for every tile would be a frame's whole budget each time.
+    repaintGlobeTilesSoon: function () {
+        if (this.globeTilePaint)
+            return;
+
+        const self = this;
+
+        this.globeTilePaint = setTimeout(() => {
+            self.globeTilePaint = 0;
+
+            if (!self.globeTiles || !self.globeOn)
+                return;
+
+            self.paintGlobeTileBase();
+
+            if (self.globeTilePatch)
+                self.paintGlobeTilePatch();
+        }, 120);
+    },
+
+    //Where the camera looks and how much of the earth a pixel covers there: the point where the ray through the middle
+    //of the screen meets the sphere (or the point nearest it, looking past the edge), as latitude and longitude, and
+    //the zoom whose tile pixels match the screen's at that latitude. Null when not on the globe.
+    globeTileView: function () {
+        const THREE = window.THREE;
+
+        if (!this.instance || !THREE)
+            return null;
+
+        const cam = this.instance.camera();
+        const renderer = this.instance.renderer();
+
+        if (!cam || !renderer)
+            return null;
+
+        const R = this.globeDrawnRadius();
+        const dir = new THREE.Vector3();
+        cam.getWorldDirection(dir);
+
+        const o = cam.position;
+        const b = o.x * dir.x + o.y * dir.y + o.z * dir.z;
+        const c = o.x * o.x + o.y * o.y + o.z * o.z - R * R;
+        const disc = b * b - c;
+        let point;
+        let along;
+
+        if (disc >= 0 && -b - Math.sqrt(disc) > 0) {
+            along = -b - Math.sqrt(disc);
+            point = { x: o.x + dir.x * along, y: o.y + dir.y * along, z: o.z + dir.z * along };
+        } else {
+            //Past the edge: the point on the sphere nearest the ray.
+            const t = Math.max(0, -b);
+            const near = { x: o.x + dir.x * t, y: o.y + dir.y * t, z: o.z + dir.z * t };
+            const len = Math.sqrt(near.x * near.x + near.y * near.y + near.z * near.z) || 1;
+            point = { x: near.x / len * R, y: near.y / len * R, z: near.z / len * R };
+            along = Math.sqrt((point.x - o.x) ** 2 + (point.y - o.y) ** 2 + (point.z - o.z) ** 2);
+        }
+
+        const lat = Math.asin(Math.max(-1, Math.min(1, point.y / R))) * 180 / Math.PI;
+        const lon = Math.atan2(-point.z, point.x) * 180 / Math.PI;
+        const height = renderer.domElement.clientHeight || 600;
+        const width = renderer.domElement.clientWidth || 800;
+        const dpr = window.devicePixelRatio || 1;
+        const unitsPerPixel = 2 * along * Math.tan(cam.fov * Math.PI / 360) / (height * dpr);
+        const cosLat = Math.max(0.05, Math.cos(lat * Math.PI / 180));
+        const z = window.graphGeometry.geoTileZoom(2 * Math.PI * R * cosLat / unitsPerPixel, this.GLOBE_TILE_MAX_ZOOM);
+
+        //How far from that point the screen reaches, in degrees of arc, at most the horizon.
+        const reach = Math.max(width, height) / 2 * dpr * unitsPerPixel / R * 180 / Math.PI;
+
+        return { lat: lat, lon: lon, z: z, reach: Math.min(reach, 90) };
+    },
+
+    //Asked on the frame loop, a few times a second: whether the patch should be built, moved or taken away.
+    updateGlobeTiles: function () {
+        if (!this.globeTiles || !this.globeOn || !this.globeMesh)
+            return;
+
+        const now = performance.now();
+
+        if (now - this.globeTileChecked < 150)
+            return;
+
+        this.globeTileChecked = now;
+
+        const view = this.globeTileView();
+
+        if (!view)
+            return;
+
+        const patch = this.globeTilePatch;
+
+        if (patch && patch.wantedZ === view.z) {
+            const dLat = Math.abs(view.lat - patch.centerLat);
+            const dLon = Math.abs(((view.lon - patch.centerLon + 540) % 360) - 180) * Math.cos(view.lat * Math.PI / 180);
+
+            if (Math.max(dLat, dLon) + view.reach <= patch.span * 0.9) {
+                this.reportGlobeTileView(view);
+                return;
+            }
+        }
+
+        this.buildGlobeTilePatch(view);
+        this.reportGlobeTileView(view);
+    },
+
+    //Google's copyright follows the view (2026-11-07): while the tiles are Google's, what the screen reaches around the
+    //point looked at, at the zoom its tiles are drawn at there (the patch's, or the world texture's), is said to Home,
+    //which asks Google for the copyright to show beside its logo (OnMapTileView).
+    reportGlobeTileView: function (view) {
+        if (!this.globeTiles || !this.globeTiles.viewport)
+            return;
+
+        const self = this;
+
+        if (!this.globeTileViewSay)
+            this.globeTileViewSay = window.graphGeometry.geoTileViewReporter(v => {
+                if (self.dotNetRef)
+                    self.dotNetRef.invokeMethodAsync('OnMapTileView', v.zoom, v.west, v.east, v.north, v.south).catch(() => { });
+            }, 300);
+
+        //The longitudes the screen reaches widen toward the poles; reaching past half the world, it is all of it.
+        const lonReach = view.reach / Math.max(0.05, Math.cos(view.lat * Math.PI / 180));
+        let west = -180;
+        let east = 180;
+
+        if (lonReach < 179) {
+            west = view.lon - lonReach;
+            east = view.lon + lonReach;
+
+            if (west < -180)
+                west += 360;
+
+            if (east > 180)
+                east -= 360;
+        }
+
+        let z = this.GLOBE_TILE_BASE_ZOOM;
+
+        if (this.globeTilePatch)
+            z = this.globeTilePatch.z;
+
+        this.globeTileViewSay(z, west, east, view.lat + view.reach, view.lat - view.reach);
+    },
+
+    //A piece of sphere around the view's point, half again as far as the screen reaches each way, with its own
+    //equirectangular canvas at the view's zoom (or lower, to keep the canvas within GLOBE_TILE_PATCH_MOST).
+    buildGlobeTilePatch: function (view) {
+        const THREE = window.THREE;
+        const geo = window.graphGeometry;
+        const span = Math.min(view.reach * 1.5, 80);
+        const cosLat = Math.max(0.05, Math.cos(view.lat * Math.PI / 180));
+        const north = Math.min(geo.TILE_MAX_LAT, view.lat + span);
+        const south = Math.max(-geo.TILE_MAX_LAT, view.lat - span);
+        //Short of the whole way round, so a patch's two edges are never the same meridian.
+        const lonSpan = Math.min(358, 2 * span / cosLat);
+        let west = view.lon - lonSpan / 2;
+
+        if (west < -180)
+            west += 360;
+
+        const east = west + lonSpan;
+        let z = view.z;
+        let worldW = 256 * Math.pow(2, z);
+
+        //Pixels about square at the patch's middle: a degree of latitude is 1/cos of a degree of longitude.
+        while (z > this.GLOBE_TILE_BASE_ZOOM && Math.max(lonSpan / 360 * worldW, (north - south) / 180 * worldW / 2 / cosLat) > this.GLOBE_TILE_PATCH_MOST) {
+            z--;
+            worldW = 256 * Math.pow(2, z);
+        }
+
+        //Too far out for a patch: the world texture alone, and with the memory switch off the patch's tiles go with it.
+        if (z <= this.GLOBE_TILE_BASE_ZOOM || north <= south) {
+            this.removeGlobeTilePatch();
+
+            if (this.globeTiles.keep === false)
+                this.trimGlobeTiles([]);
+
+            return;
+        }
+
+        const worldH = worldW / 2 / cosLat;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.ceil(lonSpan / 360 * worldW));
+        canvas.height = Math.max(1, Math.ceil((north - south) / 180 * worldH));
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+
+        if (this.instance)
+            texture.anisotropy = this.instance.renderer().capabilities.getMaxAnisotropy();
+
+        const phiStart = (west + 180) * Math.PI / 180;
+        const thetaStart = (90 - north) * Math.PI / 180;
+        const geometry = new THREE.SphereGeometry(this.GLOBE_RADIUS * 0.985, 64, 64, phiStart, lonSpan * Math.PI / 180, thetaStart, (north - south) * Math.PI / 180);
+
+        //Drawn over the sphere it lies on: the same radius, pulled toward the camera in the depth test.
+        const material = new THREE.MeshBasicMaterial({ map: texture, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+        material.color.copy(this.globeMesh.material.color);
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.raycast = function () { };
+        mesh.userData.tilePatch = true;
+
+        this.removeGlobeTilePatch();
+        this.globeTilePatchBuilds++;
+        this.globeTilePatch = {
+            canvas: canvas,
+            texture: texture,
+            mesh: mesh,
+            z: z,
+            wantedZ: view.z,
+            west: west,
+            east: east,
+            north: north,
+            south: south,
+            centerLat: view.lat,
+            centerLon: view.lon,
+            span: span,
+            own: 0,
+            standIns: 0,
+            tiles: 0
+        };
+        this.globeMesh.add(mesh);
+        this.paintGlobeTilePatch();
+    },
+
+    //The patch's canvas: the world texture's part of it first, then the tiles at its zoom, each its own or an
+    //ancestor's part.
+    paintGlobeTilePatch: function () {
+        const geo = window.graphGeometry;
+        const patch = this.globeTilePatch;
+        const ctx = patch.canvas.getContext('2d');
+        const cw = patch.canvas.width;
+        const ch = patch.canvas.height;
+        const lonSpan = patch.east - patch.west;
+
+        //The equirectangular world the canvas is a window on: [west, east] × [north, south] filling it.
+        const world = {
+            w: cw * 360 / lonSpan,
+            h: ch * 180 / (patch.north - patch.south)
+        };
+        world.x = -(patch.west + 180) / 360 * world.w;
+        world.y = -(90 - patch.north) / 180 * world.h;
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        if (this.globeTileBase) {
+            const base = this.globeTileBase.canvas;
+            const bx = (patch.west + 180) / 360 * base.width;
+            const by = (90 - patch.north) / 180 * base.height;
+            const bw = lonSpan / 360 * base.width;
+            const bh = (patch.north - patch.south) / 180 * base.height;
+            const firstW = Math.min(bw, base.width - bx);
+
+            //A patch over the antimeridian takes its two halves from the two ends of the world texture.
+            ctx.drawImage(base, bx, by, firstW, bh, 0, 0, firstW / bw * cw, ch);
+
+            if (firstW < bw)
+                ctx.drawImage(base, 0, by, bw - firstW, bh, firstW / bw * cw, 0, (bw - firstW) / bw * cw, ch);
+        }
+
+        let east = patch.east;
+
+        if (east > 180)
+            east -= 360;
+
+        const tiles = geo.geoTileRange(patch.z, patch.west, east, patch.north, patch.south);
+        const painted = this.paintGlobeTiles(ctx, world, tiles);
+
+        patch.own = painted.own;
+        patch.standIns = painted.standIns;
+        patch.tiles = tiles.length;
+        patch.texture.needsUpdate = true;
+        this.trimGlobeTiles(tiles);
+    },
+
+    //What the globe shows, its patch's tiles or the world texture's alone, with all the rest let go of when the memory
+    //switch is off.
+    trimGlobeTilesShown: function () {
+        if (this.globeTilePatch)
+            this.paintGlobeTilePatch();
+        else
+            this.trimGlobeTiles([]);
+    },
+
+    //Past the cache's size the least recently wanted tiles go, and a tile still loading for a patch that has moved on.
+    trimGlobeTiles: function (tiles) {
+        const geo = window.graphGeometry;
+        const source = this.globeTiles;
+        const wanted = new Set(tiles.map(t => geo.geoTileUrl(source.template, t.z, t.x, t.y, source.key)));
+        const baseZoom = this.GLOBE_TILE_BASE_ZOOM;
+        const self = this;
+        const drop = new Set();
+
+        //The world texture's tiles and their ancestors stay.
+        for (let low = 0; low <= baseZoom; low++)
+            geo.geoTileRange(low, -180, 180, 90, -90).forEach(t => wanted.add(geo.geoTileUrl(source.template, t.z, t.x, t.y, source.key)));
+
+        this.globeTileCache.forEach((entry, url) => {
+            if (!wanted.has(url) && !entry.ready && !entry.failed)
+                drop.add(url);
+        });
+
+        //Past the cache's size, or with the memory switch off (Map settings, 2026-11-07) past none: only the shown stay.
+        let most = this.GLOBE_TILE_CACHE;
+
+        if (source.keep === false)
+            most = 0;
+
+        let excess = this.globeTileCache.size - drop.size - most;
+
+        for (const url of this.globeTileCache.keys()) {
+            if (excess <= 0)
+                break;
+
+            if (!wanted.has(url) && !drop.has(url)) {
+                drop.add(url);
+                excess--;
+            }
+        }
+
+        drop.forEach(url => {
+            self.dropGlobeTile(self.globeTileCache.get(url));
+            self.globeTileCache.delete(url);
+        });
+    },
+
+    removeGlobeTilePatch: function () {
+        const patch = this.globeTilePatch;
+
+        if (!patch)
+            return;
+
+        if (patch.mesh.parent)
+            patch.mesh.parent.remove(patch.mesh);
+
+        patch.mesh.geometry.dispose();
+        patch.mesh.material.dispose();
+        patch.texture.dispose();
+        this.globeTilePatch = null;
+    },
+
+    //What the tiles on the globe are doing, for tests: the world texture's own tiles, and the patch's zoom and tiles.
+    getGlobeTileState: function () {
+        const patch = this.globeTilePatch;
+        const state = { on: !!this.globeTiles, baseOwn: 0, patchZoom: null, patchOwn: 0, patchStandIns: 0, patchTiles: 0, patchBuilds: this.globeTilePatchBuilds };
+
+        if (this.globeTileBase)
+            state.baseOwn = this.globeTileBase.own;
+
+        if (patch) {
+            state.patchZoom = patch.z;
+            state.patchOwn = patch.own;
+            state.patchStandIns = patch.standIns;
+            state.patchTiles = patch.tiles;
+        }
+
+        return state;
+    },
+
     ensureGlobeMesh: function (graph) {
         const THREE = window.THREE;
 
@@ -298,7 +1015,11 @@ window.graph3DInterop = {
         let mesh;
 
         //Unlit on purpose: a data view has no night side.
-        if (this.globeStyle === 'outline') {
+        if (this.globeTiles) {
+            const material = new THREE.MeshBasicMaterial({ color: tint });
+            material.map = this.paintGlobeTileBase();
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 128, 64), material);
+        } else if (this.globeStyle === 'outline') {
             mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 96, 48), new THREE.MeshBasicMaterial({ color: ocean }));
 
             if (this.earthOutline)
@@ -331,6 +1052,8 @@ window.graph3DInterop = {
     removeGlobeMesh: function () {
         if (!this.globeMesh)
             return;
+
+        this.removeGlobeTilePatch();
 
         const mesh = this.globeMesh;
 
@@ -615,9 +1338,13 @@ window.graph3DInterop = {
         const graphData = JSON.parse(graphDataJson);
         this.assignLinkCurves(graphData.links);
 
-        //A fresh draw is a fresh scene: the previous globe, if any, goes with the previous instance.
+        //A fresh draw is a fresh scene: the previous globe, if any, goes with the previous instance, its wheel listener
+        //with its canvas.
         this.removeGlobeMesh();
         this.globeOn = false;
+        this.globeWheel = null;
+        this.globeWheelOn = null;
+        this.globeZoomTarget = null;
 
         if (this.instance) {
             this.instance._destructor && this.instance._destructor();
@@ -640,11 +1367,21 @@ window.graph3DInterop = {
             })
             //Hover tooltips — suppressed when the matching always-on labels are shown, so the same
             //text doesn't appear twice (the overlay label + the hover tooltip).
-            .nodeLabel(node => self.showNodeLabels ? '' : (node.label || node.id))
-            .linkLabel(link => self.showLinkLabels ? '' : (link.label || ''))
+            .nodeLabel(node => {
+                if (self.showNodeLabels)
+                    return '';
+                else
+                    return node.label || node.id;
+            })
+            .linkLabel(link => {
+                if (self.showLinkLabels)
+                    return '';
+                else
+                    return link.label || '';
+            })
             .linkColor(link => link.color || '#999999')
-            .linkDirectionalArrowLength(4)
-            .linkDirectionalArrowRelPos(1)
+            .linkDirectionalArrowLength(() => self.arrowLength())
+            .linkDirectionalArrowRelPos(link => self.arrowRelPos(link))
             .width(container.clientWidth)
             .height(container.clientHeight)
             .onNodeClick(node => {
@@ -694,13 +1431,51 @@ window.graph3DInterop = {
                     }));
                 }
             })
+            .onBackgroundRightClick(event => {
+                //The page's menu for the canvas; the 3D force layout places a new component (2026-11-05, the user).
+                if (self.dotNetRef)
+                    self.dotNetRef.invokeMethodAsync('OnCanvasContextMenu', event.clientX, event.clientY, null, null);
+            })
             .onBackgroundClick(() => {
                 //Empty-space click: add-component mode drops a new node here (the 3D force layout
                 //positions it); otherwise .NET treats it as a deselect.
-                if (self.dotNetRef) {
+                if (self.dotNetRef)
                     self.dotNetRef.invokeMethodAsync('OnCanvasTapped3d');
-                }
+            })
+            //A right-click on a vertex or a link opens the page's menu for it where the pointer is, as on the 2D
+            //canvas (2026-11-04, the user).
+            .onNodeRightClick((node, event) => {
+                if (!self.dotNetRef)
+                    return;
+
+                //What a click on it sends, for the menu's Style, which selects it first.
+                const selection = { type: 'node', id: node.id, label: node.label || '', glabel: node.glabel || '', properties: node.properties || {} };
+
+                self.dotNetRef.invokeMethodAsync('OnElementContextMenu', 'node', String(node.id), String(node.label || node.id), event.clientX, event.clientY, JSON.stringify(selection), null);
+            })
+            .onLinkRightClick((link, event) => {
+                if (!self.dotNetRef)
+                    return;
+
+                let srcId = link.source;
+                if (typeof link.source === 'object')
+                    srcId = link.source.id;
+
+                let tgtId = link.target;
+                if (typeof link.target === 'object')
+                    tgtId = link.target.id;
+
+                const id = link.id || (srcId + '->' + tgtId);
+                const selection = { type: 'edge', id: id, label: link.label || '', source: srcId, target: tgtId, properties: link.properties || {} };
+
+                self.dotNetRef.invokeMethodAsync('OnElementContextMenu', 'edge', String(id), String(link.label || id), event.clientX, event.clientY, JSON.stringify(selection), null);
             });
+
+        //The browser's own menu never opens over the 3D view.
+        if (!container.gdbvMenuHooked) {
+            container.gdbvMenuHooked = true;
+            container.addEventListener('contextmenu', e => e.preventDefault());
+        }
 
         //Both read a value assignLinkCurves has already put on the link. They are deliberately property
         //names rather than functions: an accessor that counted as it went would be called again on every
@@ -846,7 +1621,7 @@ window.graph3DInterop = {
         const curNodeById = {};
         cur.nodes.forEach(n => curNodeById[n.id] = n);
 
-        const displayKeys = ['label', 'group', 'glabel', 'properties', 'bgColor', 'nodeSize', 'shape', 'shape3d', 'image', 'model', 'showProps'];
+        const displayKeys = ['label', 'group', 'glabel', 'properties', 'bgColor', 'nodeSize', 'shape', 'shape3d', 'image', 'model', 'showProps', 'details'];
         let positionChanged = false;
 
         //Build the reconciled node list, mutating kept node objects in place.
@@ -869,9 +1644,9 @@ window.graph3DInterop = {
                 });
 
                 nodes.push(existing);
-            } else {
-                nodes.push(inc);
             }
+            else
+                nodes.push(inc);
         });
 
         const linkKey = l => {
@@ -899,10 +1674,14 @@ window.graph3DInterop = {
             if (existing) {
                 existing.label = inc.label;
                 existing.properties = inc.properties;
+                existing.details = inc.details;
+
+                //An algorithm's path is drawn in the links' colors, so a reconcile carries them too.
+                existing.color = inc.color;
                 links.push(existing);
-            } else {
-                links.push(inc);
             }
+            else
+                links.push(inc);
         });
 
         //Did the set of nodes / links change (add or remove)? Check both counts (catches removals) and
@@ -922,21 +1701,42 @@ window.graph3DInterop = {
         else if (positionChanged)
             this.instance.d3ReheatSimulation();
 
-        //Repaint restyled nodes and rebuild the label / image / model overlays.
+        //Repaint restyled nodes and links and rebuild the label / image / model overlays.
         this.instance.nodeColor(this.instance.nodeColor());
         this.instance.nodeVal(this.instance.nodeVal());
+        this.instance.linkColor(this.instance.linkColor());
         this.setupLabels(this.container);
         this.setupCustomNodes();
     },
 
     centerGraph: function () {
-        if (this.instance) {
+        if (this.instance)
             this.instance.zoomToFit(400, 50);
-        }
+    },
+
+    //Frames these vertices, as the 2D view's focus does: what an algorithm found. 3D has no selection, so it frames
+    //them only. Returns how many of them are drawn.
+    focusNodes: function (idsJson) {
+        if (!this.instance)
+            return 0;
+
+        const ids = new Set(JSON.parse(idsJson || '[]').map(String));
+        const count = this.instance.graphData().nodes.filter(n => ids.has(String(n.id))).length;
+
+        if (count > 0)
+            this.instance.zoomToFit(400, 50, n => ids.has(String(n.id)));
+
+        return count;
     },
 
     //Dollies the 3D camera toward/away from the center. factor < 1 zooms in, > 1 zooms out.
     zoom: function (factor) {
+        //On the globe, the height above the surface, gliding, so a press never takes the camera into the earth.
+        if (this.instance && this.globeOn) {
+            this.zoomGlobeBy(this.instance, factor);
+            return;
+        }
+
         if (this.instance) {
             const p = this.instance.cameraPosition();
             this.instance.cameraPosition({ x: p.x * factor, y: p.y * factor, z: p.z * factor }, undefined, 200);
@@ -1005,7 +1805,7 @@ window.graph3DInterop = {
 
             let model = null;
             if (modelUrl)
-                model = await this.loadObjModel(modelUrl, modelCache);
+                model = await this.loadModel(modelUrl, modelCache);
 
             if (model)
                 this.addModel(mesh, model, x, y, z, r);
@@ -1048,6 +1848,9 @@ window.graph3DInterop = {
             return this.meshToStl(mesh);
         else if (fmt === 'gltf')
             return graphGeometry.meshToGltf(mesh);
+        else if (fmt === 'glb')
+            //Binary, so it crosses to .NET as base64, which exportInterop.downloadBase64 turns back into bytes.
+            return graphGeometry.bytesToBase64(graphGeometry.meshToGlb(mesh));
         else
             return this.meshToObj(mesh);
     },
@@ -1077,21 +1880,39 @@ window.graph3DInterop = {
         return graphGeometry.normalizeModelUrl(url);
     },
 
-    //Fetches and parses an external OBJ model, caching by URL. Returns the parsed
-    //model ({ verts, faces }) or null on any failure (network, CORS, empty, parse).
-    loadObjModel: async function (url, cache) {
+    //Fetches and parses an external model, caching by URL: an .obj, a .gltf, a .glb, or a .zip holding one. A .gltf's
+    //buffers that are files of their own are fetched from beside it. Returns the parsed model ({ verts, faces }) or
+    //null on any failure (network, CORS, empty, parse).
+    loadModel: async function (url, cache) {
         if (cache[url] !== undefined)
             return cache[url];
 
         let parsed = null;
         const fetchUrl = this.normalizeModelUrl(url);
+        const beside = async uri => {
+            let target;
+
+            try {
+                target = new URL(uri, new URL(fetchUrl, document.baseURI)).href;
+            }
+            catch (e) {
+                return null;
+            }
+
+            const resp = await fetch(target);
+
+            if (!resp.ok)
+                return null;
+
+            return new Uint8Array(await resp.arrayBuffer());
+        };
 
         try
         {
             const resp = await fetch(fetchUrl);
             if (resp.ok) {
                 const buf = await resp.arrayBuffer();
-                parsed = await graphGeometry.parseObjData(buf);
+                parsed = await graphGeometry.parseModelData(buf, beside);
             }
             else
                 console.warn('Model fetch failed (' + resp.status + '): ' + fetchUrl);
@@ -1126,47 +1947,59 @@ window.graph3DInterop = {
         if (!data || !data.nodes)
             return;
 
-        const custom = data.nodes.filter(n => this.nodeCustomKind(n) !== 'sphere');
-        if (custom.length === 0)
-            return;
+        this.setupLinkCards(data.links || []);
 
-        //Wait for the default node meshes to exist so three.js can be captured.
-        let three = null;
-        for (let attempt = 0; attempt < 12 && !three; attempt++) {
-            await new Promise(resolve => requestAnimationFrame(resolve));
-            three = this.captureThree();
-        }
+        //A carded node (Detailed view) is its card, whatever its shape or model.
+        const objById = this.detailsCardObjects(data.nodes);
+        const custom = data.nodes.filter(n => !objById[n.id] && this.nodeCustomKind(n) !== 'sphere');
 
-        if (!three)
-            return;
-
-        let baseR = 4;
-        if (typeof this.instance.nodeRelSize === 'function')
-            baseR = this.instance.nodeRelSize();
-
-        const cache = {};
-        const objById = {};
-
-        for (const node of custom) {
-            const kind = this.nodeCustomKind(node);
-            const color = node.bgColor || node.color;
-            let mesh = null;
-
-            if (kind === 'model') {
-                const url = node.model;
-                const parsed = await this.loadObjModel(url, cache);
-                if (parsed)
-                    mesh = this.buildModelMesh(parsed, three, baseR, color);
-            }
-            else {
-                mesh = this.buildShapeMesh(kind, three, this.nodeRadius(node, baseR), color);
+        //The others with a shape or a model of their own get it, once three.js can be captured from a default node mesh;
+        //without it they stay spheres. None, and nothing is waited for.
+        if (custom.length > 0) {
+            let three = null;
+            for (let attempt = 0; attempt < 12 && !three; attempt++) {
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                three = this.captureThree();
             }
 
-            if (mesh)
-                objById[node.id] = mesh;
+            if (three) {
+                let baseR = 4;
+                if (typeof this.instance.nodeRelSize === 'function')
+                    baseR = this.instance.nodeRelSize();
+
+                const cache = {};
+
+                for (const node of custom) {
+                    const kind = this.nodeCustomKind(node);
+                    const color = node.bgColor || node.color;
+                    let mesh = null;
+
+                    if (kind === 'model') {
+                        const url = node.model;
+                        const parsed = await this.loadModel(url, cache);
+                        if (parsed)
+                            mesh = this.buildModelMesh(parsed, three, baseR, color);
+                    }
+                    else
+                        mesh = this.buildShapeMesh(kind, three, this.nodeRadius(node, baseR), color);
+
+                    if (mesh)
+                        objById[node.id] = mesh;
+                }
+            }
         }
 
-        if (Object.keys(objById).length === 0)
+        this.useNodeObjects(objById);
+    },
+
+    //Hands the library the objects to draw nodes as, by id, a node not among them being its default sphere; it lets go of
+    //the ones it drew before, their pictures with them. With none to hand over and none handed over before, the library is
+    //left as it is; with none now but some before (Detailed view turned off by a sync), it is handed the empty set, or it
+    //would keep drawing the old ones.
+    useNodeObjects: function (objById) {
+        const before = this.modelObjById || {};
+
+        if (Object.keys(objById).length === 0 && Object.keys(before).length === 0)
             return;
 
         this.modelObjById = objById;
@@ -1176,6 +2009,134 @@ window.graph3DInterop = {
         this.instance.nodeThreeObject(node => {
             return self.modelObjById[node.id];//undefined => library keeps the default sphere
         });
+    },
+
+    //── Detailed view in 3D ───────────────────────────────────────────────────────────────────────────────────────────
+    //A carded node (Show details on canvas, 2026-11-06) is drawn in 3D as its card, a picture that always faces the camera,
+    //in place of its sphere, solid or model (2026-11-07, the user's "do the loose ends"), as the 2D canvas draws it in place
+    //of its box. graphGeometry lays the card out as the 2D canvas's HTML card is, in the page's colors, and it is painted
+    //at DETAILS_CARD_SHARPNESS times its size so it stays sharp up close. Its name, image and shown properties are on the
+    //card, so the labels' layer leaves them out (setupLabels).
+    DETAILS_CARD_SHARPNESS: 3,
+    DETAILS_CARD_WORLD: 0.2,//world units a card pixel takes: a 2D box of 40 pixels is a sphere 8 across
+
+    //The cards of the carded nodes, by id: three.js sprites, each painted with its card.
+    detailsCardObjects: function (nodes) {
+        const objects = {};
+
+        nodes.filter(n => n.details === true).forEach(node => {
+            const content = window.graphGeometry.detailsCardContent({ kind: node.glabel || 'vertex', id: node.id, label: node.label, properties: node.properties });
+            const sprite = this.detailsCardSprite(content, node.bgColor || '#0d6efd');
+
+            if (sprite)
+                objects[node.id] = sprite;
+        });
+
+        return objects;
+    },
+
+    //A card as a sprite: laid out by graphGeometry in the page's colors, painted DETAILS_CARD_SHARPNESS times its size, and
+    //DETAILS_CARD_WORLD world units a card pixel. Null without three.js.
+    detailsCardSprite: function (content, color) {
+        const THREE = window.THREE;
+        const geo = window.graphGeometry;
+
+        if (!THREE)
+            return null;
+
+        if (!this.detailsMeasureCtx)
+            this.detailsMeasureCtx = document.createElement('canvas').getContext('2d');
+
+        const measureCtx = this.detailsMeasureCtx;
+        const measure = function (text, font) {
+            measureCtx.font = font;
+
+            return measureCtx.measureText(text).width;
+        };
+        const style = getComputedStyle(document.documentElement);
+        const look = {
+            color: color,
+            selected: false,
+            bg: style.getPropertyValue('--bs-body-bg').trim() || '#ffffff',
+            fg: style.getPropertyValue('--bs-body-color').trim() || '#212529',
+            muted: style.getPropertyValue('--bs-secondary-color').trim() || 'rgba(33, 37, 41, 0.75)',
+            line: style.getPropertyValue('--bs-border-color-translucent').trim() || 'rgba(0, 0, 0, 0.175)',
+            family: getComputedStyle(document.body).fontFamily
+        };
+        const layout = geo.detailsCardLayout(content, look, measure);
+        const sharp = this.DETAILS_CARD_SHARPNESS;
+        const canvas = document.createElement('canvas');
+
+        canvas.width = Math.ceil(layout.width * sharp);
+        canvas.height = Math.ceil(layout.height * sharp);
+        geo.paintDetailsCard(canvas.getContext('2d'), layout, canvas.width / 2, canvas.height / 2, sharp);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true }));
+        sprite.scale.set(layout.width * this.DETAILS_CARD_WORLD, layout.height * this.DETAILS_CARD_WORLD, 1);
+        sprite.userData.detailsCard = { width: layout.width, height: layout.height, title: content.title, kind: content.kind };
+
+        return sprite;
+    },
+
+    //A carded link (Detailed view on edges, 2026-11-07) has its card at its middle, beside its line, where the labels'
+    //layer would say its label; on the globe lifted to just over the surface, as that label is, where the arc runs. With
+    //none now and none before, the library is left as it is.
+    setupLinkCards: function (links) {
+        const before = this.linkCards || new Map();
+        const carded = links.filter(l => l.details === true);
+
+        this.linkCards = new Map();
+
+        if (carded.length === 0 && before.size === 0)
+            return;
+
+        carded.forEach(link => {
+            const content = window.graphGeometry.detailsCardContent({ kind: this.linkEndId(link.source) + ' → ' + this.linkEndId(link.target), id: '', label: link.label, properties: link.properties });
+            content.id = null;
+
+            const sprite = this.detailsCardSprite(content, link.color || '#6c757d');
+
+            if (sprite)
+                this.linkCards.set(link, sprite);
+        });
+
+        const self = this;
+        this.instance.linkThreeObjectExtend(true);
+        this.instance.linkThreeObject(link => self.linkCards.get(link));
+        this.instance.linkPositionUpdate((obj, ends, link) => {
+            if (!obj || self.linkCards.get(link) !== obj)
+                return false;
+
+            let mx = (ends.start.x + ends.end.x) / 2;
+            let my = (ends.start.y + ends.end.y) / 2;
+            let mz = (ends.start.z + ends.end.z) / 2;
+
+            if (self.globeOn) {
+                const chord = Math.sqrt(mx * mx + my * my + mz * mz);
+
+                if (chord > 0) {
+                    const lift = self.GLOBE_RADIUS * 1.02 / chord;
+                    mx *= lift;
+                    my *= lift;
+                    mz *= lift;
+                }
+            }
+
+            obj.position.set(mx, my, mz);
+
+            return false;
+        });
+    },
+
+    //A link's end's id: the library swaps the id for the node once the graph is laid out.
+    linkEndId: function (end) {
+        if (end && typeof end === 'object')
+            return String(end.id);
+
+        return String(end);
     },
 
     //How a node is drawn in 3D: its linked .obj 'model', the default 'sphere', or a primitive solid
@@ -1203,9 +2164,12 @@ window.graph3DInterop = {
 
     //On the globe a node keeps its apparent size as the camera closes in — the user's call,
     //2026-09-02: zoomed in on a country, the plain view's spheres are balls the size of the country.
-    //Every frame (the label loop) the node objects are scaled in place by the camera's distance over
-    //the framing distance, never above 1, so at the framing the globe shows the plain view's sizes and
-    //nothing is rebuilt. An object's own scale (a fitted model) is kept as the base.
+    //Every frame (the label loop) the node objects are scaled in place by the camera's height over
+    //the framing height, never above 1, so at the framing the globe shows the plain view's sizes and
+    //nothing is rebuilt. An object's own scale (a fitted model) is kept as the base. By the height rather than the distance
+    //from the earth's center since 2026-11-05, when the camera came down to street level: the center's distance never
+    //falls below a radius, and the nodes stayed the size of a county there. The earth's drawn radius and the camera's near
+    //plane follow in the same frame (applyGlobeSurface).
     applyGlobeNodeScale: function () {
         if (!this.globeOn || !this.instance)
             return;
@@ -1215,17 +2179,266 @@ window.graph3DInterop = {
         if (!cam)
             return;
 
-        const p = cam.position;
-        const distance = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
-        const factor = Math.max(0.05, Math.min(1, distance / (this.GLOBE_RADIUS * this.GLOBE_FRAMING)));
+        const height = Math.max(0, this.globeHeight(this.instance));
+        const factor = Math.max(1e-6, Math.min(1, height / (this.GLOBE_FRAMING - 1))) * this.globeNodeSize;
 
         this.globeNodeFactor = factor;
         this.scaleNodeObjects(this.instance.graphData().nodes, factor);
+        this.applyGlobeSurface(cam, height);
+    },
+
+    //── A place found ─────────────────────────────────────────────────────────────────────────
+    //The search under the layers button (2026-11-06, the user): an address or a name looked up, the camera flown there and
+    //a pin stood on it. The pin is drawn over the canvas, the labels' way, so it is the same size at any height, and
+    //hidden while the earth is in front of it.
+    GLOBE_PLACE_SPAN: 0.02,//degrees across the view for a place the geocoder gave no size, a few streets
+    GLOBE_PLACE_SPAN_LEAST: 0.004,//and the fewest for any place, a house's box being smaller than a street
+    GLOBE_FLY_MS: 1400,
+    globePlace: null,//{ lat, lng } while a place is shown: showGlobePlace
+    globePlacePin: null,//its element, in the labels' layer
+    globeFly: null,//{ from, to, angle, h0, h1, start } while the camera is on its way there
+
+    //Flies the camera to look straight down on a place, from the height its size calls for, and pins it. Kept when the
+    //globe is not up, for the next one.
+    showGlobePlace: function (lat, lng, span) {
+        this.globePlace = { lat: lat, lng: lng };
+
+        if (!this.instance || !this.globeOn)
+            return;
+
+        const cam = this.instance.camera();
+
+        if (!cam)
+            return;
+
+        let degrees = this.GLOBE_PLACE_SPAN;
+
+        if (typeof span === 'number' && span > 0)
+            degrees = span * 1.5;
+
+        degrees = Math.min(180, Math.max(this.GLOBE_PLACE_SPAN_LEAST, degrees));
+
+        //The ground across the view's shorter side, at a height h in radii, is about 2·h·tan(half the field of view) radii,
+        //and an arc of d degrees is d·π/180 of them.
+        const half = Math.tan(cam.fov * Math.PI / 360) * Math.min(1, cam.aspect);
+        const height = Math.min(this.GLOBE_FRAMING - 1, Math.max(this.GLOBE_MIN_HEIGHT, degrees * Math.PI / 180 / (2 * half)));
+        const p = cam.position;
+        const length = p.length();
+        const from = { x: p.x / length, y: p.y / length, z: p.z / length };
+        const to = window.graphGeometry.geoToCartesian(lat, lng, 1);
+        const dot = Math.min(1, Math.max(-1, from.x * to.x + from.y * to.y + from.z * to.z));
+
+        this.globeZoomTarget = null;
+        this.globeFly = { from: from, to: to, angle: Math.acos(dot), h0: this.globeHeight(this.instance), h1: height, start: performance.now() };
+    },
+
+    //One frame of the flight: along the great circle from where the camera looked to the place, easing in and out, the
+    //height going from the one to the other by proportion, and lifted on the way over by as much of the earth as it
+    //crosses, so a long flight rises to show where it is going and never cuts through the earth.
+    stepGlobeFly: function () {
+        const fly = this.globeFly;
+
+        if (!fly || !this.instance)
+            return;
+
+        const cam = this.instance.camera();
+
+        if (!cam)
+            return;
+
+        const t = Math.min(1, (performance.now() - fly.start) / this.GLOBE_FLY_MS);
+        let e;
+
+        if (t < 0.5)
+            e = 2 * t * t;
+        else
+            e = 1 - 2 * (1 - t) * (1 - t);
+
+        let a = 1 - e;
+        let b = e;
+
+        if (fly.angle > 1e-6) {
+            a = Math.sin((1 - e) * fly.angle) / Math.sin(fly.angle);
+            b = Math.sin(e * fly.angle) / Math.sin(fly.angle);
+        }
+
+        const dir = {
+            x: fly.from.x * a + fly.to.x * b,
+            y: fly.from.y * a + fly.to.y * b,
+            z: fly.from.z * a + fly.to.z * b
+        };
+        const length = Math.hypot(dir.x, dir.y, dir.z) || 1;
+        const lift = Math.max(0, fly.angle * 0.6 - Math.max(fly.h0, fly.h1)) * Math.sin(Math.PI * e);
+        const height = Math.exp(Math.log(fly.h0) + (Math.log(fly.h1) - Math.log(fly.h0)) * e) + lift;
+        const r = this.GLOBE_RADIUS * (1 + height) / length;
+
+        cam.position.set(dir.x * r, dir.y * r, dir.z * r);
+        cam.lookAt(0, 0, 0);
+
+        if (t >= 1)
+            this.globeFly = null;
+    },
+
+    //The pin over the place, its point on it, in the labels' layer; out of sight while the earth is in front of it.
+    placeGlobePin: function (camera, drawnRadius) {
+        if (!this.globePlace || !this.globeOn || !this.labelLayer || !camera) {
+            if (this.globePlacePin)
+                this.globePlacePin.style.display = 'none';
+
+            return;
+        }
+
+        let pin = this.globePlacePin;
+
+        if (!pin) {
+            pin = document.createElement('div');
+            pin.className = 'gdbv-place-pin';
+            pin.setAttribute('data-testid', 'globe-place-pin');
+            pin.innerHTML = '<svg width="22" height="31" viewBox="0 0 22 31" aria-hidden="true"><path d="M11 30C10 23 2 18 2 11a9 9 0 0 1 18 0c0 7-8 12-9 19z" fill="#dc3545" stroke="#ffffff" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#ffffff"/></svg>';
+            this.globePlacePin = pin;
+        }
+
+        if (pin.parentNode !== this.labelLayer)
+            this.labelLayer.appendChild(pin);
+
+        const p = window.graphGeometry.geoToCartesian(this.globePlace.lat, this.globePlace.lng, this.GLOBE_RADIUS);
+        const c = this.instance.graph2ScreenCoords(p.x, p.y, p.z);
+        const behind = window.graphGeometry.sphereOccludes(camera, p, drawnRadius);
+
+        pin.style.display = '';
+        pin.style.left = c.x + 'px';
+        pin.style.top = c.y + 'px';
+
+        if (behind)
+            pin.style.visibility = 'hidden';
+        else
+            pin.style.visibility = '';
+    },
+
+    //Takes the pin away; the camera stays where it is.
+    clearGlobePlace: function () {
+        this.globePlace = null;
+        this.globeFly = null;
+
+        if (this.globePlacePin && this.globePlacePin.parentNode)
+            this.globePlacePin.parentNode.removeChild(this.globePlacePin);
+
+        this.globePlacePin = null;
+    },
+
+    //Where the pin is on screen, and whether the earth hides it, for tests; null with no place shown.
+    getGlobePlace: function () {
+        const pin = this.globePlacePin;
+
+        if (!this.globePlace || !pin || pin.style.display === 'none')
+            return null;
+
+        return { x: parseFloat(pin.style.left), y: parseFloat(pin.style.top), hidden: pin.style.visibility === 'hidden', flying: !!this.globeFly, height: this.instance && this.globeHeight(this.instance) };
+    },
+
+    //The radius the earth is drawn at now: just under the nodes by GLOBE_SURFACE_GAP of their size.
+    globeDrawnRadius: function () {
+        return this.GLOBE_RADIUS * (1 - this.GLOBE_SURFACE_GAP * this.globeNodeFactor);
+    },
+
+    //The earth raised to just under the nodes as they shrink (its meshes are built at the full gap's radius and scaled
+    //from there), and the camera's near plane brought in to a fifth of its height, so the ground a few hundred meters
+    //below is drawn rather than clipped. At the framing height both are as they were.
+    applyGlobeSurface: function (cam, height) {
+        const built = this.GLOBE_RADIUS * (1 - this.GLOBE_SURFACE_GAP);
+        const scale = this.globeDrawnRadius() / built;
+
+        if (this.globeMesh && Math.abs(this.globeMesh.scale.x - scale) > 1e-9)
+            this.globeMesh.scale.setScalar(scale);
+
+        if (this.globeNearBase === null)
+            this.globeNearBase = cam.near;
+
+        const near = Math.min(this.globeNearBase, Math.max(0.0005, height * this.GLOBE_RADIUS * 0.2));
+
+        if (Math.abs(cam.near - near) > near * 0.05) {
+            cam.near = near;
+            cam.updateProjectionMatrix();
+        }
     },
 
     resetGlobeNodeScale: function (graph) {
         this.globeNodeFactor = 1;
         this.scaleNodeObjects(graph.graphData().nodes, 1);
+
+        const cam = graph.camera();
+
+        if (cam && this.globeNearBase !== null) {
+            cam.near = this.globeNearBase;
+            cam.updateProjectionMatrix();
+        }
+
+        this.globeNearBase = null;
+    },
+
+    //An arrowhead's length, the library's 4, scaled on the globe with the nodes (Node size on map and the camera's height),
+    //so it stays an arrowhead on a node rather than a cone the size of a country (the user, 2026-11-06). The library reads
+    //this and arrowRelPos every frame to place each arrowhead; its cone is built once at the length it had then, and
+    //fitArrowObjects scales it to the length now.
+    ARROW_LENGTH: 4,
+
+    arrowLength: function () {
+        if (this.globeOn)
+            return this.ARROW_LENGTH * this.globeNodeFactor;
+        else
+            return this.ARROW_LENGTH;
+    },
+
+    //Where along its link the library puts an arrowhead's tip. It measures to the target's edge by the node's unscaled
+    //radius, so on the globe, where the nodes are scaled, the tip would stop short of a smaller node. This puts the tip on
+    //the scaled node's edge instead.
+    arrowRelPos: function (link) {
+        if (!this.globeOn || !this.instance)
+            return 1;
+
+        const s = link.source;
+        const t = link.target;
+
+        if (typeof s !== 'object' || typeof t !== 'object' || !s || !t)
+            return 1;
+
+        let length;
+
+        if (link.__curve)
+            length = link.__curve.getLength();
+        else
+            length = Math.hypot((t.x || 0) - (s.x || 0), (t.y || 0) - (s.y || 0), (t.z || 0) - (s.z || 0));
+
+        const baseR = this.instance.nodeRelSize();
+        const from = this.nodeRadius(s, baseR);
+        const to = this.nodeRadius(t, baseR);
+        const arrow = this.arrowLength();
+        const room = length - from - to - arrow;
+
+        if (room <= 0)
+            return 1;
+
+        return Math.max(0, (length - to * this.globeNodeFactor - from - arrow) / room);
+    },
+
+    //Each arrowhead's cone scaled to the length it has now; run every frame, since the library may build a cone again.
+    fitArrowObjects: function () {
+        if (!this.instance)
+            return;
+
+        const length = this.arrowLength();
+
+        (this.instance.graphData().links || []).forEach(l => {
+            const obj = l.__arrowObj;
+
+            if (!obj || !obj.geometry || !obj.geometry.parameters || !obj.geometry.parameters.height)
+                return;
+
+            const target = length / obj.geometry.parameters.height;
+
+            if (Math.abs(obj.scale.x - target) > 1e-9)
+                obj.scale.setScalar(target);
+        });
     },
 
     scaleNodeObjects: function (nodes, factor) {
@@ -1363,15 +2576,12 @@ window.graph3DInterop = {
                 return [rx * st * Math.cos(phi), ry * Math.cos(theta), rz * st * Math.sin(phi)];
             };
 
-            for (let i = 0; i < stacks; i++) {
-                for (let j = 0; j < slices; j++) {
+            for (let i = 0; i < stacks; i++)
+                for (let j = 0; j < slices; j++)
                     quad(at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
-                }
-            }
         }
-        else {
+        else
             return null;
-        }
 
         return tris;
     },
@@ -1386,7 +2596,7 @@ window.graph3DInterop = {
 
         const data = this.instance.graphData();
         let mesh = null;
-        if (data && data.nodes) {
+        if (data && data.nodes)
             for (const n of data.nodes) {
                 if (!n.__threeObj)
                     continue;
@@ -1395,7 +2605,6 @@ window.graph3DInterop = {
                 if (mesh)
                     break;
             }
-        }
 
         if (!mesh || !mesh.geometry || !mesh.material)
             return null;
@@ -1420,13 +2629,12 @@ window.graph3DInterop = {
         if (obj.isMesh && obj.geometry)
             return obj;
 
-        if (obj.children) {
+        if (obj.children)
             for (const c of obj.children) {
                 const found = this.findMesh(c);
                 if (found)
                     return found;
             }
-        }
 
         return null;
     },
@@ -1468,9 +2676,8 @@ window.graph3DInterop = {
             //Fan-triangulate faces (1-based within the model) into a 0-based index list.
             const indices = [];
             model.faces.forEach(face => {
-                for (let i = 1; i + 1 < face.length; i++) {
+                for (let i = 1; i + 1 < face.length; i++)
                     indices.push(face[0] - 1, face[i] - 1, face[i + 1] - 1);
-                }
             });
 
             const geom = new three.BufferGeometry();
@@ -1520,10 +2727,11 @@ window.graph3DInterop = {
 
         this.graphExtent = this.computeGraphExtent(data.nodes);
 
+        //A carded node's name, image and shown properties are on its card (detailsCardObjects).
         this.nodeLabels = [];
         data.nodes.forEach(node => {
             const text = node.label || node.id;
-            if (!text)
+            if (!text || node.details === true)
                 return;
 
             const el = this.makeLabelEl(layer, text, false);
@@ -1532,7 +2740,7 @@ window.graph3DInterop = {
 
         this.linkLabels = [];
         (data.links || []).forEach(link => {
-            if (!link.label)
+            if (!link.label || link.details === true)
                 return;
 
             const el = this.makeLabelEl(layer, link.label, true);
@@ -1543,7 +2751,7 @@ window.graph3DInterop = {
         data.nodes.forEach(node => {
             //data.image is gated by the node's "show" state in the converter — unshown images are absent.
             const url = node.image;
-            if (!url)
+            if (!url || node.details === true)
                 return;
 
             const img = this.makeImageEl(layer, url);
@@ -1554,7 +2762,7 @@ window.graph3DInterop = {
         this.nodeShowLabels = [];
         data.nodes.forEach(node => {
             const lines = node.showProps;
-            if (!lines || !lines.length)
+            if (!lines || !lines.length || node.details === true)
                 return;
 
             const el = this.makeShowEl(layer, lines);
@@ -1674,9 +2882,9 @@ window.graph3DInterop = {
         if (isLink) {
             el.style.fontSize = '9px';
             el.style.opacity = '0.85';
-        } else {
-            el.style.fontSize = '11px';
         }
+        else
+            el.style.fontSize = '11px';
 
         layer.appendChild(el);
         return el;
@@ -1812,7 +3020,7 @@ window.graph3DInterop = {
     //Hides node geometry — and the edges touching a hidden node — beyond the node draw distance, updated
     //every frame so nodes reappear as the camera moves closer. The label filter still wins.
     updateNodeCulling: function () {
-        if (!this.instance || this.nodeDrawPercent >= 100)
+        if (!this.instance || this.nodeDrawPercent >= 100 || this.globeOn)
             return;
 
         const cam = this.instance.camera();
@@ -1847,6 +3055,7 @@ window.graph3DInterop = {
 
             if (l.__lineObj)
                 l.__lineObj.visible = vis;
+
             if (l.__arrowObj)
                 l.__arrowObj.visible = vis;
         });
@@ -1872,6 +3081,7 @@ window.graph3DInterop = {
 
             if (l.__lineObj)
                 l.__lineObj.visible = !hidden;
+
             if (l.__arrowObj)
                 l.__arrowObj.visible = !hidden;
         });
@@ -1902,15 +3112,28 @@ window.graph3DInterop = {
         //On the globe, the overlay must not show what the earth hides: a label whose point is behind
         //the drawn sphere goes invisible (visibility, so the display toggles above stay in charge).
         let globeCamera = null;
-        const drawnRadius = this.GLOBE_RADIUS * 0.985;
 
         if (this.globeOn) {
             const cam = this.instance.camera();
             if (cam)
                 globeCamera = cam.position;
 
+            this.stepGlobeFly();
+            this.stepGlobeZoom();
+            this.applyGlobeRotateSpeed();
             this.applyGlobeNodeScale();
+            this.updateGlobeTiles();
         }
+
+        this.fitArrowObjects();
+
+        //The labels and images keep their size on screen; on the globe Node size on map sizes them with the nodes.
+        let overlayPlace = 'translate(-50%, -50%)';
+
+        if (this.globeOn && this.globeNodeSize !== 1)
+            overlayPlace = 'translate(-50%, -50%) scale(' + this.globeNodeSize + ')';
+
+        const drawnRadius = this.globeDrawnRadius();
 
         const behindGlobe = function (x, y, z) {
             if (!globeCamera)
@@ -1924,6 +3147,8 @@ window.graph3DInterop = {
         const offGlobe = function (node) {
             return !!globeCamera && !self.isLocated(node);
         };
+
+        this.placeGlobePin(globeCamera, drawnRadius);
 
         const setBehind = function (el, behind) {
             let visibility;
@@ -1948,6 +3173,10 @@ window.graph3DInterop = {
             const c = self.instance.graph2ScreenCoords(nx, ny, nz);
             item.el.style.left = c.x + 'px';
             item.el.style.top = c.y + 'px';
+
+            if (item.el.style.transform !== overlayPlace)
+                item.el.style.transform = overlayPlace;
+
             setBehind(item.el, offGlobe(item.node) || behindGlobe(nx, ny, nz));
 
             if (cull && camPos)
@@ -1983,6 +3212,10 @@ window.graph3DInterop = {
             const c = self.instance.graph2ScreenCoords(mx, my, mz);
             item.el.style.left = c.x + 'px';
             item.el.style.top = c.y + 'px';
+
+            if (item.el.style.transform !== overlayPlace)
+                item.el.style.transform = overlayPlace;
+
             setBehind(item.el, offGlobe(s) || offGlobe(t) || behindGlobe(mx, my, mz));
 
             if (cull && camPos)
@@ -1993,6 +3226,10 @@ window.graph3DInterop = {
             const c = self.instance.graph2ScreenCoords(item.node.x || 0, item.node.y || 0, item.node.z || 0);
             item.el.style.left = c.x + 'px';
             item.el.style.top = c.y + 'px';
+
+            if (item.el.style.transform !== overlayPlace)
+                item.el.style.transform = overlayPlace;
+
             setBehind(item.el, offGlobe(item.node) || behindGlobe(item.node.x || 0, item.node.y || 0, item.node.z || 0));
         });
 
@@ -2104,10 +3341,9 @@ window.graph3DInterop = {
                 return true;
 
             const props = n.properties || {};
-            for (const k in props) {
+            for (const k in props)
                 if (String(props[k]).toLowerCase().includes(q))
                     return true;
-            }
 
             return false;
         });
@@ -2121,9 +3357,9 @@ window.graph3DInterop = {
             if (nd > 1) {
                 const ratio = 1 + 120 / nd;
                 camPos = { x: x * ratio, y: y * ratio, z: z * ratio };
-            } else {
-                camPos = { x: x, y: y, z: z + 120 };
             }
+            else
+                camPos = { x: x, y: y, z: z + 120 };
 
             this.instance.cameraPosition(camPos, { x: x, y: y, z: z }, 800);
         }

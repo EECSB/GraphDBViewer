@@ -57,10 +57,8 @@ public sealed class PluginBootReport
     public PluginBootEntry For(string id)
     {
         foreach (var entry in Entries)
-        {
             if (entry.Id == id)
                 return entry;
-        }
 
         return null;
     }

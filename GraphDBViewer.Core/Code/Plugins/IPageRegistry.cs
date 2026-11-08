@@ -20,6 +20,12 @@ public sealed class PluginPage
     public string Icon { get; init; }
 
     ///<summary>
+    ///A Bootstrap Icons class (<c>bi-boxes</c>) for the glyph the page wears in its own header, or null. The Plugins page
+    ///draws it in a tile in the header's style and prefers it to <see cref="Icon"/>, which stays as the drawn alternative.
+    ///</summary>
+    public string Glyph { get; init; }
+
+    ///<summary>
     ///The permission required to see the page, or null when being admitted is enough. A courtesy
     ///gate — the client hides what it names, and the server refuses independently wherever the page
     ///has endpoints, because a WebAssembly build is a file the user can read and edit.
@@ -63,6 +69,27 @@ public sealed class RegisteredPlugin
     ///plugin uses it for ADR 0011's rule 3: removing it leaves every container it started running.
     ///</summary>
     public string UninstallNote { get; init; }
+
+    ///<summary>
+    ///The family it belongs to, or null (ADR 0017 §1): <c>MES</c>, <c>ERP</c>. Presentation only — the Plugins
+    ///page shows it beside the name — and membership confers nothing: no permission, no dependency, no access.
+    ///</summary>
+    public string Family { get; init; }
+
+    ///<summary>
+    ///The plugin's feature showcase, a page of its own shown full screen from the Plugins page as Features, or null for
+    ///none (2026-11-06, the user). A path under the app's base, such as <c>_content/…/showcase/index.html</c>, or an absolute
+    ///address.
+    ///</summary>
+    public string ShowcaseUrl { get; init; }
+
+    ///<summary>
+    ///The page its guided tour starts on, offered on the Plugins page as Take the tour, or null for none (2026-11-06, the
+    ///user). The page is opened with <c>tour=start</c> in its address and starts the tour itself, with stops of its own
+    ///(<see cref="TourStop"/>), by calling <see cref="ShellState.StartTourIfAsked"/> once it has drawn; the viewer's Home
+    ///starts its own the same way.
+    ///</summary>
+    public string TourRoute { get; init; }
 }
 
 ///<summary>

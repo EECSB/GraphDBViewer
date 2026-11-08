@@ -97,15 +97,11 @@ public static class DgraphConverter
         var plainRows = new List<JsonElement>();
 
         if (data.ValueKind == JsonValueKind.Object)
-        {
             //Each property is one query block's results; a mutation answers with a plain object instead.
             foreach (var block in data.EnumerateObject())
                 Collect(block.Value, null, null, nodes, edges, plainRows);
-        }
         else
-        {
             Collect(data, null, null, nodes, edges, plainRows);
-        }
 
         if (nodes.Count > 0 || edges.Count > 0)
             return GraphDbResult.Success(BuildGraph(nodes, edges), raw);
@@ -297,8 +293,7 @@ public static class DgraphConverter
 
         if (types.ValueKind == JsonValueKind.String)
             return types.GetString();
-
-        if (types.ValueKind == JsonValueKind.Array)
+        else if (types.ValueKind == JsonValueKind.Array)
             foreach (var type in types.EnumerateArray())
                 if (type.ValueKind == JsonValueKind.String)
                     return type.GetString();
@@ -353,14 +348,10 @@ public static class DgraphConverter
                 cells[column] = "";
 
             if (row.ValueKind == JsonValueKind.Object)
-            {
                 foreach (var property in row.EnumerateObject())
                     cells[property.Name] = GraphWireText.Stringify(property.Value) ?? "";
-            }
             else
-            {
                 cells[columns[0]] = GraphWireText.Stringify(row) ?? "";
-            }
 
             table.Rows.Add(cells);
         }

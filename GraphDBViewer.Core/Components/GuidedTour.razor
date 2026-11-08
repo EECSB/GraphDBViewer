@@ -1,0 +1,369 @@
+@*
+    The guided tour: the viewer's parts one at a time, a hole in a shade over the page for each and a card saying what
+    it is for. GDS Viewer's walkthrough brought across (2026-11-03, the user: "not just the showcase, but the walkthrough
+    that sort of takes you through it"), its mechanics as they are there and its stops this viewer's own.
+
+    **Started, never sprung.** From the settings menu, or by "Show me" on the question the app asks as it opens - never
+    on its own. Back and Next, or the arrow keys, move through it; Escape, the cross or Done ends it.
+
+    **Only the stops this page can show, and it changes nothing.** Which parts are here is asked as the walk starts: on
+    an empty canvas the graph's tools are not, and the count says "4 of 9" rather than jumping. Where each piece goes,
+    and keeping every key from the page while the tour is open, is tour.js's.
+
+    **The viewer's stops, or a page's own** (2026-11-07). A plugin's page opened by the Plugins page's Take the tour hands
+    its stops (TourStop) to ShellState.StartTourIfAsked, and they come here through the top bar; with none, it is the
+    viewer's walk, which is also what Settings and the question as the app opens start, on any page.
+*@
+@using GraphDBViewerWeb.Code
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+
+@if (Visible)
+{
+    <div class="gdbv-tour-blocker" data-testid="tour-blocker"></div>
+    <div id="gdbvTourShade" class="gdbv-tour-shade" data-testid="tour-shade"></div>
+
+    <div id="gdbvTourCard" class="gdbv-tour-card" role="dialog" aria-modal="true" aria-labelledby="gdbv-tour-step-title" tabindex="-1"
+         @ref="card" data-testid="tour-card">
+        <button type="button" class="btn-close gdbv-tour-close" aria-label="End the tour" title="End the tour (Esc)"
+                @onclick="CloseAsync" data-testid="tour-close"></button>
+
+        <div id="gdbv-tour-step-title" class="gdbv-tour-title" data-testid="tour-title">@Title(Current)</div>
+
+        @* Keyed by the stop, so a moving picture starts again from its beginning when its card comes up. *@
+        @if (Current.Picture != null)
+        {
+            <div class="gdbv-tour-figure" @key="showing[at]">@Current.Picture</div>
+        }
+
+        <div class="gdbv-tour-text" data-testid="tour-text">@Text(Current)</div>
+
+        <div class="gdbv-tour-foot">
+            <span class="gdbv-tour-count" data-testid="tour-count">@(at + 1) of @showing.Count</span>
+
+            <button type="button" class="btn btn-outline-secondary btn-sm gdbv-tour-button" disabled="@(at == 0)"
+                    aria-label="Back" title="Back (←)" @onclick="Back" data-testid="tour-back">
+                <i class="bi bi-arrow-left" aria-hidden="true"></i>
+            </button>
+            <button type="button" class="btn btn-primary btn-sm gdbv-tour-button"
+                    aria-label="@(IsLast ? "Done" : "Next")" title="@(IsLast ? "Done" : "Next (→)")" @onclick="NextAsync" data-testid="tour-next">
+                <i class="bi @(IsLast ? "bi-check-lg" : "bi-arrow-right")" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public bool Visible { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    ///<summary>
+    ///The stops to walk: a page's own, asked for through ShellState.RequestTour, or null or none for the viewer's
+    ///(<see cref="ViewerStops"/>). "{app}" in a stop's words is the host's name for the app.
+    ///</summary>
+    [Parameter]
+    public IReadOnlyList<TourStop>? Stops { get; set; }
+
+    ///
+    ///The viewer's stops, in the order somebody meets the parts: what the viewer is, where a graph comes from, how to look at
+    ///one, how to change it, how to ask for one, and how to send it on. **The first and last are about the whole app**,
+    ///so they always show - which is also what stops a walk past missing parts from walking off either end.
+    ///
+    private static readonly IReadOnlyList<TourStop> ViewerStops = new List<TourStop>
+    {
+        new(
+            null,
+            "Welcome to {app}",
+            "Connect to a graph database, or bring a graph of your own, and see it as a 2D drawing, a 3D one, a table or its JSON. Query it, change it, and ask an AI to write the queries for you."),
+        new(
+            "[data-testid=\"viewer-empty\"]",
+            "Where to start",
+            "Connect to a database, paste or import a graph, or draw one offline. The graph's own tools join this tour once a graph is on the canvas."),
+        new(
+            "[data-testid=\"viewer-connection\"]",
+            "The connection",
+            "The database this tab works on, and whether it is connected. Press it for the connection's settings: Gremlin, Cypher or SPARQL servers, the transport and the login, or offline mode with no database at all."),
+        new(
+            "[data-testid=\"viewer-add-connection\"]",
+            "More connections",
+            "Each connection gets a tab of its own, so two databases can stay open side by side."),
+        new(
+            "[data-testid=\"viewer-import-export\"]",
+            "Import and export",
+            "Paste or import a graph - GraphSON, DOT, CSV and more - and save what is on the canvas as a file, a table or a picture."),
+        new(
+            "[aria-label=\"Visualization mode\"]",
+            "Four views",
+            "The same graph as its JSON, a 2D drawing, a 3D one or a table. Point at 2D for a map behind it, and at 3D for the globe. In the table, drag a column's edge to size it, or double-click it to fit.",
+            Drawn("views")),
+        new(
+            "[data-tour=\"graph-canvas\"]",
+            "The graph",
+            "Scroll to zoom and drag to pan, or use the buttons in the bottom right corner to zoom and re-center. Click a node or an edge for its properties; double-click a node to bring in its neighbors. In 3D, VR / AR opens it in a headset."),
+        new(
+            //Only on the Map and the Globe, where the button is (2026-11-05).
+            "[data-testid=\"map-layers\"]",
+            "Map layers",
+            "What the earth is drawn from: the built-in images, satellite or outline, the satellite in high resolution, or a free street, topographic or satellite map. Your own tile server, and its key, go in Map settings."),
+        new(
+            //Under the layers button, on the Map and the Globe alike (2026-11-06).
+            "[data-testid=\"map-place\"]",
+            "Find a place",
+            "Type an address or a place's name and press Enter: the view goes there and pins it, with its coordinates to copy. Nothing is sent before Enter, and only to the geocoder set in Map settings."),
+        new(
+            "[data-tour=\"graph-tools\"]",
+            "Editing",
+            "Add nodes, delete them, link two together, style each label, or snap to a grid. Every change is staged as a query to commit, not written straight away.",
+            Drawn("edit")),
+        new(
+            "[data-tour=\"graph-find\"]",
+            "Finding your way",
+            "Search by label or property, filter labels out, pick a layout and pin it, open the data model, or run graph algorithms over what is loaded."),
+        new(
+            "[data-tour=\"query-tabs\"]",
+            "Queries",
+            "Write a query and run it, or step through it with the debugger. Generated holds the changes staged from the canvas until you commit them; Examples and History hold queries to start from."),
+        new(
+            "[data-tour=\"ask-ai\"]",
+            "AI",
+            "Describe what you want in words and the assistant writes the query, runs it if you let it, and answers. Ask with a file, a photo or your voice; every chat is kept. It uses a key of your own, set under AI settings.",
+            Drawn("ai")),
+        new(
+            "[data-testid=\"viewer-share\"]",
+            "Share",
+            "A link that opens the viewer set up as yours is - the connection, the query, the view - or the code to embed it in a page."),
+        new(
+            //The Settings button, or the account's menu on a host that keeps the settings there.
+            "[data-testid=\"shell-settings\"], [data-testid=\"shell-account\"]",
+            "Settings",
+            "The theme, the AI's models and keys, the map's tile server and geocoder, and this tour whenever you want it again."),
+        new(
+            null,
+            "That is the tour",
+            "Every button says what it does when you point at it. The tour is under Settings whenever you want it again.")
+    };
+
+    ///<summary>One of TourPicture's drawings, as a stop's picture.</summary>
+    private static RenderFragment Drawn(string name)
+    {
+        return @<TourPicture Name="@name" />;
+    }
+
+    ///<summary>The stops this walk goes through: the page's own when it gave any, else the viewer's.</summary>
+    private IReadOnlyList<TourStop> Walk
+    {
+        get
+        {
+            if (Stops != null && Stops.Count > 0)
+                return Stops;
+            else
+                return ViewerStops;
+        }
+    }
+
+    ///<summary>The walk <see cref="showing"/> counts in, so another one asked for starts from its own first stop.</summary>
+    private IReadOnlyList<TourStop>? walking;
+
+    ///<summary>The steps this walk shows, by their place in <see cref="Walk"/> - every one until the page has been asked.</summary>
+    private List<int> showing = new();
+
+    ///<summary>Whether <see cref="showing"/> has been worked out for this walk.</summary>
+    private bool asked;
+
+    ///<summary>The step on the card, by its place in <see cref="showing"/>.</summary>
+    private int at;
+
+    ///<summary>The step last put on the page, so a render that changed nothing does not place it again. -1 while closed.</summary>
+    private int shown = -1;
+
+    ///<summary>Which way the last move went: a step whose part has gone is passed in the same direction.</summary>
+    private int heading = 1;
+
+    private ElementReference card;
+
+    ///<summary>This, for tour.js to hand the tour's keys to.</summary>
+    private DotNetObjectReference<GuidedTour>? self;
+
+    private TourStop Current => Walk[showing[at]];
+
+    ///<summary>Whether this is the last card, where Next is Done.</summary>
+    private bool IsLast => at == showing.Count - 1;
+
+    private List<int> EveryStep()
+    {
+        return Enumerable.Range(0, Walk.Count).ToList();
+    }
+
+    private string Text(TourStop step)
+    {
+        return step.Text.Replace("{app}", HostOptions.AppName);
+    }
+
+    private string Title(TourStop step)
+    {
+        return step.Title.Replace("{app}", HostOptions.AppName);
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (walking == Walk)
+            return;
+
+        //Another walk, asked for while one is on the card - a page's over the viewer's: it starts from its first stop, asks
+        //again which of its parts are here, and is placed afresh. A walk closing as it changes is still let go of below.
+        walking = Walk;
+        at = 0;
+        heading = 1;
+        asked = false;
+        showing = EveryStep();
+
+        if (Visible && shown >= 0)
+            shown = -1;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!Visible)
+        {
+            if (shown >= 0)
+            {
+                shown = -1;
+
+                await StopAsync();
+            }
+
+            return;
+        }
+
+        //The card is out of sight until tour.js places it, so the count before this is never seen.
+        if (!asked)
+        {
+            var targets = Walk.Select(each => each.Target).ToArray();
+            var present = await JS.InvokeAsync<bool[]>("gdbvTour.present", (object)targets);
+
+            showing = EveryStep().Where(each => present[each]).ToList();
+            asked = true;
+
+            //None of a page's stops has its part here, and none is about the whole page: there is no card to show.
+            if (showing.Count == 0)
+            {
+                await CloseAsync();
+
+                return;
+            }
+
+            StateHasChanged();
+
+            return;
+        }
+
+        if (shown == at)
+            return;
+
+        var first = shown < 0;
+
+        if (first)
+        {
+            self ??= DotNetObjectReference.Create(this);
+
+            await JS.InvokeVoidAsync("gdbvTour.start", self);
+        }
+
+        //Past a step whose part has gone since the walk started - a window narrowed to a phone's. It stops at either end of
+        //the walk; the viewer's first and last stops are about the whole app, which always shows.
+        while (!await JS.InvokeAsync<bool>("gdbvTour.place", Current.Target))
+        {
+            var then = at + heading;
+
+            if (then < 0 || then >= showing.Count)
+                break;
+
+            at = then;
+        }
+
+        shown = at;
+
+        if (first)
+        {
+            try
+            {
+                await card.FocusAsync();
+            }
+            catch { }
+        }
+
+        //The walk may have moved past a step, and the card is still saying the one it started from.
+        StateHasChanged();
+    }
+
+    ///
+    ///Escape and the arrows, from tour.js, which holds every key while the tour is open so the page behind does not act
+    ///on them too. **The right arrow stops at the last step** rather than ending the tour - that is Done's to say.
+    ///
+    [JSInvokable]
+    public async Task OnTourKey(string key)
+    {
+        if (key == "Escape")
+            await CloseAsync();
+        else if (key == "ArrowRight" && !IsLast)
+            await NextAsync();
+        else if (key == "ArrowLeft")
+            Back();
+
+        StateHasChanged();
+    }
+
+    private async Task NextAsync()
+    {
+        if (IsLast)
+        {
+            await CloseAsync();
+
+            return;
+        }
+
+        heading = 1;
+        at++;
+    }
+
+    private void Back()
+    {
+        if (at == 0)
+            return;
+
+        heading = -1;
+        at--;
+    }
+
+    private async Task CloseAsync()
+    {
+        at = 0;
+        heading = 1;
+        asked = false;
+        showing = EveryStep();
+
+        //TourInterop.js lets go once the closed card renders - see OnAfterRenderAsync.
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task StopAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("gdbvTour.stop");
+        }
+        catch { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (shown >= 0)
+            await StopAsync();
+
+        self?.Dispose();
+    }
+}

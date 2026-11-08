@@ -1,4 +1,3 @@
-using System.Text.Json;
 using GraphDBViewerWeb.Code;
 
 namespace GraphDBViewerWeb.Tests;
@@ -6,7 +5,8 @@ namespace GraphDBViewerWeb.Tests;
 //Every store that has somewhere to put a value packs it this way (deflate + base64 above a threshold), so
 //the same data takes far less room in IndexedDB and far less bandwidth on the way to the host. The
 //round-trip must be lossless for every shape the app persists (short strings, big JSON, unicode, empty),
-//and Decode must tolerate the odd unmarked value. Shared rather than copied because FallbackAppStorage
+//Decode must tolerate the odd unmarked value, and a compressed value it cannot read is an absent one rather than
+//a throw into whatever asked for it. Shared rather than copied because FallbackAppStorage
 //mirrors values between two adapters — one that re-encoded in the middle would be a bug waiting for a
 //reconnect.
 public class StorageCompressionTests
@@ -74,15 +74,13 @@ public class StorageCompressionTests
         Assert.Equal(legacy, StorageCompression.Decode(legacy));
     }
 
+    //A compressed value the store cannot read, its base64 or its deflate damaged, is an absent one: nothing can be done
+    //with it, and the next write replaces it. Until 2026-11-07 Decode threw (FormatException, InvalidDataException) out of
+    //the storage read into the page's first render, and every reload failed the same way until the key was deleted by hand.
     [Fact]
-    public void RoundTrips_TypedValueSerializedAsTheAppDoes()
+    public void Decode_ReadsADamagedCompressedValueAsAbsent()
     {
-        //Mirrors SetAsync<T>: serialize, encode, decode, deserialize — the shape saved connections use.
-        var original = new Dictionary<string, int> { ["Screw"] = 3, ["Gear"] = 3, ["Mount"] = 1 };
-
-        var encoded = StorageCompression.Encode(JsonSerializer.Serialize(original));
-        var restored = JsonSerializer.Deserialize<Dictionary<string, int>>(StorageCompression.Decode(encoded));
-
-        Assert.Equal(original, restored);
+        Assert.Null(StorageCompression.Decode("zNOT-BASE64"));
+        Assert.Null(StorageCompression.Decode("z" + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("not deflate at all"))));
     }
 }

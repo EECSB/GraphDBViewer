@@ -76,9 +76,13 @@ public partial class Home
         debugSimError = null;
         debugTab = 1;
 
-        if (Qb.IsMutating(query))
+        //The guard's reason, since for Gremlin it is not always a write: a closure or a Groovy method is refused too,
+        //as something the debugger cannot show will only read.
+        var refusal = Qb.ReadRefusal(query);
+
+        if (refusal != null)
         {
-            debugError = "This query modifies the graph. Step-through and profiling are disabled so your data isn't changed. Use the Explain tab (it never executes the query).";
+            debugError = $"{refusal} Step-through and profiling are disabled so your data isn't changed. Use the Explain tab (it never executes the query).";
             return;
         }
 
@@ -99,8 +103,9 @@ public partial class Home
             return;
         }
 
-        //The tree carries the same top-level steps plus their __-sub-traversals, so the cursor can step in.
-        debugTree = GremlinStepParser.ParseTree(query);
+        //The tree carries the same top-level steps plus their sub-traversals, so the cursor can step in: those written
+        //with __, and those written without it where a step takes a traversal, as Groovy reads where(out('x')).
+        debugTree = GremlinStepParser.ParseDebugTree(query);
         debugTopTreeIndex = new();
         for (int i = 0; i < debugTree.Count; i++)
             if (debugTree[i].Depth == 0 && debugTree[i].Debuggable)
@@ -149,6 +154,9 @@ public partial class Home
         debugSimStepIndex = -1;
         debugSimRows = new();
         await SetDebugKeysAsync(false);
+
+        //The canvas was off the page while the debugger stood over it, so it comes back empty unless drawn again.
+        await RenderGraphAsync();
     }
 
     //Focuses a top-level step (from a panel row or an editor click): highlights it, moves the cursor onto
@@ -163,7 +171,25 @@ public partial class Home
         if (index < debugTopTreeIndex.Count)
             debugCursor = debugTopTreeIndex[index];
 
+        await LoadDebugSummaryAsync(index);
+    }
+
+    //The focused step's traverser summary: a sample of what came out of it, and of what went in, the step before's.
+    private async Task LoadDebugSummaryAsync(int index)
+    {
         await LoadDebugSampleAsync(index);
+
+        if (index > 0)
+            await LoadDebugSampleAsync(index - 1);
+    }
+
+    //What went into a step: the step before's traversers, or the traversal's start for the first.
+    private DebugStepResult DebugInput(int index)
+    {
+        if (index <= 0 || index > debugSteps.Count)
+            return null;
+
+        return debugSteps[index - 1];
     }
 
     //Step-cursor navigation over the tree: Step Back / Step Over move among navigable siblings at the
@@ -220,7 +246,7 @@ public partial class Home
         if (top >= 0)
         {
             debugStepIndex = top;
-            await LoadDebugSampleAsync(top);
+            await LoadDebugSummaryAsync(top);
         }
     }
 
@@ -319,7 +345,9 @@ public partial class Home
             return null;
 
         var step = debugTree[debugCursor];
-        return JsonSerializer.Serialize(new[] { step.Start, step.End });
+        var lead = DebugSummary.Lead(queryText);
+
+        return JsonSerializer.Serialize(new[] { step.Start + lead, step.End + lead });
     }
 
     //A breadcrumb of the cursor's position inside sub-traversals (e.g. "where › out('composes')"), or null
@@ -616,9 +644,7 @@ public partial class Home
             var r = await db.ExecuteAsync(debugger.ProfileQuery(queryText ?? ""), ct);
 
             if (r.IsError)
-            {
                 debugProfileError = r.Error;
-            }
             else
             {
                 var (total, rows) = debugger.ParseProfile(r);
@@ -660,11 +686,11 @@ public partial class Home
         }
     }
 
-    //Character ranges of the debuggable steps, for the editor to highlight and make clickable.
+    //Character ranges of the debuggable steps, for the editor to highlight and make clickable, each with its count, which
+    //the editor draws after the step: where the traversal grows, thins or loses everything shows in the query itself.
     private string DebugStepRangesJson()
     {
-        var ranges = debugSteps.Select(d => new[] { d.Step.Start, d.Step.End }).ToList();
-        return JsonSerializer.Serialize(ranges);
+        return DebugSummary.RangesJson(debugSteps, DebugSummary.Lead(queryText));
     }
 
     private static long? ReadCountResult(JsonElement data)

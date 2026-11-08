@@ -36,18 +36,6 @@ public static class SampleDocument
 }
 
 ///<summary>
-///A fact that needs <see cref="SampleDocument"/>, and is skipped when it is not there.
-///</summary>
-public sealed class SampleDocumentFactAttribute : FactAttribute
-{
-    public SampleDocumentFactAttribute()
-    {
-        if (!SampleDocument.Exists)
-            Skip = $"Needs Assets/{SampleDocument.FileName}, which this checkout does not carry.";
-    }
-}
-
-///<summary>
 ///A fact that spends real money: it calls a live model with a real key. Skipped unless someone asks for
 ///it by name, because a suite that quietly bills an API every time it runs is a suite people stop running.
 ///

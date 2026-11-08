@@ -6,74 +6,111 @@
    knowledge-graph generator next) so a model configured once is offered everywhere. Owns the CRUD via
    LlmConnectionStore; the parent only learns which connection is picked, through SelectedChanged. *@
 
-@if (!PickOnly)
+@* Picking and editing are separated on purpose: somewhere that only needs to choose a model shows a
+   dropdown and nothing else, so the panel around it stays about the thing it is for. *@
+@if (PickOnly)
 {
-    <label class="form-label mb-1">AI model</label>
-}
-
-<div class="@(PickOnly ? "" : "input-group mb-2")" style="@(PickOnly ? "" : "max-width: 380px;")">
-    <select class="form-select @(PickOnly ? "form-select-sm" : "")"
-            style="@(PickOnly ? "max-width: 260px;" : "")"
+    <select class="form-select form-select-sm"
+            style="max-width: 260px;"
             value="@selectedKey"
             @onchange="OnSelectionChangedAsync"
             title="Which saved AI model answers. Models are added and edited under Settings → AI settings.">
         @if (connections.Count == 0)
         {
-            <option value="">@(PickOnly ? "-- No model: add one in Settings --" : "-- No models yet: add one --")</option>
+            <option value="">-- No model: add one in Settings --</option>
         }
         @foreach (var kv in connections)
         {
             <option value="@kv.Key">@kv.Key (@kv.Value.ProviderType)</option>
         }
     </select>
-
-    @* Picking and editing are separated on purpose: somewhere that only needs to choose a model shows a
-       dropdown and nothing else, so the panel around it stays about the thing it is for. *@
-    @if (!PickOnly)
-    {
-        <button class="btn btn-success" style="border-top-color: var(--bs-border-color); border-bottom-color: var(--bs-border-color); border-left: 0; border-right: 0;" @onclick="StartAdd" title="Add an AI model">+</button>
-        <button class="btn btn-danger" style="border-top-color: var(--bs-border-color); border-bottom-color: var(--bs-border-color); border-left: 0; border-right-color: var(--bs-border-color);" @onclick="DeleteAsync" disabled="@(Selected == null)" title="Delete selected model">&minus;</button>
-    }
-</div>
+}
+else
+{
+    @* The chosen model's name heads the picker and is renamed there (2026-11-04, the user), as a connection's is: the
+       form under it is only the model's settings. *@
+    <div class="mb-2">
+        <SavedPicker @ref="picker"
+                     TestId="llm-picker"
+                     Items="PickerItems"
+                     SelectedKey="@(isEditing ? selectedKey : null)"
+                     Noun="model"
+                     UnsavedName="@formName"
+                     NamePlaceholder="e.g. Claude Opus"
+                     AddTitle="Add an AI model"
+                     Error="@nameError"
+                     OnPick="PickAsync"
+                     OnRename="RenameAsync"
+                     OnDuplicate="DuplicateAsync"
+                     OnDelete="DeleteAsync"
+                     OnAdd="StartAdd">
+        @* Joined to the picker it saves to, as a connection's is (2026-11-05, the user): orange while there is something
+           to save. Picking the model again in the list puts back what is saved, in place of Cancel. *@
+        <HeadEnd>
+            <button class="btn btn-sm text-nowrap @(HasModelToSave ? "gdbv-btn-unsaved" : "btn-primary")" @onclick="SaveFormAsync" title="@(HasModelToSave ? "These settings have changes that are not saved. Save them to the model named in the picker" : "Save these settings to the model named in the picker")" data-testid="llm-form-save"><i class="bi bi-floppy me-1" aria-hidden="true"></i>Save</button>
+        </HeadEnd>
+    </SavedPicker>
+    </div>
+}
 
 @if (showForm)
 {
-    <div class="card border-secondary p-3 mb-3">
-        <div class="mb-2">
-            <label class="form-label">Name <span class="text-danger">*</span></label>
-            <input class="form-control @(formError != null ? "is-invalid" : "")" placeholder="e.g. Claude Opus" @bind="formName" />
-            @if (formError != null)
-            {
-                <div class="invalid-feedback">@formError</div>
-            }
-        </div>
+    <div class="card p-3 mb-3" data-testid="llm-form">
+        @if (formError != null)
+        {
+            <div class="gdbv-text-sm text-danger mb-2 invalid-feedback d-block" data-testid="llm-form-error">@formError</div>
+        }
 
         <div class="mb-2">
             <label class="form-label d-block">Provider</label>
             <div class="btn-group btn-group-sm" role="group" aria-label="Provider">
-                <button type="button" class="btn @(form.ProviderType == "Anthropic" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "Anthropic"'>Anthropic</button>
-                <button type="button" class="btn @(form.ProviderType == "OpenAI" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "OpenAI"'>OpenAI</button>
-                <button type="button" class="btn @(form.ProviderType == "Gemini" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "Gemini"'>Gemini</button>
-                <button type="button" class="btn @(form.ProviderType == "Custom" ? "btn-primary" : "btn-outline-primary")" @onclick='() => form.ProviderType = "Custom"'>Other</button>
+                <button type="button" class="btn @(form.ProviderType == "Anthropic" ? "btn-primary" : "btn-outline-primary")" @onclick='() => ChooseProvider("Anthropic")'>Anthropic</button>
+                <button type="button" class="btn @(form.ProviderType == "OpenAI" ? "btn-primary" : "btn-outline-primary")" @onclick='() => ChooseProvider("OpenAI")'>OpenAI</button>
+                <button type="button" class="btn @(form.ProviderType == "Gemini" ? "btn-primary" : "btn-outline-primary")" @onclick='() => ChooseProvider("Gemini")'>Gemini</button>
+                <button type="button" class="btn @(form.ProviderType == "Custom" ? "btn-primary" : "btn-outline-primary")" @onclick='() => ChooseProvider("Custom")'>Other</button>
             </div>
-            <div class="form-text" style="font-size: 0.75em;">Gemini = Google's free-tier models: get a key from Google AI Studio (aistudio.google.com). Other = any OpenAI-compatible server (Ollama, LM Studio, vLLM, Azure, self-hosted).</div>
+            <div class="gdbv-text-xs form-text">Gemini = Google's free-tier models: get a key from Google AI Studio (aistudio.google.com). Other = any OpenAI-compatible server (Ollama, LM Studio, vLLM, Azure, self-hosted).</div>
         </div>
 
         @if (form.ProviderType != "Anthropic")
         {
             <div class="mb-2">
-                <label class="form-label">Base URL @if (BaseUrlOptional){<text>(optional)</text>}else{<span class="text-danger">*</span>}</label>
-                <input class="form-control" placeholder="@BaseUrlPlaceholder" @bind="form.BaseUrl" />
+                <label class="form-label">
+                    Base URL
+                    @if (BaseUrlOptional)
+                    {
+                        <text>(optional)</text>
+                    }
+                    else
+                    {
+                        <span class="text-danger">*</span>
+                    }
+                </label>
+                <input class="form-control" placeholder="@BaseUrlPlaceholder" @bind="form.BaseUrl" @bind:after="KeepTheSavedKeyToItsTransport" />
             </div>
         }
 
         <div class="mb-2 row">
             <div class="col">
-                <label class="form-label">Model @if (ModelRequired){<span class="text-danger">*</span>}</label>
-                <input class="form-control" placeholder="@ModelPlaceholder" @bind="form.Model" />
+                <label class="form-label">
+                    Model
+                    @if (ModelRequired)
+                    {
+                        <span class="text-danger">*</span>
+                    }
+                </label>
+                @* Read as it is typed rather than when the box is left, as GDS Viewer's is: the note under the rates says what
+                   is known of the model typed, and written on leaving the box it would move Save from under a press on it. *@
+                <input class="form-control" placeholder="@ModelPlaceholder" @bind="form.Model" @bind:event="oninput" data-testid="llm-model" />
             </div>
             <div class="col">
-                <label class="form-label">API key @if (ApiKeyRequired){<span class="text-danger">*</span>}</label>
+                <label class="form-label">
+                    API key
+                    @if (ApiKeyRequired)
+                    {
+                        <span class="text-danger">*</span>
+                    }
+                </label>
                 <input class="form-control" type="password" @bind="form.ApiKey" />
             </div>
             @* Only Anthropic sends a cap — the OpenAI-compatible adapter leaves it to the
@@ -87,10 +124,53 @@
             }
         </div>
 
-        <div class="d-flex gap-2 mt-1">
-            <button class="btn btn-primary" @onclick="SaveFormAsync">@(isEditing ? "Save" : "Add")</button>
-            <button class="btn btn-outline-secondary" @onclick="CancelForm" title="Discard these edits and go back to what is saved">Cancel</button>
+        @* The model's own rates, in US dollars a million tokens (2026-11-02, GDS Viewer's): what Ask AI prices each answer
+           and its estimates at. A blank box takes the published rate, shown grayed in it where there is one; a model with
+           neither shows the tokens an answer took and no cost (AiPricing.For). *@
+        <div class="mb-2" data-testid="llm-prices" title="What a million tokens cost on this model, in US dollars: read, read back from the provider's cache, and written. Blank uses the published rate where there is one">
+            <label class="form-label">Price <span class="text-body-secondary gdbv-text-xs">$ per million tokens</span></label>
+
+            <div class="d-flex flex-wrap gap-2">
+                <div class="input-group input-group-sm" style="max-width: 10em;">
+                    <span class="input-group-text">in</span>
+                    <input class="form-control" type="number" min="0" step="any" placeholder="@PricePlaceholder(0)" @bind="form.InputPrice" data-testid="llm-price-input" aria-label="Input price" />
+                </div>
+
+                <div class="input-group input-group-sm" style="max-width: 10em;">
+                    <span class="input-group-text">cached</span>
+                    <input class="form-control" type="number" min="0" step="any" placeholder="@PricePlaceholder(1)" @bind="form.CachedPrice" data-testid="llm-price-cached" aria-label="Cached input price" />
+                </div>
+
+                <div class="input-group input-group-sm" style="max-width: 10em;">
+                    <span class="input-group-text">out</span>
+                    <input class="form-control" type="number" min="0" step="any" placeholder="@PricePlaceholder(2)" @bind="form.OutputPrice" data-testid="llm-price-output" aria-label="Output price" />
+                </div>
+            </div>
+
+            @if (priceError != null)
+            {
+                <div class="gdbv-text-xs text-danger" data-testid="llm-price-error">@priceError</div>
+            }
+
+            <div class="gdbv-text-xs form-text" data-testid="llm-price-note">@PriceNote()</div>
         </div>
+
+        @* A PDF read into words in the page before it is sent (2026-11-02, the user's): for a model that cannot read the file,
+           a server of one's own or Gemini, or to spend less. Off until ticked, as the file is what reads best where it can go. *@
+        <div class="form-check mb-2" title="Read a PDF's words out of it in this page, with PdfPig, and send those in place of the file. For a model that cannot read a PDF, or to spend less. A scan has no words to read, so it needs this off and a model that reads PDFs">
+            <input class="form-check-input" type="checkbox" id="llm-pdf-as-text" @bind="form.PdfAsText" data-testid="llm-pdf-as-text" />
+            <label class="form-check-label" for="llm-pdf-as-text">Send PDFs as their text</label>
+        </div>
+
+        @*The key saved with a model goes only to an address as encrypted as the one it was saved for (the user's rule
+          of 2026-10-03): an http base URL takes it out of the form until it is typed again.*@
+        @if (savedKey.Says(form.ApiKey))
+        {
+            <div class="gdbv-text-sm text-warning mb-2" data-testid="llm-key-held-back">
+                The key saved with this model was given for an encrypted address, so it is not sent or saved for this one,
+                which is not. Type it again to use it here, or give the address https and it comes back.
+            </div>
+        }
     </div>
 }
 
@@ -116,6 +196,64 @@
     private LlmConnection form = new();
     private string formError;
 
+    private SavedPicker picker;
+
+    ///<summary>
+    ///Whether Save has anything to do, which it shows in orange (2026-11-05, the user): the form differs from the model
+    ///chosen, or, with none chosen, a name was typed or the form differs from a blank one. Undoing a change takes it away.
+    ///</summary>
+    private bool HasModelToSave
+    {
+        get
+        {
+            if (isEditing)
+            {
+                var saved = Selected;
+
+                return saved != null && !form.SameSettings(saved);
+            }
+
+            return !string.IsNullOrWhiteSpace(formName) || !form.SameSettings(new LlmConnection());
+        }
+    }
+
+    ///<summary>Why the name in the picker's head was not taken, under it until the next name or Save.</summary>
+    private string nameError;
+
+    ///<summary>The saved models as the picker lists them, by name.</summary>
+    private IReadOnlyList<SavedPickerItem> PickerItems
+    {
+        get
+        {
+            var items = new List<SavedPickerItem>();
+
+            foreach (var key in connections.Keys)
+                items.Add(new SavedPickerItem(key, key));
+
+            return items;
+        }
+    }
+
+    ///<summary>
+    ///The key the model in the form was saved with, held back while the form's address is not encrypted
+    ///(<see cref="SavedSecretRule"/>): an http base URL on a model saved at an https one takes it out of the form, so
+    ///Save neither sends nor keeps it unless it is typed again.
+    ///</summary>
+    private readonly SavedSecretRule savedKey = new();
+
+    private void KeepTheSavedKeyToItsTransport()
+    {
+        form.ApiKey = savedKey.Keep(form.ApiKey, LlmConnection.Encrypts(form));
+    }
+
+    ///<summary>Another provider is another address, and may be one without TLS.</summary>
+    private void ChooseProvider(string providerType)
+    {
+        form.ProviderType = providerType;
+
+        KeepTheSavedKeyToItsTransport();
+    }
+
     private LlmConnection Selected
     {
         get
@@ -137,15 +275,46 @@
             //example of what to type.
             if (form.ProviderType == "Anthropic")
                 return $"{AnthropicProvider.DefaultModel} (default)";
-
-            if (form.ProviderType == "OpenAI")
+            else if (form.ProviderType == "OpenAI")
                 return "gpt-4o-mini";
-
-            if (form.ProviderType == "Gemini")
+            else if (form.ProviderType == "Gemini")
                 return "gemini-2.5-flash";
 
             return "model name";
         }
+    }
+
+    ///<summary>Why the rates typed were not saved, under them until the next Save.</summary>
+    private string priceError;
+
+    ///<summary>The published rate a blank price box stands for, input, cached or output, or nothing where none is known.</summary>
+    private string PricePlaceholder(int which)
+    {
+        if (AiPricing.PublishedFor(AiPricing.ModelOf(form), form.ProviderType, DateTime.UtcNow) is not LlmPrice published)
+            return "";
+
+        var rate = published.Output;
+
+        if (which == 0)
+            rate = published.Input;
+        else if (which == 1)
+            rate = published.Cached;
+
+        return rate.ToString("0.00##", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    ///<summary>Under the rates: where a blank box's rate comes from, or that there is none.</summary>
+    private string PriceNote()
+    {
+        var model = AiPricing.ModelOf(form);
+
+        if (model.Length == 0)
+            return "";
+
+        if (AiPricing.PublishedFor(model, form.ProviderType, DateTime.UtcNow) != null)
+            return $"Grayed: {model}'s published rates, read {AiPricing.ReadOn}. Leave a box blank to use them.";
+
+        return $"No published rate is known here for {model}. Without one, the AI window shows the tokens an answer took and no cost.";
     }
 
     //Gemini and OpenAI have a sensible default endpoint, so the Base URL is optional; a custom server needs one.
@@ -166,8 +335,7 @@
         {
             if (form.ProviderType == "Gemini")
                 return OpenAiProvider.GeminiBaseUrl;
-
-            if (form.ProviderType == "Custom")
+            else if (form.ProviderType == "Custom")
                 return "http://localhost:11434/v1";
 
             return OpenAiProvider.DefaultBaseUrl;
@@ -222,9 +390,6 @@
     {
         selectedKey = e.Value?.ToString();
 
-        //The form shows whatever is selected, so picking a different model is what used to be Edit.
-        ShowSelectedInForm();
-
         await NotifySelectedAsync();
     }
 
@@ -238,59 +403,157 @@
     {
         var selected = Selected;
 
+        //With none saved, the panel is the form for the first one.
         if (selected == null)
         {
-            showForm = false;
+            StartAdd();
 
             return;
         }
 
         isEditing = true;
         form = new LlmConnection(selected);
+        savedKey.Remember(selected.ApiKey, LlmConnection.Encrypts(selected));
         formName = selected.Name;
         originalName = selected.Name;
         formError = null;
+        nameError = null;
+        priceError = null;
         showForm = true;
     }
 
+    ///<summary>New: a blank form, and its name typed in the picker's head.</summary>
     private void StartAdd()
     {
         isEditing = false;
         form = new LlmConnection();
+        savedKey.Remember(null, false);
         formName = string.Empty;
         originalName = null;
         formError = null;
+        nameError = null;
+        priceError = null;
         showForm = true;
     }
 
-    private void StartEdit()
+    private async Task PickAsync(string key)
     {
-        if (Selected == null)
+        selectedKey = key;
+
+        ShowSelectedInForm();
+
+        await NotifySelectedAsync();
+    }
+
+    ///<summary>
+    ///A name typed in the picker's head, answered with why it was refused or null. The picker asks through a plain
+    ///delegate, to hear the answer, and that redraws nothing here, so this does.
+    ///</summary>
+    private async Task<string> RenameAsync(string key, string name)
+    {
+        var refused = await RenameModelAsync(key, name);
+
+        StateHasChanged();
+
+        return refused;
+    }
+
+    ///<summary>
+    ///For the model being added the name is only its name until Add; a saved one is renamed at once, where it is in the
+    ///list, keeping any edits in the form below.
+    ///</summary>
+    private async Task<string> RenameModelAsync(string key, string name)
+    {
+        nameError = null;
+
+        if (key == null)
+        {
+            formName = name;
+            return null;
+        }
+
+        if (connections.ContainsKey(name))
+        {
+            nameError = "A model with that name already exists.";
+            return nameError;
+        }
+
+        connections = SavedPickerItem.Renamed(connections, key, name);
+        connections[name].Name = name;
+
+        if (selectedKey == key)
+            selectedKey = name;
+
+        //Only the form of the model renamed: one being added keeps the name typed for it.
+        if (isEditing && originalName == key)
+        {
+            formName = name;
+            originalName = name;
+            form.Name = name;
+        }
+
+        await Store.SaveAsync(connections);
+        await NotifySelectedAsync();
+
+        return null;
+    }
+
+    ///<summary>A copy of a saved model, right after it, and chosen: what to change for a second one like it.</summary>
+    private async Task DuplicateAsync(string key)
+    {
+        if (!connections.TryGetValue(key, out var original))
             return;
 
-        isEditing = true;
-        form = new LlmConnection(Selected);
-        formName = Selected.Name;
-        originalName = Selected.Name;
-        formError = null;
-        showForm = true;
+        var name = SavedPickerItem.CopyName(key, connections.Keys);
+        var copy = new LlmConnection(original) { Name = name };
+
+        connections = SavedPickerItem.InsertedAfter(connections, key, name, copy);
+        selectedKey = name;
+
+        ShowSelectedInForm();
+
+        await Store.SaveAsync(connections);
+        await NotifySelectedAsync();
     }
 
     private async Task SaveFormAsync()
     {
+        formError = null;
+        nameError = null;
+
         var name = formName?.Trim();
 
         if (string.IsNullOrEmpty(name))
         {
-            formError = "Name is required.";
+            nameError = "Name the model first.";
+            picker?.BeginRename();
+
             return;
         }
 
         if ((!isEditing || name != originalName) && connections.ContainsKey(name))
         {
-            formError = "A model with that name already exists.";
+            nameError = "A model with that name already exists.";
+            picker?.BeginRename();
+
             return;
         }
+
+        //A server of one's own has no address but this one, and is sent nothing without it (OpenAiProvider.NoAddress).
+        if (form.ProviderType == "Custom" && string.IsNullOrWhiteSpace(form.BaseUrl))
+        {
+            formError = "Base URL is required for a server of your own.";
+            return;
+        }
+
+        if (form.InputPrice < 0 || form.CachedPrice < 0 || form.OutputPrice < 0)
+        {
+            priceError = "A price is a number of dollars, zero or more.";
+            return;
+        }
+
+        //The last word before it is saved, for a change to the address that came some other way than its field.
+        KeepTheSavedKeyToItsTransport();
 
         if (isEditing && originalName != null && name != originalName)
             connections.Remove(originalName);
@@ -300,6 +563,7 @@
         selectedKey = name;
         showForm = false;
         formError = null;
+        priceError = null;
 
         await Store.SaveAsync(connections);
 
@@ -308,24 +572,18 @@
         await NotifySelectedAsync();
     }
 
-    private void CancelForm()
+    ///<summary>Deletes a saved model; when it was the chosen one, the first left is chosen, or the form for a new one.</summary>
+    private async Task DeleteAsync(string key)
     {
-        formError = null;
-
-        //Nothing to close any more — the form is always the selected model — so this puts back what is
-        //saved and throws away the edits on screen.
-        ShowSelectedInForm();
-    }
-
-    private async Task DeleteAsync()
-    {
-        if (Selected == null)
+        if (string.IsNullOrEmpty(key) || !connections.Remove(key))
             return;
 
-        connections.Remove(selectedKey);
-        selectedKey = connections.Keys.FirstOrDefault();
+        if (selectedKey == key)
+        {
+            selectedKey = connections.Keys.FirstOrDefault();
 
-        ShowSelectedInForm();
+            ShowSelectedInForm();
+        }
 
         await Store.SaveAsync(connections);
         await NotifySelectedAsync();

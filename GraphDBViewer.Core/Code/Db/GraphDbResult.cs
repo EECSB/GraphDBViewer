@@ -5,7 +5,7 @@ namespace GraphDBViewerWeb.Code;
 
 ///<summary>
 ///A tabular result: the rows an engine returns when it answers with records rather than a graph — a
-///SPARQL SELECT's bindings today, Cypher records later. <see cref="Boolean"/> carries a boolean-shaped
+///SPARQL SELECT's bindings, Cypher's records, AQL's and DQL's rows. <see cref="Boolean"/> carries a boolean-shaped
 ///answer instead (a SPARQL ASK), leaving <see cref="Vars"/> / <see cref="Rows"/> empty.
 ///</summary>
 public sealed class GraphDbTable

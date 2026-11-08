@@ -4,10 +4,10 @@ namespace GraphDBViewerWeb.Code;
 ///Abstraction over where the viewer persists its state — saved connections, open tabs, query
 ///history and preferences. Keeps the app decoupled from any particular storage mechanism.
 ///
-///The WebAssembly build stores everything in the browser's localStorage
-///(<see cref="LocalAppStorage"/>); a later build can drop in a server-backed implementation
-///(e.g. a REST API) by registering a different <see cref="IAppStorage"/> in <c>Program.cs</c> —
-///no calling code has to change.
+///The web-only build keeps everything in the browser's IndexedDB (<see cref="IndexedDbAppStorage"/>); Treeality's
+///client keeps it on the host for the signed-in account (<see cref="RemoteAppStorage"/>), mirrored to IndexedDB
+///through <see cref="FallbackAppStorage"/> so it works offline, and the embedded viewer keeps nothing
+///(<see cref="MemoryAppStorage"/>). Each <c>Program.cs</c> chooses; no calling code has to change.
 ///</summary>
 public interface IAppStorage
 {

@@ -3,120 +3,70 @@ using System.Text;
 namespace GraphDBViewerWeb.Code;
 
 ///<summary>
-///Builds the system prompt that turns source text into a strict-JSON knowledge graph. Mirrors
-///<see cref="NlQueryPrompt"/>: pure and static, and the schema grounding has three states —
-///populated (constrain to the listed labels), read-but-empty (say so) and unknown (drop the
-///constraint) — so an empty vocabulary never asserts a constraint over nothing. Must stay
-///database-free; the caller passes the vocabulary in.
+///What a model is told about drawing a knowledge graph from text. Mirrors <see cref="NlQueryPrompt"/>: pure and static, and the
+///labels have three states — the connected graph's own (use them where they fit), read but empty (say so) and unknown (invent
+///them) — so an empty vocabulary is never asserted as one to keep to. Must stay database-free; the caller passes the vocabulary.
+///
+///Until 2026-11-02 this built the one-shot prompt of a window of its own, with a request to send unreadable JSON again and a
+///second pass for what was missed. Generation is Ask AI's since, a tool in a conversation (<see cref="GraphProposalRunner"/>),
+///where a graph that cannot be read is refused and sent again, and /missed asks for what was left out.
 ///</summary>
 public static class KgPrompt
 {
     ///<summary>
-    ///The system prompt. Pass the connected schema's vocabulary to ground labels in it (schema-guided
-    ///mode), or null for freeform extraction. The caps quoted to the model are
-    ///<see cref="KgGraphParser.MaxNodes"/> / <see cref="KgGraphParser.MaxEdges"/> — the same constants
-    ///the parser enforces, so the ask and the enforcement can't drift apart.
+    ///About how much of a text one proposed graph covers, in characters: so a full-size graph for it fits the 8192-token answer
+    ///the connections ship with, the reasoning behind the node and edge caps too.
     ///</summary>
-    public static string BuildSystemPrompt(SchemaVocabulary schema)
+    public const int PartChars = 6000;
+
+    ///<summary>
+    ///What Ask AI's model is told about the graph tool (<see cref="GraphProposalRunner"/>, 2026-11-02): when to propose, the
+    ///extraction's rules, and what the person ticked of the knowledge-graph window's options, in that window's words: labels
+    ///from the connected graph's own, the source sentence, confidence, a long text in pieces, and a second look for what was
+    ///missed. Or, with the tool switched off in the picker, that it is. The caps quoted are the parser's own constants, so the
+    ///ask and the enforcement cannot drift apart.
+    ///</summary>
+    public static void AppendProposalRules(StringBuilder sb, SchemaVocabulary schema, IReadOnlyCollection<string> toolsOff, KgExtractionOptions options)
     {
-        return BuildSystemPrompt(schema, false, false);
-    }
+        var name = GraphProposalRunner.ProposeName;
 
-    ///<param name="includeProvenance">
-    ///Ask for the sentence each entity and relationship came from, stored as a
-    ///<see cref="KgGraphParser.SourceProperty"/> property. It grounds review in the text — the reviewer can
-    ///see *why* the model claimed something — at the cost of a longer answer.
-    ///</param>
-    ///<param name="includeConfidence">
-    ///Ask for a 0–1 confidence per relationship. The viewer draws anything below
-    ///<see cref="GraphDataConverter.LowConfidenceThreshold"/> in gray, so a guess looks like a guess.
-    ///</param>
-    public static string BuildSystemPrompt(SchemaVocabulary schema, bool includeProvenance, bool includeConfidence)
-    {
-        var sb = new StringBuilder();
+        if (toolsOff.Contains(name))
+        {
+            sb.AppendLine($"- {name} is switched off in this conversation: the user turned it off in the window's tool picker. When they ask for a graph of a text, say so, and that it can be switched back on there.");
 
-        sb.AppendLine("You extract a knowledge graph from the user's text.");
-        sb.AppendLine("Output a single JSON object of exactly this shape:");
-        sb.AppendLine(ShapeExample(includeProvenance, includeConfidence));
-        sb.AppendLine("Rules:");
-        sb.AppendLine("- Output ONLY the JSON. No explanation, no comments, no markdown code fences.");
-        sb.AppendLine("- Give every node a short lowercase id and a human-readable \"name\" property.");
-        sb.AppendLine("- Use canonical entity names: refer to each real-world entity by ONE name everywhere — resolve pronouns, abbreviations and variant spellings to it instead of emitting near-duplicate nodes.");
-        sb.AppendLine($"- Extract at most {KgGraphParser.MaxNodes} nodes and {KgGraphParser.MaxEdges} edges; prefer the most important entities and relationships.");
+            return;
+        }
 
-        if (includeProvenance)
-            sb.AppendLine($"- Give every node and every edge a \"{KgGraphParser.SourceProperty}\" field: the sentence from the text it came from, quoted verbatim and trimmed to one sentence.");
+        options ??= new KgExtractionOptions();
 
-        if (includeConfidence)
-            sb.AppendLine($"- Give every node and every edge a \"{KgGraphParser.ConfidenceProperty}\" field between 0 and 1: how certain the text is about that entity or relationship. State it plainly — 1 when the text says it outright, lower when you inferred it.");
+        sb.AppendLine($"- When the user asks for a graph of a text, what they typed, a file they sent or an article, extract it yourself and call {name} with it. They see it previewed and decide whether to use it; calling it changes nothing, and you never write a proposed graph to the database with a query.");
+        sb.AppendLine("- In a proposed graph, refer to each real-world entity by ONE canonical name, resolving pronouns, abbreviations and variant spellings to it; give every node a short lowercase id and a human-readable \"name\" property; and name relationships as camelCase verbs, such as worksAt.");
+        sb.AppendLine($"- Propose at most {KgGraphParser.MaxNodes} nodes and {KgGraphParser.MaxEdges} edges in one call; prefer the most important entities and relationships.");
 
-        //Three states, mirroring NlQueryPrompt: a populated vocabulary pins the labels; a read-but-empty
-        //graph says so; an unknown schema (freeform, or the schema was never read) just asks for
-        //consistent invented labels — never "use only what's listed" with nothing listed.
+        if (options.SplitLongText)
+            sb.AppendLine($"- A text longer than about {PartChars:N0} characters is proposed in pieces of about that size, one call per piece, with the same ids for entities already proposed so the pieces merge.");
+
+        //Three states, as the window's had them: a vocabulary to keep to, a graph read and found empty, and no grounding asked
+        //for, which invents, so an empty vocabulary is never asserted as one to keep to.
         bool hasVocabulary = schema != null
             && (schema.VertexLabels is { Count: > 0 }
                 || schema.EdgeLabels is { Count: > 0 }
                 || schema.PropertyKeys is { Count: > 0 });
 
-        if (hasVocabulary)
-        {
-            sb.AppendLine("- Use ONLY the vertex labels, edge labels and property keys listed below.");
-
-            if (schema.VertexLabels is { Count: > 0 })
-                sb.AppendLine($"\nVertex labels: {string.Join(", ", schema.VertexLabels)}");
-
-            if (schema.EdgeLabels is { Count: > 0 })
-                sb.AppendLine($"Edge labels: {string.Join(", ", schema.EdgeLabels)}");
-
-            if (schema.PropertyKeys is { Count: > 0 })
-                sb.AppendLine($"Property keys: {string.Join(", ", schema.PropertyKeys)}");
-        }
-        else if (schema != null)
-            sb.AppendLine("- The connected graph is empty — it has no labels or property keys to match. Invent concise, consistent labels from the text itself.");
+        if (options.GroundInSchema && hasVocabulary)
+            sb.AppendLine("- In a proposed graph, use ONLY the connected graph's vertex labels, edge labels and property keys, listed below.");
+        else if (options.GroundInSchema && schema != null)
+            sb.AppendLine("- The connected graph is empty: it has no labels or property keys to match. Invent a proposed graph's labels from the text itself, concise and consistent.");
         else
-            sb.AppendLine("- Invent concise, consistent labels from the text itself (e.g. Person, Company, worksAt).");
+            sb.AppendLine("- Invent a proposed graph's labels from the text itself, concise and consistent (Person, Company, worksAt).");
 
-        return sb.ToString().Trim();
-    }
+        if (options.SourceSentence)
+            sb.AppendLine($"- Give every node and every edge a \"{KgGraphParser.SourceSentenceProperty}\" field: the sentence from the text it came from, quoted verbatim and trimmed to one sentence.");
 
-    //The shape example grows only by what was asked for, so a model is never shown a field the run does
-    //not want — the surest way to stop it emitting one anyway.
-    private static string ShapeExample(bool includeProvenance, bool includeConfidence)
-    {
-        var node = @"{""id"":""acme"",""label"":""Company"",""properties"":{""name"":""Acme""}";
-        var edge = @"{""source"":""alice"",""target"":""acme"",""label"":""worksAt"",""properties"":{}";
+        if (options.Confidence)
+            sb.AppendLine($"- Give every node and every edge a \"{KgGraphParser.ConfidenceProperty}\" field between 0 and 1: how certain the text is about that entity or relationship. State it plainly: 1 when the text says it outright, lower when you inferred it.");
 
-        if (includeProvenance)
-        {
-            node += $@",""{KgGraphParser.SourceProperty}"":""Alice works at Acme.""";
-            edge += $@",""{KgGraphParser.SourceProperty}"":""Alice works at Acme.""";
-        }
-
-        if (includeConfidence)
-        {
-            node += $@",""{KgGraphParser.ConfidenceProperty}"":0.8";
-            edge += $@",""{KgGraphParser.ConfidenceProperty}"":0.9";
-        }
-
-        return $@"{{""nodes"":[{node}}}],""edges"":[{edge}}}]}}";
-    }
-
-    ///<summary>
-    ///The follow-up that asks the model what it missed — the "gleaning" pass. Extraction in one shot
-    ///reliably leaves things behind, and simply asking again is the cheapest way to find them; the answer
-    ///is merged into the first, so only genuinely new entities and relationships survive.
-    ///</summary>
-    public static string BuildGleaningPrompt(string previousJson)
-    {
-        var sb = new StringBuilder();
-
-        sb.AppendLine("You already extracted this knowledge graph from the text:");
-        sb.AppendLine(previousJson);
-        sb.AppendLine();
-        sb.AppendLine("Now find what you MISSED. Output a JSON object of the same shape containing ONLY the entities and relationships that are not already above.");
-        sb.AppendLine("Use the same ids for entities that already exist, so the new relationships attach to them.");
-        sb.AppendLine("If nothing was missed, output {\"nodes\":[],\"edges\":[]}.");
-
-        return sb.ToString().Trim();
+        if (options.AskAgain)
+            sb.AppendLine($"- After each graph you propose, look at the text once more for what you missed, and call {name} again with only that, with the same ids for entities already proposed; when nothing was missed, say so instead.");
     }
 }

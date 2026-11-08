@@ -27,4 +27,15 @@ public sealed class PageRegistry : IPageRegistry
 
         _plugins.Add(plugin);
     }
+
+    ///<summary>
+    ///Takes back every plugin registered after the first <paramref name="count"/>: what a module refused at load
+    ///registered (DotNetAssemblyLoader.RegisterVerified). The loader's alone, so not on the interface a module is handed,
+    ///where one plugin could take back another.
+    ///</summary>
+    internal void TakeBackTo(int count)
+    {
+        if (count < _plugins.Count)
+            _plugins.RemoveRange(count, _plugins.Count - count);
+    }
 }

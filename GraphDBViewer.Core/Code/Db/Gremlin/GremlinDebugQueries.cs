@@ -78,13 +78,14 @@ public static class GremlinDebugQueries
             .ToList();
     }
 
-    ///<summary>Formats an element id for hasId(): numeric ids bare (e.g. 964), everything else single-quoted.</summary>
+    ///<summary>
+    ///Formats an element id for hasId(): numeric ids bare (e.g. 964), everything else single-quoted. The rule every
+    ///query writes an id by (<see cref="GremlinQueryBuilder.FormatId(string)"/>), so 007 is the string it was given
+    ///rather than the octal 7.
+    ///</summary>
     public static string FormatDebugId(string id)
     {
-        if (long.TryParse(id, out _))
-            return id;
-
-        return "'" + (id ?? "").Replace("\\", "\\\\").Replace("'", "\\'") + "'";
+        return GremlinQueryBuilder.FormatId(id);
     }
 
     ///<summary>

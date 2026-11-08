@@ -108,8 +108,7 @@ public static class DqlMutationParser
 
             yield break;
         }
-
-        if (value.ValueKind == JsonValueKind.Object)
+        else if (value.ValueKind == JsonValueKind.Object)
             yield return value;
     }
 
@@ -135,8 +134,7 @@ public static class DqlMutationParser
         {
             if (property.Name == DgraphConverter.UidField)
                 continue;
-
-            if (property.Name == DgraphConverter.TypeField)
+            else if (property.Name == DgraphConverter.TypeField)
                 continue;
 
             var targets = Targets(property.Value);
@@ -299,8 +297,7 @@ public static class DqlMutationParser
     {
         if (value.ValueKind == JsonValueKind.String)
             return value.GetString();
-
-        if (value.ValueKind == JsonValueKind.Number || value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False)
+        else if (value.ValueKind == JsonValueKind.Number || value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False)
             return value.ToString();
 
         return null;

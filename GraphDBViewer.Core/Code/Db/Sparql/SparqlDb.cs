@@ -40,8 +40,7 @@ public class SparqlDb : IGraphDb
 
         if (result.Kind == SparqlKind.Graph)
             return GraphDbResult.Success(result.GraphData, result.RawJson);
-
-        if (result.Kind == SparqlKind.Ask)
+        else if (result.Kind == SparqlKind.Ask)
             return GraphDbResult.Tabular(new GraphDbTable { Boolean = result.Boolean }, result.RawJson);
 
         return GraphDbResult.Tabular(new GraphDbTable { Vars = result.Vars, Rows = result.Rows }, result.RawJson);
@@ -58,18 +57,17 @@ public class SparqlDb : IGraphDb
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
             request.Content = new FormUrlEncodedContent(new[] { new System.Collections.Generic.KeyValuePair<string, string>("query", query ?? "") });
 
-            //CONSTRUCT/DESCRIBE return RDF (ask for RDF/JSON so it renders as a graph); SELECT/ASK return a bindings table.
-            //JSON-LD is weighted below RDF/JSON, not beside it: offered both at once, Fuseki answers JSON-LD, which
-            //SparqlConverter does not read, and every CONSTRUCT drew nothing until the live database check saw it.
+            //CONSTRUCT/DESCRIBE return RDF, drawn as a graph from RDF/JSON or from JSON-LD; SELECT/ASK return a bindings
+            //table. JSON-LD is weighted below RDF/JSON, and not only because offered both at once Fuseki answers JSON-LD:
+            //RDF/JSON states every triple outright, where JSON-LD means nothing without its context, and a context an
+            //answer names by URL is not fetched. An endpoint with no RDF/JSON (Oxigraph) answers JSON-LD all the same.
             if (IsGraphQuery(query))
             {
                 request.Headers.Accept.ParseAdd("application/rdf+json");
                 request.Headers.Accept.ParseAdd("application/ld+json;q=0.9");
             }
             else
-            {
                 request.Headers.Accept.ParseAdd("application/sparql-results+json");
-            }
 
             if (!string.IsNullOrEmpty(_connection.Username) || !string.IsNullOrEmpty(_connection.AuthKey))
             {
@@ -83,7 +81,7 @@ public class SparqlDb : IGraphDb
             if (!response.IsSuccessStatusCode)
                 return new SparqlResult { IsError = true, Error = $"HTTP {(int)response.StatusCode}: {GraphWireText.Truncate(body)}", RawJson = body };
 
-            return SparqlConverter.Parse(body);
+            return SparqlConverter.Parse(body, response.Content.Headers.ContentType?.MediaType);
         }
         catch (System.OperationCanceledException)
         {

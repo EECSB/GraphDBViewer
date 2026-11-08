@@ -15,6 +15,13 @@ public class QueryTab
     public string GeneratedQueryText { get; set; }
     public int QueryEditorTab { get; set; } = 1;
     public string QueryResults { get; set; }
+
+    //The run under way in this tab, which a Stop cancels: a run writes its answer into the tab it started in, wherever
+    //the person has gone meanwhile (the multiple-connections spec, story 4). Null when nothing runs. Not kept.
+    public CancellationTokenSource QueryCts { get; set; }
+
+    //The last row or boolean answer (a graph answer flows through LastResultData instead). Not kept.
+    public GraphDbTable TableResult { get; set; }
     public string QueryError { get; set; }//error message from the last run, shown as a red bar over the stats
     public bool JsonCopied { get; set; }
     public int VisualizationMode { get; set; } = 2;
@@ -78,6 +85,9 @@ public class QueryTab
     //3D node draw distance as a 0–100 percentage: 100 (the default) shows every node, lower hides nodes
     //(and the edges touching them) farther from the camera so a dense graph declutters as you zoom out.
     public int Draw3dNodeDistance { get; set; } = 100;
+    //Node size on map: how large nodes are drawn on the Map and the Globe, as a percentage of the size they keep at every
+    //zoom. 100 (the default) is the plain view's size; the slider takes the place of the node distance there.
+    public int MapNodeSize { get; set; } = 100;
     public string G3dExportFormat { get; set; } = "obj";
     public string ImageExportFormat { get; set; } = "png";
     public string TableExportFormat { get; set; } = "csv";
@@ -87,4 +97,6 @@ public class QueryTab
     public int EdgeColorMode { get; set; }
     //Per-edge-label custom colors (edge label → hex), used when EdgeColorMode is custom.
     public Dictionary<string, string> EdgeColors { get; set; } = new();
+    //The edge labels Styling draws as cards (Detailed view on edges, 2026-11-07).
+    public List<string> EdgeDetails { get; set; } = new();
 }

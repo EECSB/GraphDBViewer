@@ -16,7 +16,32 @@ public class LlmConnectionStore
     public LlmConnectionStore(IAppStorage storage)
     {
         _storage = storage;
+        Speech = new SpeechPreference(storage);
+        Rounds = new ToolRoundsPreference(storage);
     }
+
+    private readonly Dictionary<string, ChatStore> _chats = new(StringComparer.Ordinal);
+
+    ///<summary>How Ask AI's microphone writes speech out, chosen beside the models in AI settings: one for the page, as this store is.</summary>
+    public SpeechPreference Speech { get; }
+
+    ///<summary>
+    ///The chats a window keeps, where the models are, by the window's name (<see cref="ChatStore.AskAi"/> for Ask AI): each
+    ///window's its own, and one store per name for the page, so a chat kept is heard by the list showing it.
+    ///</summary>
+    public ChatStore ChatsFor(string window)
+    {
+        if (!_chats.TryGetValue(window, out var store))
+        {
+            store = new ChatStore(_storage, window);
+            _chats[window] = store;
+        }
+
+        return store;
+    }
+
+    ///<summary>How many rounds of tool calls Ask AI makes before it pauses to ask, set in AI settings beside the models.</summary>
+    public ToolRoundsPreference Rounds { get; }
 
     ///<summary>The saved connections by name. Never null — no models yet reads as an empty dictionary.</summary>
     public async Task<Dictionary<string, LlmConnection>> LoadAsync()

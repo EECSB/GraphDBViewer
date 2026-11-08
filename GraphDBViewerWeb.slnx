@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="GraphDBViewerWeb.Server/GraphDBViewerWeb.Server.csproj" />
   <Project Path="GraphDBViewer.Core/GraphDBViewer.Core.csproj" />
+  <Project Path="GraphDBViewer.Mcp/GraphDBViewer.Mcp.csproj" />
   <Project Path="GraphDBViewerWeb.Tests/GraphDBViewerWeb.Tests.csproj" />
   <Project Path="GraphDBViewerWeb/GraphDBViewerWeb.csproj" />
 </Solution>

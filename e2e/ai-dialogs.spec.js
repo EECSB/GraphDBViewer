@@ -2,6 +2,10 @@
 //the markup alone, so they are asserted against a real browser: nothing behind them is dimmed or
 //blocked, the title bar drags them, the corner grip resizes them, and closing one hides it rather than
 //destroying it, so a half-written prompt is still there when it is opened again.
+//
+//Shown on Ask AI since 2026-11-02: knowledge-graph generation's button moved into the Import/Export dialog on
+//2026-10-29, a Bootstrap modal of its own, so its window now opens over a dimmed page by design. Ask AI's button is
+//still in the query toolbar.
 const { test, expect } = require('@playwright/test');
 const { gotoApp } = require('./helpers');
 
@@ -16,14 +20,15 @@ async function box(page) {
 
 test('an AI popup is a window: undimmed, draggable, resizable, and it keeps what you typed', async ({ page }) => {
     await gotoApp(page);
+    await page.getByRole('button', { name: /Offline mode/ }).click();
 
-    await page.getByRole('button', { name: /Generate with AI/ }).click();
+    await page.getByRole('button', { name: /^✨ AI$/ }).click();
     await expect(page.locator(panel)).toBeVisible();
 
     //Nothing behind it is dimmed, and nothing behind it is blocked: the button that opened it is still
     //there to be pressed. A Bootstrap modal would have covered the page with a backdrop.
     expect(await page.evaluate(() => document.querySelectorAll('.modal-backdrop, .modal.show').length)).toBe(0);
-    await expect(page.getByRole('button', { name: /Generate with AI/ })).toBeEnabled();
+    await expect(page.getByRole('button', { name: /^✨ AI$/ })).toBeEnabled();
 
     //Resizing is our own grip, not the browser's: drag it and the window follows, which is the whole
     //reason for drawing one — the native resizer is a few pixels with a hit area to match.
@@ -56,15 +61,15 @@ test('an AI popup is a window: undimmed, draggable, resizable, and it keeps what
     expect(moved.left - resized.left).toBeGreaterThan(60);
     expect(moved.top - resized.top).toBeGreaterThan(50);
 
-    await page.locator(panel + ' textarea').first().fill('find every product made of metal');
-    await page.locator(panel + ' .btn-close').click();
+    await page.locator(panel + ' [data-testid="ai-prompt"]').fill('find every product made of metal');
+    await page.locator(panel + ' .gdbv-dialog-header .btn-close').click();
     await expect(page.locator(panel)).toHaveCount(0);
 
-    await page.getByRole('button', { name: /Generate with AI/ }).click();
+    await page.getByRole('button', { name: /^✨ AI$/ }).click();
     await expect(page.locator(panel)).toBeVisible();
 
     //Hidden, not unmounted: the text is still there because the component never lost its state.
-    expect(await page.locator(panel + ' textarea').first().inputValue()).toBe('find every product made of metal');
+    expect(await page.locator(panel + ' [data-testid="ai-prompt"]').inputValue()).toBe('find every product made of metal');
 
     const reopened = await box(page);
     expect(Math.abs(reopened.left - moved.left)).toBeLessThan(4);
@@ -72,8 +77,9 @@ test('an AI popup is a window: undimmed, draggable, resizable, and it keeps what
     expect(reopened.w).toBe(640);
 
     //Geometry is stored rather than merely held, so it outlives the page.
+    //The page comes back in the offline session it was left in, so Ask AI is there without pressing Offline mode.
     await page.reload();
-    await page.getByRole('button', { name: /Generate with AI/ }).click();
+    await page.getByRole('button', { name: /^✨ AI$/ }).click();
     await expect(page.locator(panel)).toBeVisible();
 
     const afterReload = await box(page);
@@ -90,7 +96,7 @@ test('a closed window reopens at the size it was, not at the minimum', async ({ 
     await page.getByRole('button', { name: /Offline mode/ }).click();
 
     const open = async () => {
-        await page.getByRole('button', { name: /Ask AI/ }).click();
+        await page.getByRole('button', { name: /^✨ AI$/ }).click();
         await expect(page.locator(panel)).toBeVisible();
 
         const b = await page.locator(panel).boundingBox();
@@ -100,7 +106,7 @@ test('a closed window reopens at the size it was, not at the minimum', async ({ 
 
     const first = await open();
 
-    await page.locator(panel + ' .btn-close').click();
+    await page.locator(panel + ' .gdbv-dialog-header .btn-close').click();
     await expect(page.locator(panel)).toHaveCount(0);
     await page.waitForTimeout(600);//the geometry save is debounced by 250ms
 

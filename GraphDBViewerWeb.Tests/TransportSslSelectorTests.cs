@@ -101,6 +101,17 @@ public class TransportSslSelectorTests : BunitContext
         Assert.DoesNotContain(ServerHint, markup);
     }
 
+    //A public page may not reach a database on this computer or the local network without the browser's
+    //permission, and a browser that cannot ask refuses with nothing but a failed socket: eecs.blog to a
+    //JanusGraph on this machine, 2026-09-13, which connected from Chrome and never from an embedded browser.
+    [Fact]
+    public void Hint_BrowserDirect_SaysAPublicPageMayNeedPermissionForALocalDatabase()
+    {
+        var markup = RenderFor(new GremlinDB.GremlinConnection { ViaServer = false }).Markup;
+
+        Assert.Contains("your local network", markup);
+    }
+
     [Fact]
     public void EndpointDatabase_HidesTransportAndAddressButKeepsTheRouteChoice()
     {

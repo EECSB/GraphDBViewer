@@ -93,9 +93,7 @@ RETURN c.name";
                 edgeCollections.Add(collection.Name);
             }
             else
-            {
                 vertexCounts[collection.Name] = collection.Count;
-            }
 
             keys[collection.Name] = collection.Keys;
         }

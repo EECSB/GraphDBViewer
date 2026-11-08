@@ -3,7 +3,7 @@
 //nothing. Loaded offline (DOT import) with staged edits previewed on the canvas, so a delete shows
 //without a database.
 const { test, expect } = require('@playwright/test');
-const { gotoApp, loadSampleGraph, cyPositions, waitForStableLayout } = require('./helpers');
+const { gotoApp, loadSampleGraph, expectCanvasHolds, waitForStableLayout } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
     await gotoApp(page);
@@ -37,8 +37,7 @@ test('Delete removes every selected node, not just the last-clicked one', async 
     //Both selected nodes (and their incident edges) are staged for deletion and — with preview on — leave
     //the canvas; the three unselected nodes stay. Before the fix, a box-select left .NET's single
     //selectedElement null, so Delete did nothing.
-    await expect.poll(async () => (await cyPositions(page)).map(p => p.id).sort())
-        .toEqual(['Acme', 'Carol', 'Globex']);
+    await expectCanvasHolds(page, ['Acme', 'Carol', 'Globex']);
 });
 
 test('Delete with a single selected node still deletes it', async ({ page }) => {
@@ -46,6 +45,5 @@ test('Delete with a single selected node still deletes it', async ({ page }) => 
 
     await page.keyboard.press('Delete');
 
-    await expect.poll(async () => (await cyPositions(page)).map(p => p.id).sort())
-        .toEqual(['Acme', 'Alice', 'Bob', 'Globex']);
+    await expectCanvasHolds(page, ['Acme', 'Alice', 'Bob', 'Globex']);
 });

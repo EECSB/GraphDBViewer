@@ -16,7 +16,7 @@ namespace GraphDBViewerWeb.Code;
 ///a plain-http endpoint on an https page, a host only the server can route to, or a protocol like Bolt
 ///that needs a raw TCP socket. The viewer never notices the difference; it sees an IGraphDb either way.
 ///</summary>
-public sealed class ServerProxyGraphDb : IGraphDb
+public sealed class ServerProxyGraphDb : IGraphDb, IReadOnlyCapableGraphDb
 {
     ///<summary>Relative on purpose — it resolves against the HttpClient's base address, which is the host.</summary>
     public const string ExecutePath = "api/graph/execute";
@@ -41,11 +41,26 @@ public sealed class ServerProxyGraphDb : IGraphDb
         _connection = connection;
     }
 
-    public async Task<GraphDbResult> ExecuteAsync(string query, CancellationToken cancellationToken = default)
+    public Task<GraphDbResult> ExecuteAsync(string query, CancellationToken cancellationToken = default)
+    {
+        return PostAsync(query, false, cancellationToken);
+    }
+
+    ///<summary>
+    ///Asks the host to run the query on the engine's own read-only path, where the driver it dials has one
+    ///(<see cref="IReadOnlyCapableGraphDb"/>): Ask AI's read tool. A host that predates the request ignores it
+    ///and runs the query as it always did, behind the guard alone.
+    ///</summary>
+    public Task<GraphDbResult> ExecuteReadOnlyAsync(string query, CancellationToken cancellationToken = default)
+    {
+        return PostAsync(query, true, cancellationToken);
+    }
+
+    private async Task<GraphDbResult> PostAsync(string query, bool readOnly, CancellationToken cancellationToken)
     {
         try
         {
-            var request = new GraphQueryRequest { Connection = _connection, Query = query };
+            var request = new GraphQueryRequest { Connection = _connection, Query = query, ReadOnly = readOnly };
             var response = await _http.PostAsJsonAsync(ExecutePath, request, cancellationToken);
 
             if (!response.IsSuccessStatusCode)

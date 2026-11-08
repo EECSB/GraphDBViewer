@@ -5,10 +5,10 @@ namespace GraphDBViewerWeb.Code;
 
 ///<summary>
 ///<see cref="IAppStorage"/> backed by the browser's localStorage (via Blazored.LocalStorage).
-///This is the only persistence layer in the WebAssembly build — everything is kept on the user's
-///machine, so state does not survive clearing site data and is not shared between devices.
+///The store the viewer had before IndexedDB (<see cref="IndexedDbAppStorage"/>, which migrates out of it once);
+///no build registers it today, and it stays should localStorage ever need swapping back in.
 ///</summary>
-public class LocalAppStorage : IAppStorage
+public class LocalAppStorage : IMirrorStorage
 {
     private readonly ILocalStorageService _localStorage;
     private readonly IJSRuntime _js;
@@ -64,6 +64,16 @@ public class LocalAppStorage : IAppStorage
     public async Task RemoveAsync(string key)
     {
         await _localStorage.RemoveItemAsync(key);
+    }
+
+    ///<summary>Every key the app wrote — the <c>graphdbviewer:</c> ones. Anything else in localStorage is not its.</summary>
+    public async Task ClearAsync()
+    {
+        var keys = new List<string>(await _localStorage.KeysAsync());
+
+        foreach (var key in keys)
+            if (key.StartsWith("graphdbviewer:", StringComparison.Ordinal))
+                await _localStorage.RemoveItemAsync(key);
     }
 
     //The setItem shim in index.html swallows a failed localStorage write — a full per-origin quota (a few

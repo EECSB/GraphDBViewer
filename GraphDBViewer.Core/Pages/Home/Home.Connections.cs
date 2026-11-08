@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using GraphDBViewerWeb.Code;
+using GraphDBViewerWeb.Components;
 using System.Net.Http.Json;
 
 namespace GraphDBViewerWeb.Pages;
@@ -47,7 +48,44 @@ public partial class Home
     //provider's own instance stands.
     private IGraphQueryBuilder Qb => schemaQueryBuilder ?? Provider.QueryBuilder;
 
-    private IGraphQueryBuilder schemaQueryBuilder;
+    private IGraphQueryBuilder schemaQueryBuilder { get => activeConnection.SchemaQueryBuilder; set => activeConnection.SchemaQueryBuilder = value; }
+
+    ///<summary>
+    ///The read the knowledge-graph modal matches generated entities with, or null when there is nothing to
+    ///ask: no connection, or an engine whose graph cannot be browsed at all. The modal does the asking, so
+    ///what it can ask stays one thing — the query its builder writes — rather than the connection itself.
+    ///</summary>
+    private Func<string, CancellationToken, Task<GraphDbResult>> KgDatabaseLookup
+    {
+        get
+        {
+            if (!isConnected || db == null || !Caps.BrowseGraph)
+                return null;
+
+            return (query, token) => db.ExecuteAsync(query, token);
+        }
+    }
+
+    ///<summary>
+    ///What writes a generated knowledge graph out. It is <see cref="Qb"/> for every engine that composes
+    ///queries on the user's behalf, and SPARQL Update for the one that does not: a SPARQL connection has
+    ///no builder, and until 2026-09-16 the modal fell back to Gremlin <c>addV</c> text that no endpoint of
+    ///its own could run. Only this modal gets it — a builder on the provider would claim the browse and
+    ///staged-edit capabilities that SPARQL genuinely lacks here.
+    ///</summary>
+    private IGraphQueryBuilder KgQueryBuilder
+    {
+        get
+        {
+            if (Qb != null)
+                return Qb;
+
+            if (connection.DatabaseType == GraphDbProviders.Sparql)
+                return SparqlInsertBuilder.Instance;
+
+            return null;
+        }
+    }
 
     //True when this database is addressed by an endpoint URL rather than host/port, which is the one
     //thing that still changes the shape of the connection form.
@@ -106,41 +144,76 @@ public partial class Home
     ///every ordinary connection, which is addressed by exactly those two; the instance's own graph is
     ///addressed by neither, because the browser is never given it.
     ///</summary>
-    private string ConnectionLabel
-    {
-        get
-        {
-            if (instanceGraph)
-                return "this instance's graph";
+    private string ConnectionLabel => LabelFor(activeConnection);
 
-            return null;
-        }
+    //The same for any of the viewer's connections, each tab in the row naming its own.
+    private static string LabelFor(ViewerConnection owner)
+    {
+        if (owner.InstanceGraph)
+            return "this instance's graph";
+
+        return null;
     }
     private int DisplayPort => Provider.DisplayPort(connection);
 
-    private GremlinDB.GremlinConnection connection = new("WebSocket", 443, true, string.Empty, string.Empty, string.Empty, string.Empty);
+    ///<summary>The database Ask AI's conversation is about, as the bar names it, or empty with none connected.</summary>
+    private string AiSubject
+    {
+        get
+        {
+            if (!isConnected)
+                return "";
+
+            return ConnectionLabel ?? $"{DisplayHost}:{DisplayPort}";
+        }
+    }
+
+    //These delegate to the connection in front (ViewerConnection), as the query workspace's fields delegate to the tab in
+    //front, so the rest of the page reads one connection.
+    private GremlinDB.GremlinConnection connection { get => activeConnection.Connection; set => activeConnection.Connection = value; }
 
     //The live database, whichever kind it is. Null until Connect succeeds.
-    private IGraphDb db;
-    private bool isConnected;
-    private bool isConnecting;
-    private CancellationTokenSource connectCts;
-    private string statusMessage;
-    private string statusClass;
+    private IGraphDb db { get => activeConnection.Db; set => activeConnection.Db = value; }
+    private bool isConnected { get => activeConnection.IsConnected; set => activeConnection.IsConnected = value; }
+    private bool isConnecting { get => activeConnection.IsConnecting; set => activeConnection.IsConnecting = value; }
+    private CancellationTokenSource connectCts { get => activeConnection.ConnectCts; set => activeConnection.ConnectCts = value; }
+    private string statusMessage { get => activeConnection.StatusMessage; set => activeConnection.StatusMessage = value; }
+    private string statusClass { get => activeConnection.StatusClass; set => activeConnection.StatusClass = value; }
 
     #endregion
 
     #region Saved connections
     private Dictionary<string, GremlinDB.GremlinConnection> savedConnections = new();
-    private string selectedConnectionKey;
+    private string selectedConnectionKey { get => activeConnection.SelectedConnectionKey; set => activeConnection.SelectedConnectionKey = value; }
     #endregion
 
     #region Add-connection form state
     //The name the fields below are saved under when the + button is clicked; the connection itself is the
     //active `connection`, so there's no separate form — the + just captures what's already entered.
-    private string connectionName;
-    private bool connectionNameError;
-    private string connectionNameErrorMessage;
+    private string connectionName { get => activeConnection.ConnectionName; set => activeConnection.ConnectionName = value; }
+    private bool connectionNameError { get => activeConnection.ConnectionNameError; set => activeConnection.ConnectionNameError = value; }
+    private string connectionNameErrorMessage { get => activeConnection.ConnectionNameErrorMessage; set => activeConnection.ConnectionNameErrorMessage = value; }
+    #endregion
+
+    #region A saved password, kept to the transport it was saved with
+
+    ///<summary>
+    ///The password the connection in the form was saved with, held back while the form's connection is not encrypted
+    ///(the user's rule of 2026-10-03; see <see cref="SavedSecretRule"/>): turning the SSL switch off, or giving a
+    ///SPARQL endpoint http, on a connection saved encrypted takes it out of the form, so neither Connect nor Save sends or
+    ///saves it unless it is typed again.
+    ///</summary>
+    private SavedSecretRule savedPassword => activeConnection.SavedPassword;
+
+    ///<summary>
+    ///Run after anything that decides whether the connection is encrypted: the SSL switch, the endpoint, the port
+    ///(Gremlin always dials 443 with TLS) and the engine.
+    ///</summary>
+    private void KeepTheSavedPasswordToItsTransport()
+    {
+        savedPassword.Keep(connection);
+    }
+
     #endregion
 
 
@@ -165,20 +238,194 @@ public partial class Home
     #endregion
 
 
-    #region Add / Delete
+    #region The saved-connections picker: pick, new, rename, duplicate, delete, save
 
-    //Saves the connection currently entered in the fields below to the saved-connections list under the
-    //name box's value — adding a new one, or overwriting the existing one when the name already matches
-    //(so selecting a connection, tweaking the fields and clicking + updates it). No separate form.
-    private async Task AddCurrentConnectionAsync()
+    private SavedPicker connectionPicker;
+
+    ///<summary>
+    ///What the picker lists: the instance's own graph first where it is offered — it is not one of the signed-in
+    ///person's, and the one entry here nobody renames, copies or deletes — then the saved connections, by name.
+    ///</summary>
+    private IReadOnlyList<SavedPickerItem> ConnectionPickerItems
+    {
+        get
+        {
+            var items = new List<SavedPickerItem>();
+
+            if (OffersInstanceGraph)
+                items.Add(new SavedPickerItem(InstanceGraphKey, "This instance's graph (read-only)", Fixed: true));
+
+            foreach (var key in savedConnections.Keys)
+                items.Add(new SavedPickerItem(key, key));
+
+            return items;
+        }
+    }
+
+    private void PickConnection(string key)
+    {
+        if (key == selectedConnectionKey)
+            return;
+
+        if (isConnected)
+            Disconnect("Disconnected due to connection change.");
+
+        connectionNameError = false;
+        SelectConnection(key);
+    }
+
+    ///<summary>New: the fields stay as they are, to start from, under no name until one is typed in the picker's head.</summary>
+    private void NewConnection()
+    {
+        if (isConnected)
+            Disconnect("Disconnected due to connection change.");
+
+        connectionNameError = false;
+        SelectConnection(null);
+    }
+
+    ///<summary>
+    ///A name typed in the picker's head, answered with why it was refused or null. The picker asks through a plain
+    ///delegate, to hear the answer, and that redraws nothing here, so this does.
+    ///</summary>
+    private async Task<string> RenameConnectionAsync(string key, string name)
+    {
+        var refused = await RenameSavedConnectionAsync(key, name);
+
+        StateHasChanged();
+
+        return refused;
+    }
+
+    ///<summary>
+    ///For the connection not saved yet the name is only its name until Save; a saved one is renamed where it is in the
+    ///list, and every open connection that was it follows.
+    ///</summary>
+    private async Task<string> RenameSavedConnectionAsync(string key, string name)
     {
         connectionNameError = false;
 
-        var name = connectionName?.Trim();
+        if (key == null)
+        {
+            connectionName = name;
+            return null;
+        }
+
+        if (name.Length == 0)
+            return null;
+
+        if (savedConnections.ContainsKey(name))
+            return RefuseConnectionName($"There is already a connection called \"{name}\".");
+
+        savedConnections = SavedPickerItem.Renamed(savedConnections, key, name);
+
+        foreach (var open in openConnections)
+        {
+            if (open.SelectedConnectionKey != key)
+                continue;
+
+            open.SelectedConnectionKey = name;
+            open.ConnectionName = name;
+        }
+
+        await PersistConnectionsAsync();
+
+        return null;
+    }
+
+    private string RefuseConnectionName(string why)
+    {
+        connectionNameError = true;
+        connectionNameErrorMessage = why;
+
+        return why;
+    }
+
+    ///<summary>A copy of a saved connection, right after it in the list, and chosen: what to change for a second one like it.</summary>
+    private async Task DuplicateConnectionAsync(string key)
+    {
+        if (!savedConnections.TryGetValue(key, out var original))
+            return;
+
+        var name = SavedPickerItem.CopyName(key, savedConnections.Keys);
+
+        savedConnections = SavedPickerItem.InsertedAfter(savedConnections, key, name, new GremlinDB.GremlinConnection(original));
+        await PersistConnectionsAsync();
+
+        PickConnection(name);
+    }
+
+    ///<summary>Deletes a saved connection; the one chosen leaves the fields as they are, under no name, and disconnects.</summary>
+    private async Task DeleteConnectionAsync(string key)
+    {
+        if (string.IsNullOrEmpty(key) || !savedConnections.ContainsKey(key))
+            return;
+
+        if (key == selectedConnectionKey)
+        {
+            if (isConnected)
+                Disconnect("Disconnected because the active connection was deleted.");
+
+            selectedConnectionKey = null;
+            connectionName = null;
+            activeConnection.UnsavedStart = new GremlinDB.GremlinConnection(connection);
+        }
+
+        savedConnections.Remove(key);
+
+        await PersistConnectionsAsync();
+    }
+
+    ///<summary>
+    ///Whether Save has anything to do, which it shows in orange (2026-11-05, the user): the fields differ from the connection
+    ///chosen, or, with none chosen, a name was typed or they have changed since the form stopped being a saved one. Undoing a
+    ///change by hand takes it away again.
+    ///</summary>
+    private bool HasConnectionToSave
+    {
+        get
+        {
+            if (selectedConnectionKey == null && !string.IsNullOrWhiteSpace(connectionName))
+                return true;
+
+            GremlinDB.GremlinConnection compareTo = activeConnection.UnsavedStart;
+
+            if (selectedConnectionKey != null && !savedConnections.TryGetValue(selectedConnectionKey, out compareTo))
+                return false;
+
+            //Connecting on a host with no route for this account turns ViaServer off by itself, which is no change of the person's.
+            if (!HostOptions.HasServerRoute || !MayRouteThroughHost)
+            {
+                compareTo = new GremlinDB.GremlinConnection(compareTo);
+                compareTo.ViaServer = connection.ViaServer;
+            }
+
+            return !connection.SameSettings(compareTo);
+        }
+    }
+
+    ///<summary>
+    ///Saves the fields to the connection chosen in the picker, or to a new one under the name typed in its head. With no
+    ///name yet, the cursor goes to where it is typed.
+    ///</summary>
+    private async Task SaveConnectionAsync()
+    {
+        connectionNameError = false;
+
+        var name = selectedConnectionKey ?? connectionName?.Trim();
+
         if (string.IsNullOrWhiteSpace(name))
         {
-            connectionNameError = true;
-            connectionNameErrorMessage = "Connection name is required.";
+            RefuseConnectionName("Name the connection first.");
+            connectionPicker?.BeginRename();
+
+            return;
+        }
+
+        if (selectedConnectionKey == null && savedConnections.ContainsKey(name))
+        {
+            RefuseConnectionName($"There is already a connection called \"{name}\".");
+            connectionPicker?.BeginRename();
 
             return;
         }
@@ -189,22 +436,11 @@ public partial class Home
         selectedConnectionKey = name;
         connectionName = name;
 
+        //What is saved now is what a later change is measured against: a password held back is not in it.
+        savedPassword.Remember(connection);
+
         statusMessage = $"Connection \"{name}\" saved.";
         statusClass = "text-success";
-    }
-
-    private async Task DeleteConnectionAsync()
-    {
-        if (string.IsNullOrEmpty(selectedConnectionKey))
-            return;
-
-        if (isConnected)
-            Disconnect("Disconnected because the active connection was deleted.");
-
-        savedConnections.Remove(selectedConnectionKey);
-        selectedConnectionKey = null;
-
-        await PersistConnectionsAsync();
     }
 
     #endregion
@@ -236,11 +472,34 @@ public partial class Home
             if (!HostOptions.HasPlugins || !instanceGraphConfigured)
                 return false;
 
+            //Embedded, nobody is signed in (EmbedSession): the token the embedding page passed reads it or does not, and
+            //the host is what says which (2026-10-21).
+            if (Embedded)
+                return true;
+
             return Account != null && Account.Can(AccountInfo.InstanceQuery);
         }
     }
 
     private bool instanceGraphConfigured;
+
+    ///<summary>What the embedded viewer says while it has nothing to show (2026-10-21), as far as it knows why.</summary>
+    private string EmbeddedEmptySays
+    {
+        get
+        {
+            if (isConnecting)
+                return "Connecting…";
+
+            if (!string.IsNullOrEmpty(statusMessage))
+                return statusMessage;
+
+            return "Nothing to show: the address of this viewer names no graph for it to open.";
+        }
+    }
+
+    ///<summary>Why an embedded viewer asked for the instance's own graph is not shown it: one of two things, and it cannot tell which.</summary>
+    public const string EmbeddedInstanceRefused = "Nothing to show: this host has no graph of its own, or the page this viewer is embedded in passed no token that may read it.";
 
     ///<summary>Plugins taken down from the registry that are still installed. Empty on a viewer with no plugin host.</summary>
     private List<SeenTakedown> takedowns = new();
@@ -263,7 +522,7 @@ public partial class Home
 
     //Whether the ACTIVE connection is it. Drives the capabilities, the driver, and the form being hidden
     //rather than shown empty: there is nothing about this connection for anyone to fill in.
-    private bool instanceGraph;
+    private bool instanceGraph { get => activeConnection.InstanceGraph; set => activeConnection.InstanceGraph = value; }
 
     ///<summary>Asks once whether a graph is configured. Failure is "no", which is what the picker should show.</summary>
     private async Task LoadInstanceGraphOfferAsync()
@@ -316,6 +575,7 @@ public partial class Home
     private void SelectInstanceGraph()
     {
         connection = new GremlinDB.GremlinConnection { DatabaseType = GraphDbProviders.TinkerPop };
+        savedPassword.Remember(null);
         instanceGraph = true;
         selectedConnectionKey = InstanceGraphKey;
         connectionName = "This instance's graph";
@@ -326,15 +586,10 @@ public partial class Home
 
     #region Connect / disconnect
 
-    private void OnConnectionSelected(ChangeEventArgs e)
-    {
-        if (isConnected)
-            Disconnect("Disconnected due to connection change.");
-
-        SelectConnection(e.Value?.ToString());
-    }
-
-    //Loads the saved connection with the given key into the active fields.
+    //Loads the saved connection with the given key into the active fields. A key no saved connection carries — a restored
+    //open connection whose saved one was deleted meanwhile, on another device or while its tab was closed — leaves the fields
+    //as they are, under no name, with the old name as the one typed: Save lights, and saves them under whatever is in the
+    //picker's head. Kept as the key, the deleted name was what Save wrote under, whatever was typed.
     private void SelectConnection(string key)
     {
         instanceGraph = false;
@@ -343,6 +598,7 @@ public partial class Home
         {
             selectedConnectionKey = null;
             connectionName = null;
+            activeConnection.UnsavedStart = new GremlinDB.GremlinConnection(connection);
             return;
         }
 
@@ -357,6 +613,13 @@ public partial class Home
             connection = new GremlinDB.GremlinConnection(saved);
             selectedConnectionKey = key;
             connectionName = key;
+            savedPassword.Remember(saved);
+        }
+        else
+        {
+            selectedConnectionKey = null;
+            connectionName = key;
+            activeConnection.UnsavedStart = new GremlinDB.GremlinConnection(connection);
         }
     }
 
@@ -372,7 +635,7 @@ public partial class Home
     ///Switches the connection to a database type, filling in that engine's defaults without clobbering
     ///anything the user typed. The port comes from the provider: each handler used to carry a list of every
     ///*other* engine's port to tell a leftover default from a chosen one, which meant adding an engine
-    ///silently broke the handlers that predated it — switching from ArangoDB to Neo4j kept dialling 8529.
+    ///silently broke the handlers that predated it — switching from ArangoDB to Neo4j kept dialing 8529.
     ///</summary>
     private void SelectDatabaseType(string databaseType)
     {
@@ -382,6 +645,9 @@ public partial class Home
 
         if (GraphDbProviders.IsUnchosenPort(connection.Port))
             connection.Port = provider.DefaultPort;
+
+        //Another engine reads the transport from another field, and may read this one as unencrypted.
+        KeepTheSavedPasswordToItsTransport();
     }
 
     //Bolt also comes with a conventional user and database, which spares the usual four-field setup.
@@ -428,8 +694,15 @@ public partial class Home
         connection.Transport = "HTTP";
     }
 
+    //The connect button, whatever it says: Connect connects, Connecting… stops trying, Disconnect disconnects.
     private async Task ToggleConnectionAsync()
     {
+        if (isConnecting)
+        {
+            CancelConnect();
+            return;
+        }
+
         if (isConnected)
         {
             Disconnect("Disconnected by user.");
@@ -439,15 +712,24 @@ public partial class Home
         await ConnectAsync();
     }
 
+    //Connects the connection in front. The attempt belongs to that connection from here on: the person may bring another
+    //one in front while it dials (the multiple-connections spec, story 4), so what it learns is written into its own
+    //connection and its own tab in front, and the page's panels (the connection card, Import/Export, the editor's
+    //schema) follow it only while it is still the one on the page.
     private async Task ConnectAsync()
     {
-        isConnecting = true;
-        statusMessage = null;
+        var owner = activeConnection;
+        var provider = Provider;
+
+        owner.IsConnecting = true;
+        owner.StatusMessage = null;
 
         //Any builder rebuilt for the previous connection's schema is stale now.
-        schemaQueryBuilder = null;
-        connectCts?.Dispose();
-        connectCts = new CancellationTokenSource();
+        owner.SchemaQueryBuilder = null;
+        owner.ConnectCts?.Dispose();
+        owner.ConnectCts = new CancellationTokenSource();
+
+        var ct = owner.ConnectCts.Token;
 
         //A static build has no host to proxy through, and ViaServer defaults to true — so a connection
         //saved on a hosted deployment, or a URL parameter asking for the server route, would otherwise
@@ -455,82 +737,101 @@ public partial class Home
         //The same for an account the host would refuse: routing through it takes a permission, and the
         //browser route is the one that can still work.
         if (!HostOptions.HasServerRoute || !MayRouteThroughHost)
-            connection.ViaServer = false;
+            owner.Connection.ViaServer = false;
+
+        //The last word before anything is dialed, for a change to the transport that came some other way than the
+        //fields that apply the rule as they change.
+        KeepTheSavedPasswordToItsTransport();
 
         try
         {
-            var provider = Provider;
-
             //Same database either way — only who opens the socket changes. The provider still decides
             //capabilities, the probe query and the failure hint, since none of that depends on the route.
             //CreateBrowser hands back the browser-direct driver: the JS-interop one for Bolt (which needs
             //this handler's IJSRuntime, the static provider factory has none), the shared HTTP one otherwise.
             //Three routes now, and the third names no connection at all: the instance graph's is the
             //administrator's, held on the host under a reserved key, and a browser is never given it.
-            if (instanceGraph)
-                db = new InstanceGraphDb(Http);
-            else if (connection.ViaServer)
-                db = new ServerProxyGraphDb(Http, connection);
+            if (owner.InstanceGraph)
+                owner.Db = new InstanceGraphDb(Http);
+            else if (owner.Connection.ViaServer)
+                owner.Db = new ServerProxyGraphDb(Http, owner.Connection);
             else
-                db = provider.CreateBrowser(Http, JS, connection);
+                owner.Db = provider.CreateBrowser(Http, JS, owner.Connection);
 
             //A trivial query surfaces reachability problems immediately (CORS being the #1 SPARQL gotcha).
-            var test = await db.ExecuteAsync(provider.ProbeQuery, connectCts.Token);
+            var test = await owner.Db.ExecuteAsync(provider.ProbeQuery, ct);
 
             if (test.IsError)
             {
-                statusMessage = $"Connection failed: {test.Error}{FailedHint(provider)}";
-                statusClass = "text-danger";
-                isConnected = false;
-                await DisposeDbAsync();
+                owner.StatusMessage = $"Connection failed: {test.Error}{FailedHint(provider)}";
+                owner.StatusClass = "text-danger";
+                owner.IsConnected = false;
+
+                //Said in the dialog, opened for it as Disconnect opens it: a connect a link started has none open, and
+                //until 2026-11-02 its failure went into a dialog nobody saw, so the viewer came up saying nothing. A
+                //connection that went behind meanwhile says it on its own tab, and its dialog opens with it.
+                if (ReferenceEquals(owner, activeConnection))
+                    OpenConnectionCard();
+
+                await DisposeDbAsync(owner);
             }
             else
             {
-                statusMessage = provider.ConnectedMessage(connection);
-                statusClass = "text-success";
-                isConnected = true;
-                offlineMode = false;//connecting and offline mode are mutually exclusive
-                showConnectionCard = false;
-                showImportExport = false;
+                owner.StatusMessage = provider.ConnectedMessage(owner.Connection);
+
+                //An engine two servers speak says which one answered: a Memgraph is not "Connected to Neo4j.".
+                if (provider.AskConnectedMessage != null)
+                    owner.StatusMessage = await provider.AskConnectedMessage(owner.Db, ct) ?? owner.StatusMessage;
+
+                owner.StatusClass = "text-success";
+                owner.IsConnected = true;
+                owner.OfflineMode = false;//connecting and offline mode are mutually exclusive
+
+                if (ReferenceEquals(owner, activeConnection))
+                {
+                    showConnectionCard = false;
+                    showImportExport = false;
+                }
+
+                var tab = owner.Tabs[owner.ActiveTabIndex];
 
                 //Only when the database dictates one — otherwise the user's own choice stands.
                 if (provider.EditorLanguage != null)
-                    editorLanguage = provider.EditorLanguage;
+                    tab.EditorLanguage = provider.EditorLanguage;
 
                 //Examples is hidden for an engine with no query language, so a tab left sitting on it would
                 //show a panel with no way back to it.
-                if (provider.NoQueryLanguage && queryEditorTab == 3)
-                    queryEditorTab = 1;
+                if (provider.NoQueryLanguage && tab.QueryEditorTab == 3)
+                    tab.QueryEditorTab = 1;
 
-                await LoadQueryAsync();
+                await LoadQueryAsync(tab);
 
                 //An engine read by form has no use for query text left behind by another one.
-                if (provider.NoQueryLanguage)
-                    NormalizeFormQueryText(provider.ExampleQuery);
+                if (provider.NoQueryLanguage && !GunQuery.IsWireString(tab.QueryText))
+                    tab.QueryText = provider.ExampleQuery;
 
-                if (provider.Capabilities.BrowseGraph)
-                    await RefreshSchemaVocabularyAsync();
+                await RefreshSchemaVocabularyAsync(owner);
             }
         }
         catch (OperationCanceledException)
         {
-            statusMessage = "Connection canceled.";
-            statusClass = "text-muted";
-            isConnected = false;
-            await DisposeDbAsync();
+            owner.StatusMessage = "Connection canceled.";
+            owner.StatusClass = "text-muted";
+            owner.IsConnected = false;
+            await DisposeDbAsync(owner);
         }
         catch (Exception ex)
         {
-            statusMessage = ex.Message;
-            statusClass = "text-danger";
-            isConnected = false;
-            await DisposeDbAsync();
+            owner.StatusMessage = ex.Message;
+            owner.StatusClass = "text-danger";
+            owner.IsConnected = false;
+            await DisposeDbAsync(owner);
         }
         finally
         {
-            isConnecting = false;
-            connectCts?.Dispose();
-            connectCts = null;
+            owner.IsConnecting = false;
+            owner.ConnectCts?.Dispose();
+            owner.ConnectCts = null;
         }
     }
 
@@ -538,7 +839,7 @@ public partial class Home
     ///True while the Server route is selected on a build that has no server. The route row reports it,
     ///because the choice is made there and the Connect button lives here.
     ///</summary>
-    private bool routeUnavailable;
+    private bool routeUnavailable { get => activeConnection.RouteUnavailable; set => activeConnection.RouteUnavailable = value; }
 
     ///<summary>
     ///Why the Connect button is grayed out, or null when it is not — a disabled button that explains
@@ -548,7 +849,10 @@ public partial class Home
     {
         get
         {
-            if (isConnected || isConnecting)
+            if (isConnecting)
+                return "Connecting: click to stop trying";
+
+            if (isConnected)
                 return null;
 
             //Chosen a route this build does not have: there is nothing to connect to until it goes back.
@@ -638,7 +942,7 @@ public partial class Home
             await LlmConnections.SaveAsync(models);
     }
 
-    //Cancels an in-progress connection attempt.
+    //Cancels an in-progress connection attempt: the connect button clicked while it says Connecting….
     private void CancelConnect()
     {
         connectCts?.Cancel();
@@ -656,7 +960,7 @@ public partial class Home
         queryText = null;
         statusMessage = reason ?? "Disconnected.";
         statusClass = "text-muted";
-        showConnectionCard = true;
+        OpenConnectionCard();
 
         //Drop the schema autocomplete so it doesn't suggest the disconnected DB's labels/keys.
         _ = ClearSchemaAsync();
@@ -675,10 +979,15 @@ public partial class Home
 
     private async Task DisposeDbAsync()
     {
-        if (db is not null)
+        await DisposeDbAsync(activeConnection);
+    }
+
+    private static async Task DisposeDbAsync(ViewerConnection owner)
+    {
+        if (owner.Db is not null)
         {
-            await db.DisposeAsync();
-            db = null;
+            await owner.Db.DisposeAsync();
+            owner.Db = null;
         }
     }
 

@@ -84,10 +84,8 @@ public sealed class CypherQueryDebugger : IGraphQueryDebugger
         }
 
         foreach (var row in rows)
-        {
             if (total > 0)
                 row.PercentDur = row.DurationMs / total * 100;
-        }
 
         return (total, rows);
     }

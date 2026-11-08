@@ -184,10 +184,8 @@ public static class PluginStore
         }
 
         foreach (var removal in index.Removed)
-        {
             if (string.IsNullOrWhiteSpace(removal.Id))
                 throw new StoreIndexException("A removal in the index has no id.");
-        }
 
         return index;
     }
@@ -298,10 +296,8 @@ public static class PluginStore
     public static StoreRemoval Removal(StoreIndex index, string id)
     {
         foreach (var removal in index?.Removed ?? [])
-        {
             if (string.Equals(removal.Id, id, StringComparison.OrdinalIgnoreCase))
                 return removal;
-        }
 
         return null;
     }
@@ -317,7 +313,6 @@ public static class PluginStore
         var merged = new List<StoreEntry>();
 
         foreach (var (source, index) in read ?? [])
-        {
             foreach (var entry in index?.Entries ?? [])
             {
                 if (!seen.Add(entry.Id))
@@ -326,7 +321,6 @@ public static class PluginStore
                 entry.Source = source;
                 merged.Add(entry);
             }
-        }
 
         return merged;
     }
@@ -344,10 +338,8 @@ public static class PluginStore
             return true;
 
         foreach (var field in new[] { entry?.Name, entry?.Description, entry?.Author?.Name, entry?.Id })
-        {
             if (field != null && field.Contains(text, StringComparison.OrdinalIgnoreCase))
                 return true;
-        }
 
         return false;
     }
@@ -380,10 +372,8 @@ public static class PluginStore
             return false;
 
         foreach (var one in supported ?? [])
-        {
             if (string.Equals(one, api, StringComparison.OrdinalIgnoreCase))
                 return true;
-        }
 
         return false;
     }
@@ -392,12 +382,16 @@ public static class PluginStore
     ///Two version strings, compared part by part as numbers where both parts are numbers and as text
     ///where either is not. <strong>Not <see cref="string.CompareOrdinal(string, string)"/></strong>:
     ///that makes 1.10.0 older than 1.9.0, which would hide the update everybody is waiting for. A part
-    ///nobody wrote counts as zero, so 1.2 and 1.2.0 are the same version.
+    ///nobody wrote counts as zero, so 1.2 and 1.2.0 are the same version. A pre-release suffix, the text after a
+    ///dash, is read as semantic versions read it (2026-11-07): the numbers decide first, then a version without one
+    ///is newer than the same version with one, and two suffixes compare identifier by identifier
+    ///(<see cref="ComparePreRelease"/>), so 2.0.0-rc1 &lt; 2.0.0 &lt; 2.0.1. The store's index never carries a
+    ///pre-release, but an install by URL takes whatever version its manifest says.
     ///</summary>
     public static int Compare(string left, string right)
     {
-        var one = Parts(left);
-        var two = Parts(right);
+        var (one, onePreRelease) = Parts(left);
+        var (two, twoPreRelease) = Parts(right);
         var length = Math.Max(one.Count, two.Count);
 
         for (var at = 0; at < length; at++)
@@ -417,7 +411,7 @@ public static class PluginStore
                 return verdict;
         }
 
-        return 0;
+        return ComparePreRelease(onePreRelease, twoPreRelease);
     }
 
     private static int ComparePart(string left, string right)
@@ -428,14 +422,52 @@ public static class PluginStore
         return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
     }
 
-    ///<summary>The dotted parts of a version, with any pre-release suffix left on the part it is attached to.</summary>
-    private static List<string> Parts(string version)
+    ///<summary>
+    ///Two pre-release suffixes, null for none: none is newer than any, and two compare identifier by identifier as the
+    ///parts do, a numeric one as a number, so rc.2 comes before rc.10; where they agree as far as the shorter goes, the
+    ///one with more identifiers is the newer.
+    ///</summary>
+    private static int ComparePreRelease(string left, string right)
+    {
+        if (left == null && right == null)
+            return 0;
+        else if (left == null)
+            return 1;
+        else if (right == null)
+            return -1;
+
+        var one = left.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var two = right.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var length = Math.Min(one.Length, two.Length);
+
+        for (var at = 0; at < length; at++)
+        {
+            var verdict = ComparePart(one[at], two[at]);
+
+            if (verdict != 0)
+                return verdict;
+        }
+
+        return one.Length.CompareTo(two.Length);
+    }
+
+    ///<summary>The dotted parts of a version, and its pre-release suffix, the text after the first dash, or null when it has none.</summary>
+    private static (List<string> Numbers, string PreRelease) Parts(string version)
     {
         var text = (version ?? "").Trim();
 
         if (text.StartsWith('v') || text.StartsWith('V'))
             text = text.Substring(1);
 
-        return text.Split('.', StringSplitOptions.RemoveEmptyEntries).ToList();
+        string preRelease = null;
+        var dash = text.IndexOf('-');
+
+        if (dash >= 0)
+        {
+            preRelease = text.Substring(dash + 1);
+            text = text.Substring(0, dash);
+        }
+
+        return (text.Split('.', StringSplitOptions.RemoveEmptyEntries).ToList(), preRelease);
     }
 }

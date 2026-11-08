@@ -16,23 +16,28 @@ namespace GraphDBViewerWeb.Code;
 ///go. The viewer hands a driver one string and expects it to work, so the request is routed by looking at
 ///what the query actually is.
 ///</summary>
-public class DgraphDb : IGraphDb
+public class DgraphDb : IGraphDb, IReadOnlyCapableGraphDb
 {
     ///<summary>Dgraph Alpha's HTTP port.</summary>
     public const int DefaultPort = 8080;
 
+    //Space as DQL has it: white space, and comments, which run from # to the end of the line.
+    private const string Space = @"(?:\s|#[^\n]*)*";
 
     //A mutation is a top-level set / delete block, or an upsert (which contains one). Matched outside of
-    //any nesting so a predicate merely named "set" inside a query block doesn't reroute a read.
+    //any nesting so a predicate merely named "set" inside a query block doesn't reroute a read. A comment
+    //can stand wherever space can: one before the block hid it until 2026-10-03, and the write went to the
+    //query endpoint, which refused it, while the guard called it a read.
     private static readonly Regex MutationPattern = new(
-        @"^\s*(upsert\s*\{|\{\s*(set|delete)\s*\{)",
+        $@"^{Space}(upsert{Space}\{{|\{{{Space}(set|delete){Space}\{{)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     //The same thing said in JSON — {"set":[…]} / {"delete":[…]} — which is what the viewer stages, RDF
     //needing a newline after every triple and the staged buffer committing line by line. An upsert leads
-    //with its query instead, the mutation following in the same object.
+    //with its query instead, the mutation following in the same object, or with the list of its
+    //conditional mutations.
     private static readonly Regex JsonMutationPattern = new(
-        @"^\s*\{\s*""(set|delete|query)""\s*:",
+        @"^\s*\{\s*""(set|delete|query|mutations)""\s*:",
         RegexOptions.Compiled);
 
     private readonly HttpClient _http;
@@ -111,30 +116,46 @@ public class DgraphDb : IGraphDb
             return DgraphConverter.ToGraphDbResult("""{ "data": { "code": "Success" } }""");
         }
 
+        string url;
+        string contentType;
+
+        if (IsMutation(query))
+        {
+            url = MutateUrl;
+
+            //A hand-written set/delete block is RDF N-Quads; what the viewer stages is the JSON form,
+            //and Dgraph parses the body by what it is told it is.
+            if (IsJsonMutation(query))
+                contentType = "application/json";
+            else
+                contentType = "application/rdf";
+        }
+        else
+        {
+            url = QueryUrl;
+            contentType = "application/dql";
+        }
+
+        return await SendAsync(url, contentType, query, cancellationToken);
+    }
+
+    ///<summary>
+    ///Runs the query at <see cref="QueryUrl"/> whatever its text says, and never at <c>/mutate</c> or
+    ///<c>/alter</c>: a mutation sent there is refused by Dgraph rather than written. The path Ask AI's read
+    ///tool takes (<see cref="IReadOnlyCapableGraphDb"/>).
+    ///</summary>
+    public Task<GraphDbResult> ExecuteReadOnlyAsync(string query, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(_connection.Hostname))
+            return Task.FromResult(GraphDbResult.Failure("No Dgraph host configured."));
+
+        return SendAsync(QueryUrl, "application/dql", query, cancellationToken);
+    }
+
+    private async Task<GraphDbResult> SendAsync(string url, string contentType, string query, CancellationToken cancellationToken)
+    {
         try
         {
-            bool mutating = IsMutation(query);
-
-            string url;
-            string contentType;
-
-            if (mutating)
-            {
-                url = MutateUrl;
-
-                //A hand-written set/delete block is RDF N-Quads; what the viewer stages is the JSON form,
-                //and Dgraph parses the body by what it is told it is.
-                if (IsJsonMutation(query))
-                    contentType = "application/json";
-                else
-                    contentType = "application/rdf";
-            }
-            else
-            {
-                url = QueryUrl;
-                contentType = "application/dql";
-            }
-
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
             request.Content = new StringContent(query ?? "", Encoding.UTF8, contentType);
             Authorize(request);

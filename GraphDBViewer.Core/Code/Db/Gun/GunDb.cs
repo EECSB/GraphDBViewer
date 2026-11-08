@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.JSInterop;
@@ -48,9 +49,8 @@ public sealed class GunDb : IGraphDb, ILiveGraphDb
         //that could only come back empty anyway.
         if ((query ?? "").Trim() == GunQuery.Nothing)
             return GunConverter.ToGraphDbResult("{}");
-
-        //Connecting asks whether a peer answered the page, not what the peer holds.
-        if ((query ?? "").Trim() == GunQuery.Probe)
+        else if ((query ?? "").Trim() == GunQuery.Probe)
+            //Connecting asks whether a peer answered the page, not what the peer holds.
             return await ProbeAsync(cancellationToken);
 
         //A staged edit is a statement rather than a key path. It is parsed here and applied as an
@@ -148,7 +148,8 @@ public sealed class GunDb : IGraphDb, ILiveGraphDb
 
     ///<summary>
     ///Subscribes to everything the query reaches, with GUN's own <c>.on()</c>. What comes back is not a
-    ///second answer to the query — it is whichever node a peer changed, pushed as it happens.
+    ///second answer to the query — it is whichever node a peer changed, pushed as it happens. A watch the
+    ///page refuses throws, with the page's reason as its message.
     ///</summary>
     public async Task WatchAsync(string query, CancellationToken cancellationToken = default)
     {
@@ -160,9 +161,40 @@ public sealed class GunDb : IGraphDb, ILiveGraphDb
 
         _self ??= DotNetObjectReference.Create(this);
 
-        await _js.InvokeAsync<string>("gunInterop.watch", cancellationToken, _handle, Config(), query ?? "", _self);
+        //The page lets go of the previous subscription before it tries this one, so nothing is watched until
+        //it answers, and a watch that fails leaves nothing watched rather than the one it replaced.
+        IsWatching = false;
+
+        string answer = await _js.InvokeAsync<string>("gunInterop.watch", cancellationToken, _handle, Config(), query ?? "", _self);
+        string refusal = WatchRefusal(answer);
+
+        //Nothing to follow is answered {"error": …}, as a read answers it. Taken for a subscription, that left
+        //Live switched on over nothing, with nothing to say why.
+        if (refusal != null)
+            throw new InvalidOperationException(refusal);
 
         IsWatching = true;
+    }
+
+    ///<summary>The reason a watch's answer gives for not watching, or null when the page is watching.</summary>
+    private static string WatchRefusal(string answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(answer);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("error", out var error)
+                && error.ValueKind == JsonValueKind.String)
+                return error.GetString();
+        }
+        catch (JsonException) { }
+
+        return null;
     }
 
     public async Task StopWatchingAsync()

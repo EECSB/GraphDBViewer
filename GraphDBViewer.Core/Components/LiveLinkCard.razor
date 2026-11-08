@@ -1,0 +1,224 @@
+@using GraphDBViewerWeb.Code
+@implements IDisposable
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+@* The live link (2026-11-03, the user: "the MCP server also", GDS Viewer's brought across): Claude, in Claude Desktop or
+   Claude Code, running queries in this tab through gdbv-mcp - see LiveLink for how the two ends find each other.
+
+   **A code, and the person saying it to Claude.** Start shows one; "link to my Graph DB Viewer tab, code 4821 7356" in
+   the chat is what links it. The code is the whole of the trust: the socket is to this computer only, and gdbv-mcp sends
+   calls to no tab but the one whose code the model was given.
+
+   **Changes are the person's to allow**, unlike GDS Viewer's, whose every change is one step of an undo: a write to a
+   database cannot be taken back, so run_write_query is refused until "Let it change the database" is ticked, and the
+   tick goes each time the link starts. First in AI settings, as GDS Viewer's is. *@
+<div class="border rounded p-3 mb-3" data-testid="live-link-card">
+    <div class="gdbv-ai-settings-title" data-testid="live-link-title"><i class="bi bi-plug" aria-hidden="true"></i>MCP server</div>
+
+    <div class="form-text mt-0 mb-2">
+        Lets Claude, in Claude Desktop or Claude Code, query the database this tab is connected to through <code>gdbv-mcp</code>,
+        as you watch.
+    </div>
+
+    @if (Link.State == LiveLinkState.Waiting)
+    {
+        <div class="d-flex align-items-center gap-2 flex-wrap" data-testid="live-link-waiting">
+            <div>
+                <div class="small text-body-secondary">Tell Claude: link to my Graph DB Viewer tab, code</div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="fs-5 font-monospace fw-semibold" id="gdbv-live-link-code" data-testid="live-link-code">@Link.Code</span>
+                    <button type="button" class="btn btn-sm @(copy.Copied ? "btn-outline-success" : "btn-outline-secondary")" @onclick="CopyAsync"
+                            aria-label="@(copy.Copied ? "Copied" : "Copy")" title="Copy &quot;Link to my Graph DB Viewer tab, code @Link.Code&quot;, to paste into Claude"
+                            data-testid="live-link-copy">
+                        <i class="bi @(copy.Copied ? "bi-check-lg" : "bi-copy")" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            <button type="button" class="btn btn-sm btn-outline-danger ms-auto d-flex align-items-center gap-1" @onclick="StopAsync"
+                    title="Stop waiting. The code goes with it" data-testid="live-link-stop">
+                <i class="bi bi-stop-fill" aria-hidden="true"></i>Stop
+            </button>
+        </div>
+
+        <div class="small mt-2 d-flex align-items-center gap-2" data-testid="live-link-status">
+            <span class="spinner-grow spinner-grow-sm text-warning" aria-hidden="true"></span>Waiting for gdbv-mcp on port @Link.Port…
+        </div>
+
+        @* A wait that may not end, said while it is one - see LiveLink.Notice. *@
+        @if (Link.Notice.Length > 0)
+        {
+            <div class="form-text" data-testid="live-link-notice">@Link.Notice</div>
+        }
+
+        @if (copy.Refused)
+        {
+            <div class="form-text">This page was not allowed the clipboard: select the code and copy it with Ctrl+C.</div>
+        }
+    }
+    else if (Link.State == LiveLinkState.Linked)
+    {
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <div class="small d-flex align-items-center gap-2" data-testid="live-link-status">
+                <span class="badge rounded-pill text-bg-success">Linked</span>to @ClientSaid()
+            </div>
+
+            <button type="button" class="btn btn-sm btn-outline-danger ms-auto d-flex align-items-center gap-1" @onclick="StopAsync"
+                    title="End the link. Claude is told, and what it changed stays" data-testid="live-link-stop">
+                <i class="bi bi-stop-fill" aria-hidden="true"></i>Stop
+            </button>
+        </div>
+    }
+    else
+    {
+        <div class="d-flex align-items-center gap-2">
+            <label class="small" for="gdbv-live-link-port">Port</label>
+            <input id="gdbv-live-link-port" class="form-control form-control-sm" style="max-width: 7em;" type="number" min="1" max="65535" step="1"
+                   value="@port" @onchange="PortChanged" title="The port gdbv-mcp listens on: @LiveLink.DefaultPort, unless it was started with --link-port"
+                   data-testid="live-link-port" />
+
+            <button type="button" class="btn btn-sm btn-primary d-flex align-items-center gap-1" @onclick="Start"
+                    title="Wait for gdbv-mcp on this port, and show the code to tell Claude" data-testid="live-link-start">
+                <i class="bi bi-play-fill" aria-hidden="true"></i>@StartSaid()
+            </button>
+        </div>
+
+        @if (Link.State == LiveLinkState.Ended)
+        {
+            <div class="small mt-2" data-testid="live-link-status">The link ended: @Link.Ending</div>
+        }
+
+        <div class="form-text">
+            gdbv-mcp has to be added to Claude first: <code data-testid="live-link-command">@AddCommand</code> for Claude Code.
+        </div>
+    }
+
+    @if (Link.State != LiveLinkState.Off)
+    {
+        <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="gdbv-live-link-changes" checked="@Link.AllowChanges"
+                   @onchange="e => Link.AllowChanges = e.Value is true" data-testid="live-link-changes" />
+            <label class="form-check-label small" for="gdbv-live-link-changes">
+                Let it change the database. A change cannot be undone; until this is ticked, Claude may only read.
+            </label>
+        </div>
+    }
+
+    @if (Link.Calls.Count > 0)
+    {
+        @* Newest first: the one being answered now is the one worth reading. *@
+        <div class="mt-2 small border-top pt-2" style="max-height: 9rem; overflow: auto;" data-testid="live-link-calls">
+            @for (int i = Link.Calls.Count - 1; i >= 0; i--)
+            {
+                var call = Link.Calls[i];
+
+                <div class="d-flex gap-2 text-truncate @(call.IsError ? "text-danger" : "")" data-testid="live-link-call">
+                    <span class="fw-semibold flex-shrink-0">@call.Name.Replace('_', ' ')</span>
+                    <span class="text-truncate text-body-secondary" title="@call.Text">@(call.Text ?? "Working…")</span>
+                </div>
+            }
+        </div>
+    }
+
+    <div class="form-text">
+        The link is to this computer only, 127.0.0.1, from pages gdbv-mcp was told to take, and only the gdbv-mcp given the
+        code can use it. What Claude reads from the database goes to its provider with the rest of your conversation.
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public LiveLink Link { get; set; } = null!;
+
+    ///<summary>The port Start waits on. Not kept: nearly everybody uses gdbv-mcp's own, and a link is a choice made each time.</summary>
+    private int port = LiveLink.DefaultPort;
+
+    private LiveLink? watching;
+
+    private readonly ClipboardCopy copy = new();
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(Link, watching))
+            return;
+
+        if (watching != null)
+            watching.Changed -= RedrawAsync;
+
+        watching = Link;
+        watching.Changed += RedrawAsync;
+    }
+
+    public void Dispose()
+    {
+        if (watching != null)
+            watching.Changed -= RedrawAsync;
+    }
+
+    private async Task RedrawAsync()
+    {
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void PortChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var typed)
+            && typed >= 1
+            && typed <= 65535)
+            port = typed;
+    }
+
+    private void Start()
+    {
+        Link.Origin = PageOrigin;
+        Link.Start(port);
+    }
+
+    ///<summary>This page's address as gdbv-mcp compares it: scheme, host and a port other than the scheme's own.</summary>
+    private string PageOrigin => new Uri(Nav.BaseUri).GetLeftPart(UriPartial.Authority);
+
+    ///
+    ///What adds gdbv-mcp to Claude Code for this page: as it is on this computer and the public viewer, which it takes
+    ///tabs from by default, and with this page's address given to `--link-origin` anywhere else, a Treeality
+    ///instance's, whose tabs it would otherwise turn away (the viewer audit's decision a, 2026-11-07).
+    ///
+    private string AddCommand
+    {
+        get
+        {
+            if (LiveLink.TakenByDefault(PageOrigin))
+                return "claude mcp add gdbv -- gdbv-mcp";
+
+            return $"claude mcp add gdbv -- gdbv-mcp --link-origin {PageOrigin}";
+        }
+    }
+
+    private async Task StopAsync()
+    {
+        await Link.StopAsync();
+    }
+
+    ///<summary>The request with its code onto the clipboard, saying so on the button for a moment (ClipboardCopy).</summary>
+    private async Task CopyAsync()
+    {
+        await copy.CopyAsync(JS, $"Link to my Graph DB Viewer tab, code {Link.Code}", StateHasChanged);
+    }
+
+    private string StartSaid()
+    {
+        if (Link.State == LiveLinkState.Ended)
+            return "Link again";
+        else
+            return "Start";
+    }
+
+    ///<summary>Who the link is to, as gdbv-mcp heard the client introduce itself - or "Claude" when it said nothing.</summary>
+    private string ClientSaid()
+    {
+        if (Link.Client.Length == 0)
+            return "Claude";
+        else
+            return Link.Client;
+    }
+}

@@ -1,0 +1,100 @@
+@*
+    A small picture on a tour card, for the few stops where showing says it quicker than the words: the four views side
+    by side, a node added and linked, and a sentence to the AI turning into a query. As GDS Viewer's tour has them
+    (2026-11-03), only where it earns its room: the other cards are about a button whose part shows through the shade.
+
+    Drawn here rather than as image files so they follow the theme and stay crisp at any zoom. The moving ones loop by
+    CSS - see .gdbv-tour-picture in app.css - and hold still on their last frame when the system asks for less motion.
+*@
+
+<div class="gdbv-tour-picture" aria-hidden="true" data-testid="tour-picture" data-picture="@Name">
+    @if (Name == "views")
+    {
+        <svg viewBox="0 0 300 92">
+            @* JSON: the records. *@
+            <rect class="gdbv-tour-panel" x="2" y="2" width="68" height="70" rx="4" />
+            <text class="gdbv-tour-code" x="8" y="18">{ "id": 1,</text>
+            <text class="gdbv-tour-code" x="8" y="30">  "label":</text>
+            <text class="gdbv-tour-code" x="8" y="42">  "person",</text>
+            <text class="gdbv-tour-code" x="8" y="54">  "outE": [</text>
+            <text class="gdbv-tour-label" x="36" y="88">JSON</text>
+
+            @* 2D: three nodes and their edges, flat. *@
+            <rect class="gdbv-tour-panel" x="78" y="2" width="68" height="70" rx="4" />
+            <line class="gdbv-tour-edge" x1="96" y1="22" x2="130" y2="30" />
+            <line class="gdbv-tour-edge" x1="96" y1="22" x2="108" y2="56" />
+            <line class="gdbv-tour-edge" x1="130" y1="30" x2="108" y2="56" />
+            <circle class="gdbv-tour-node-a" cx="96" cy="22" r="7" />
+            <circle class="gdbv-tour-node-b" cx="130" cy="30" r="7" />
+            <circle class="gdbv-tour-node-c" cx="108" cy="56" r="7" />
+            <text class="gdbv-tour-label" x="112" y="88">2D</text>
+
+            @* 3D: the same three at depths, the far ones smaller. *@
+            <rect class="gdbv-tour-panel" x="154" y="2" width="68" height="70" rx="4" />
+            <g class="gdbv-tour-spin">
+                <line class="gdbv-tour-edge" x1="172" y1="26" x2="204" y2="20" />
+                <line class="gdbv-tour-edge" x1="172" y1="26" x2="188" y2="54" />
+                <line class="gdbv-tour-edge" x1="204" y1="20" x2="188" y2="54" />
+                <circle class="gdbv-tour-node-a" cx="172" cy="26" r="8" />
+                <circle class="gdbv-tour-node-b" cx="204" cy="20" r="5" />
+                <circle class="gdbv-tour-node-c" cx="188" cy="54" r="9" />
+            </g>
+            <text class="gdbv-tour-label" x="188" y="88">3D</text>
+
+            @* Table: a row per node. *@
+            <rect class="gdbv-tour-panel" x="230" y="2" width="68" height="70" rx="4" />
+            <path class="gdbv-tour-rule" d="M230 20h68M230 36h68M230 52h68M256 2v70" />
+            <rect class="gdbv-tour-cell" x="236" y="9" width="14" height="5" rx="1" />
+            <rect class="gdbv-tour-cell" x="262" y="9" width="28" height="5" rx="1" />
+            <rect class="gdbv-tour-cell" x="236" y="25" width="10" height="5" rx="1" />
+            <rect class="gdbv-tour-cell" x="262" y="25" width="22" height="5" rx="1" />
+            <rect class="gdbv-tour-cell" x="236" y="41" width="12" height="5" rx="1" />
+            <rect class="gdbv-tour-cell" x="262" y="41" width="30" height="5" rx="1" />
+            <text class="gdbv-tour-label" x="264" y="88">Table</text>
+        </svg>
+    }
+    else if (Name == "edit")
+    {
+        <svg viewBox="0 0 300 92">
+            <rect class="gdbv-tour-panel" x="2" y="2" width="296" height="86" rx="4" />
+
+            <line class="gdbv-tour-edge" x1="70" y1="30" x2="70" y2="66" />
+            <circle class="gdbv-tour-node-a" cx="70" cy="30" r="9" />
+            <circle class="gdbv-tour-node-b" cx="70" cy="66" r="9" />
+
+            @* A new node appears, then an edge is drawn to it. *@
+            <line class="gdbv-tour-edge gdbv-tour-link" x1="70" y1="30" x2="150" y2="46" pathLength="1" />
+            <circle class="gdbv-tour-node-c gdbv-tour-pop" cx="150" cy="46" r="9" />
+
+            @* The change, staged as a query, not yet written. *@
+            <g class="gdbv-tour-staged">
+                <rect class="gdbv-tour-chip" x="186" y="26" width="104" height="40" rx="4" />
+                <text class="gdbv-tour-code" x="192" y="42">g.addV('person')</text>
+                <text class="gdbv-tour-code" x="192" y="56">.addE('knows')</text>
+            </g>
+        </svg>
+    }
+    else if (Name == "ai")
+    {
+        <svg viewBox="0 0 300 92">
+            <rect class="gdbv-tour-panel" x="2" y="2" width="296" height="86" rx="4" />
+
+            @* The question, in words. *@
+            <rect class="gdbv-tour-bubble" x="10" y="10" width="170" height="22" rx="11" />
+            <text class="gdbv-tour-say" x="20" y="25">Who does Alice know?</text>
+
+            @* The query it turns into. *@
+            <g class="gdbv-tour-answer">
+                <rect class="gdbv-tour-chip" x="60" y="44" width="228" height="34" rx="4" />
+                <text class="gdbv-tour-spark" x="70" y="66">✨</text>
+                <text class="gdbv-tour-code" x="88" y="65">g.V('Alice').out('knows')</text>
+            </g>
+        </svg>
+    }
+</div>
+
+@code {
+    ///<summary>Which picture: views, edit or ai.</summary>
+    [Parameter]
+    public string Name { get; set; } = "";
+}

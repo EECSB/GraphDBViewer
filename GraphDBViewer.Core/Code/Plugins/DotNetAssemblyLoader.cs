@@ -74,8 +74,33 @@ public static class DotNetAssemblyLoader
     ///manifest is what the administrator saw and approved. A module registering under a different id
     ///is impersonation (ADR 0012), and a route the manifest never declared is a page nobody agreed
     ///to, so either refuses the whole load.
+    ///
+    ///<strong>A refusal takes back what the module registered</strong> (2026-10-31): the services it added and the plugin
+    ///it registered, with its pages and routes. Until then the checks ran after both and removed nothing, so a plugin
+    ///refused at start kept its services, pages and routes beside the record saying it had not loaded.
     ///</summary>
     public static void RegisterVerified(IPluginModule module, PluginManifest manifest, IServiceCollection services, IPageRegistry pages)
+    {
+        var servicesBefore = services.Count;
+        var pagesBefore = pages.Plugins.Count;
+
+        try
+        {
+            RegisterAndCheck(module, manifest, services, pages);
+        }
+        catch (PluginLoadException)
+        {
+            while (services.Count > servicesBefore)
+                services.RemoveAt(services.Count - 1);
+
+            if (pages is PageRegistry registry)
+                registry.TakeBackTo(pagesBefore);
+
+            throw;
+        }
+    }
+
+    private static void RegisterAndCheck(IPluginModule module, PluginManifest manifest, IServiceCollection services, IPageRegistry pages)
     {
         try
         {
@@ -108,10 +133,8 @@ public static class DotNetAssemblyLoader
             throw new PluginLoadException($@"The module registered the id ""{registered.Id}"" but its manifest says ""{manifest.Id}"" — a plugin is its manifest's id, nothing else.");
 
         foreach (var page in registered.Pages)
-        {
             if (!(manifest.Routes ?? []).Contains(page.Route, StringComparer.Ordinal))
                 throw new PluginLoadException($@"The module registered the route ""{page.Route}"", which its manifest never declared. Declared routes: {string.Join(", ", manifest.Routes ?? [])}.");
-        }
     }
 
     ///<summary>

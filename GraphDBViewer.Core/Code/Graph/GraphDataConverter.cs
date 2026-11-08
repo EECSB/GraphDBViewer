@@ -12,8 +12,17 @@ public static class GraphDataConverter
 {
     #region Cytoscape (2D)
 
-    ///<summary>Converts a Gremlin/GraphSON result array into Cytoscape.js elements JSON (nodes + edges) for the 2D view.</summary>
-    public static string ToCytoscapeJson(JsonElement results, IReadOnlyDictionary<string, LabelStyle> styles = null, int edgeColorMode = 0, IReadOnlyDictionary<string, string> edgeColors = null)
+    ///<summary>
+    ///Converts a Gremlin/GraphSON result array into Cytoscape.js elements JSON (nodes + edges) for the 2D view. An
+    ///algorithm's overlay, when given, is drawn over every other style (AlgorithmOverlay).
+    ///</summary>
+    public static string ToCytoscapeJson(
+        JsonElement results,
+        IReadOnlyDictionary<string, LabelStyle> styles = null,
+        int edgeColorMode = 0,
+        IReadOnlyDictionary<string, string> edgeColors = null,
+        AlgorithmOverlay overlay = null,
+        IReadOnlyCollection<string> edgeDetails = null)
     {
         var elements = new List<object>();
         var seenNodes = new HashSet<string>();
@@ -22,37 +31,31 @@ public static class GraphDataConverter
         {
             //Pass 1: add real vertices first so an edge listed before its vertices doesn't
             //leave an id-only placeholder node shadowing the real (named) vertex.
-            foreach (var item in results.EnumerateArray())
+            foreach (var unwrapped in ResultElements(results))
             {
-                var unwrapped = UnwrapGraphSON(item);
-
                 if (TryExtractTraversalTriple(unwrapped, out var v, out _, out var o))
                 {
-                    AddCytoscapeNode(elements, seenNodes, v, styles);
-                    AddCytoscapeNode(elements, seenNodes, o, styles);
+                    AddCytoscapeNode(elements, seenNodes, v, styles, overlay);
+                    AddCytoscapeNode(elements, seenNodes, o, styles, overlay);
                 }
                 else if (IsVertex(unwrapped))
-                {
-                    AddCytoscapeNode(elements, seenNodes, unwrapped, styles);
-                }
+                    AddCytoscapeNode(elements, seenNodes, unwrapped, styles, overlay);
             }
 
             //Pass 2: add edges (endpoints become placeholders only when truly absent above).
-            foreach (var item in results.EnumerateArray())
+            foreach (var unwrapped in ResultElements(results))
             {
-                var unwrapped = UnwrapGraphSON(item);
-
                 if (TryExtractTraversalTriple(unwrapped, out var v, out var e, out var o))
-                    AddCytoscapeEdge(elements, v, e, o, edgeColorMode, edgeColors);
+                    AddCytoscapeEdge(elements, v, e, o, edgeColorMode, edgeColors, overlay, edgeDetails);
                 else if (IsEdge(unwrapped))
-                    AddCytoscapeEdgeStandalone(elements, seenNodes, unwrapped, edgeColorMode, edgeColors);
+                    AddCytoscapeEdgeStandalone(elements, seenNodes, unwrapped, edgeColorMode, edgeColors, overlay, edgeDetails);
             }
         }
 
         return JsonSerializer.Serialize(elements);
     }
 
-    private static void AddCytoscapeNode(List<object> elements, HashSet<string> seen, JsonElement vertex, IReadOnlyDictionary<string, LabelStyle> styles)
+    private static void AddCytoscapeNode(List<object> elements, HashSet<string> seen, JsonElement vertex, IReadOnlyDictionary<string, LabelStyle> styles, AlgorithmOverlay overlay)
     {
         string id = GetId(vertex);
 
@@ -76,7 +79,8 @@ public static class GraphDataConverter
         ApplyPerNodeStyle(data, properties);
         ApplyLowConfidence(data, properties);
         ApplyShownProperties(data, properties);
-        ApplyGeoPosition(data, properties);
+        ApplyGeoPosition(data, properties, MappingOf(typeLabel, styles));
+        overlay?.ApplyToNode(data, id);
 
         //Rectangle is the default 2D canvas shape when nothing else set one.
         if (!data.ContainsKey("shape"))
@@ -89,21 +93,29 @@ public static class GraphDataConverter
             elements.Add(new { data, position = new { x = px, y = py } });
         }
         else
-        {
             elements.Add(new { data });
-        }
     }
 
     //Where the vertex is on the earth, when its properties say so — read by the Map and Globe layouts,
     //which place the node by these, and ignored by every other layout. Under names of their own so a
     //user property that happens to be called "lat" never collides with what the view reads.
-    private static void ApplyGeoPosition(Dictionary<string, object> data, IReadOnlyDictionary<string, string> properties)
+    private static void ApplyGeoPosition(Dictionary<string, object> data, IReadOnlyDictionary<string, string> properties, GeoMapping mapping)
     {
-        if (!GeoCoordinates.TryRead(properties, out double latitude, out double longitude))
+        if (!GeoCoordinates.TryRead(properties, mapping, out double latitude, out double longitude))
             return;
 
         data["geoLat"] = latitude;
         data["geoLng"] = longitude;
+    }
+
+    //The coordinate properties this label's style names, or null where it names none — which is every
+    //label until somebody has data convention cannot read.
+    private static GeoMapping MappingOf(string typeLabel, IReadOnlyDictionary<string, LabelStyle> styles)
+    {
+        if (styles == null || typeLabel == null || !styles.TryGetValue(typeLabel, out var style))
+            return null;
+
+        return GeoMapping.Of(style.LatitudeProperty, style.LongitudeProperty, style.PointProperty);
     }
 
     ///<summary>
@@ -111,7 +123,7 @@ public static class GraphDataConverter
     ///Map and Globe say about the graph they were asked to draw ("12 of 40 located"), and what tells
     ///them to say so when the answer is none.
     ///</summary>
-    public static (int Located, int Total) GeoCoverage(JsonElement results)
+    public static (int Located, int Total) GeoCoverage(JsonElement results, IReadOnlyDictionary<string, LabelStyle> styles = null)
     {
         int located = 0;
         int total = 0;
@@ -120,23 +132,87 @@ public static class GraphDataConverter
         if (results.ValueKind != JsonValueKind.Array)
             return (0, 0);
 
-        foreach (var item in results.EnumerateArray())
+        foreach (var unwrapped in ResultElements(results))
         {
-            var unwrapped = UnwrapGraphSON(item);
-
             if (TryExtractTraversalTriple(unwrapped, out var v, out _, out var o))
             {
-                CountGeo(v, seen, ref located, ref total);
-                CountGeo(o, seen, ref located, ref total);
+                CountGeo(v, styles, seen, ref located, ref total);
+                CountGeo(o, styles, seen, ref located, ref total);
             }
             else if (IsVertex(unwrapped))
-                CountGeo(unwrapped, seen, ref located, ref total);
+                CountGeo(unwrapped, styles, seen, ref located, ref total);
         }
 
         return (located, total);
     }
 
-    private static void CountGeo(JsonElement vertex, HashSet<string> seen, ref int located, ref int total)
+    ///<summary>
+    ///The vertices the Map cannot place, each with the words a geocoder would be asked about it — its
+    ///address as its properties spell it, else the name the canvas draws. The same walk and the same
+    ///reading as <see cref="GeoCoverage"/>, so what this lists is exactly what that counts as missing.
+    ///</summary>
+    public static List<GeoCandidate> UnlocatedVertices(JsonElement results, IReadOnlyDictionary<string, LabelStyle> styles = null)
+    {
+        var candidates = new List<GeoCandidate>();
+        var seen = new HashSet<string>();
+
+        if (results.ValueKind != JsonValueKind.Array)
+            return candidates;
+
+        foreach (var unwrapped in ResultElements(results))
+        {
+            if (TryExtractTraversalTriple(unwrapped, out var v, out _, out var o))
+            {
+                AddCandidate(candidates, v, styles, seen);
+                AddCandidate(candidates, o, styles, seen);
+            }
+            else if (IsVertex(unwrapped))
+                AddCandidate(candidates, unwrapped, styles, seen);
+        }
+
+        return candidates;
+    }
+
+    private static void AddCandidate(
+        List<GeoCandidate> candidates,
+        JsonElement vertex,
+        IReadOnlyDictionary<string, LabelStyle> styles,
+        HashSet<string> seen)
+    {
+        string id = GetId(vertex);
+
+        if (id == null || !seen.Add(id))
+            return;
+
+        string typeLabel = GetStringProp(vertex, "label") ?? "vertex";
+        var properties = ExtractProperties(vertex);
+
+        if (GeoCoordinates.TryRead(properties, MappingOf(typeLabel, styles), out _, out _))
+            return;
+
+        //The name is looked for the way the canvas looks for a caption — the node's own gdbvDisplay, the
+        //label's display property, then Name/name/title — but read from the properties rather than taken
+        //from ExtractLabel, which always answers something. Its fallbacks are "Label (id)" and the bare
+        //id, which are the canvas saying there is no name, and no geocoder has heard of either.
+        string name = null;
+
+        foreach (var key in DisplayPropertyNames(typeLabel, styles, properties.GetValueOrDefault(GdbvKeys.Display)))
+            if (properties.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                name = value;
+
+                break;
+            }
+
+        candidates.Add(new GeoCandidate(id, GetIdType(vertex), typeLabel, name, Geocoding.QueryFor(properties, name)));
+    }
+
+    private static void CountGeo(
+        JsonElement vertex,
+        IReadOnlyDictionary<string, LabelStyle> styles,
+        HashSet<string> seen,
+        ref int located,
+        ref int total)
     {
         string id = GetId(vertex);
 
@@ -145,7 +221,9 @@ public static class GraphDataConverter
 
         total++;
 
-        if (GeoCoordinates.TryRead(ExtractProperties(vertex), out _, out _))
+        var mapping = MappingOf(GetStringProp(vertex, "label") ?? "vertex", styles);
+
+        if (GeoCoordinates.TryRead(ExtractProperties(vertex), mapping, out _, out _))
             located++;
     }
 
@@ -174,6 +252,9 @@ public static class GraphDataConverter
 
         if (!string.IsNullOrWhiteSpace(style.Model))
             data["model"] = style.Model;
+
+        if (style.Details)
+            data["details"] = true;
     }
 
     ///<summary>
@@ -211,6 +292,9 @@ public static class GraphDataConverter
 
         if (props.TryGetValue(GdbvKeys.Shape3d, out var shape3d) && !string.IsNullOrWhiteSpace(shape3d))
             data["shape3d"] = shape3d;
+
+        if (props.TryGetValue(GdbvKeys.Details, out var details) && bool.TryParse(details, out var shown))
+            data["details"] = shown;
     }
 
     //True when the given key is present in the node's gdbvShow list (a comma-separated set of property
@@ -253,7 +337,15 @@ public static class GraphDataConverter
             data["showProps"] = lines;
     }
 
-    private static void AddCytoscapeEdge(List<object> elements, JsonElement from, JsonElement edge, JsonElement to, int edgeColorMode, IReadOnlyDictionary<string, string> edgeColors)
+    private static void AddCytoscapeEdge(
+        List<object> elements,
+        JsonElement from,
+        JsonElement edge,
+        JsonElement to,
+        int edgeColorMode,
+        IReadOnlyDictionary<string, string> edgeColors,
+        AlgorithmOverlay overlay,
+        IReadOnlyCollection<string> edgeDetails)
     {
         string sourceId = GetId(from);
         string targetId = GetId(to);
@@ -261,36 +353,82 @@ public static class GraphDataConverter
         string edgeId = GetId(edge) ?? Guid.NewGuid().ToString();
 
         var properties = ExtractProperties(edge);
-        elements.Add(new { data = new { id = edgeId, source = sourceId, target = targetId, label = edgeLabel, edgeColor = ResolveEdgeColor(edgeLabel, properties, edgeColorMode, edgeColors), properties } });
+        var edgeColor = overlay?.EdgeColor(sourceId, targetId) ?? ResolveEdgeColor(edgeLabel, properties, edgeColorMode, edgeColors);
+        var details = EdgeDetailsOf(edgeLabel, properties, edgeDetails);
+
+        elements.Add(new { data = new { id = edgeId, source = sourceId, target = targetId, label = edgeLabel, edgeColor, properties, details } });
     }
 
-    private static void AddCytoscapeEdgeStandalone(List<object> elements, HashSet<string> seenNodes, JsonElement edge, int edgeColorMode, IReadOnlyDictionary<string, string> edgeColors)
+    private static void AddCytoscapeEdgeStandalone(
+        List<object> elements,
+        HashSet<string> seenNodes,
+        JsonElement edge,
+        int edgeColorMode,
+        IReadOnlyDictionary<string, string> edgeColors,
+        AlgorithmOverlay overlay,
+        IReadOnlyCollection<string> edgeDetails)
     {
-        string sourceId = GetEdgeVertexId(edge, "outV") ?? GetEdgeVertexId(edge, "inV");
-        string targetId = GetEdgeVertexId(edge, "inV") ?? GetEdgeVertexId(edge, "outV");
+        //An edge naming one end only is not drawn: there is nothing to draw it to, and ToDot leaves it out too. Until
+        //2026-11-07 the missing end was filled in from the other, and the edge was drawn as a loop on the end it named.
+        string sourceId = GetEdgeVertexId(edge, "outV");
+        string targetId = GetEdgeVertexId(edge, "inV");
 
         if (sourceId == null || targetId == null)
             return;
 
         if (seenNodes.Add(sourceId))
-            elements.Add(new { data = new { id = sourceId, label = sourceId, shape = "rectangle", properties = new Dictionary<string, string>() } });
+            elements.Add(new { data = Placeholder(sourceId, overlay) });
 
         if (seenNodes.Add(targetId))
-            elements.Add(new { data = new { id = targetId, label = targetId, shape = "rectangle", properties = new Dictionary<string, string>() } });
+            elements.Add(new { data = Placeholder(targetId, overlay) });
 
         string edgeLabel = GetStringProp(edge, "label") ?? "edge";
         string edgeId = GetId(edge) ?? Guid.NewGuid().ToString();
         var properties = ExtractProperties(edge);
+        var edgeColor = overlay?.EdgeColor(sourceId, targetId) ?? ResolveEdgeColor(edgeLabel, properties, edgeColorMode, edgeColors);
+        var details = EdgeDetailsOf(edgeLabel, properties, edgeDetails);
 
-        elements.Add(new { data = new { id = edgeId, source = sourceId, target = targetId, label = edgeLabel, edgeColor = ResolveEdgeColor(edgeLabel, properties, edgeColorMode, edgeColors), properties } });
+        elements.Add(new { data = new { id = edgeId, source = sourceId, target = targetId, label = edgeLabel, edgeColor, properties, details } });
+    }
+
+    ///<summary>
+    ///Whether an edge is drawn as a card of its details (Detailed view on edges, 2026-11-07, the user's "do the loose
+    ///ends"): its own gdbvDetails when it says true or false, as a vertex's does, else whether its label is among those
+    ///Styling turned the view on for.
+    ///</summary>
+    public static bool EdgeDetailsOf(string label, IReadOnlyDictionary<string, string> properties, IReadOnlyCollection<string> edgeDetails)
+    {
+        if (properties.TryGetValue(GdbvKeys.Details, out var own) && bool.TryParse(own, out var shown))
+            return shown;
+
+        return edgeDetails != null && edgeDetails.Contains(label);
+    }
+
+    ///<summary>The node an edge's end is drawn as when the result does not hold that vertex: its id, and an overlay's look, since an algorithm counts it.</summary>
+    private static Dictionary<string, object> Placeholder(string id, AlgorithmOverlay overlay)
+    {
+        var data = new Dictionary<string, object> { ["id"] = id, ["label"] = id, ["shape"] = "rectangle", ["properties"] = new Dictionary<string, string>() };
+
+        overlay?.ApplyToNode(data, id);
+
+        return data;
     }
 
     #endregion
 
     #region 3D Force Graph
 
-    ///<summary>Converts a Gremlin/GraphSON result array into 3d-force-graph JSON ({ nodes, links }) for the 3D view, grouping node color by vertex label.</summary>
-    public static string ToForceGraphJson(JsonElement results, IReadOnlyDictionary<string, LabelStyle> styles = null, int edgeColorMode = 0, IReadOnlyDictionary<string, string> edgeColors = null)
+    ///<summary>
+    ///Converts a Gremlin/GraphSON result array into 3d-force-graph JSON ({ nodes, links }) for the 3D view, grouping node
+    ///color by vertex label. An algorithm's overlay, when given, is drawn over every other style (AlgorithmOverlay).
+    ///</summary>
+    public static string ToForceGraphJson(
+        JsonElement results,
+        IReadOnlyDictionary<string, LabelStyle> styles = null,
+        int edgeColorMode = 0,
+        IReadOnlyDictionary<string, string> edgeColors = null,
+        AlgorithmOverlay overlay = null,
+        IReadOnlyCollection<string> edgeDetails = null)
     {
         var nodes = new List<object>();
         var links = new List<object>();
@@ -302,37 +440,38 @@ public static class GraphDataConverter
         {
             //Pass 1: add real vertices first so an edge listed before its vertices doesn't
             //leave an id-only placeholder node shadowing the real (named) vertex.
-            foreach (var item in results.EnumerateArray())
+            foreach (var unwrapped in ResultElements(results))
             {
-                var unwrapped = UnwrapGraphSON(item);
-
                 if (TryExtractTraversalTriple(unwrapped, out var v, out _, out var o))
                 {
-                    AddForceNode(nodes, seenNodes, v, labelGroups, ref groupCounter, styles);
-                    AddForceNode(nodes, seenNodes, o, labelGroups, ref groupCounter, styles);
+                    AddForceNode(nodes, seenNodes, v, labelGroups, ref groupCounter, styles, overlay);
+                    AddForceNode(nodes, seenNodes, o, labelGroups, ref groupCounter, styles, overlay);
                 }
                 else if (IsVertex(unwrapped))
-                {
-                    AddForceNode(nodes, seenNodes, unwrapped, labelGroups, ref groupCounter, styles);
-                }
+                    AddForceNode(nodes, seenNodes, unwrapped, labelGroups, ref groupCounter, styles, overlay);
             }
 
             //Pass 2: add edges (endpoints become placeholders only when truly absent above).
-            foreach (var item in results.EnumerateArray())
+            foreach (var unwrapped in ResultElements(results))
             {
-                var unwrapped = UnwrapGraphSON(item);
-
                 if (TryExtractTraversalTriple(unwrapped, out var v, out var e, out var o))
-                    AddForceLink(links, v, e, o, edgeColorMode, edgeColors);
+                    AddForceLink(links, v, e, o, edgeColorMode, edgeColors, overlay, edgeDetails);
                 else if (IsEdge(unwrapped))
-                    AddForceLinkStandalone(nodes, links, seenNodes, unwrapped, labelGroups, ref groupCounter, edgeColorMode, edgeColors);
+                    AddForceLinkStandalone(nodes, links, seenNodes, unwrapped, labelGroups, ref groupCounter, edgeColorMode, edgeColors, overlay, edgeDetails);
             }
         }
 
         return JsonSerializer.Serialize(new { nodes, links });
     }
 
-    private static void AddForceNode(List<object> nodes, HashSet<string> seen, JsonElement vertex, Dictionary<string, int> labelGroups, ref int groupCounter, IReadOnlyDictionary<string, LabelStyle> styles)
+    private static void AddForceNode(
+        List<object> nodes,
+        HashSet<string> seen,
+        JsonElement vertex,
+        Dictionary<string, int> labelGroups,
+        ref int groupCounter,
+        IReadOnlyDictionary<string, LabelStyle> styles,
+        AlgorithmOverlay overlay)
     {
         string id = GetId(vertex);
 
@@ -371,7 +510,8 @@ public static class GraphDataConverter
             data["model"] = model;
 
         ApplyShownProperties(data, properties);
-        ApplyGeoPosition(data, properties);
+        ApplyGeoPosition(data, properties, MappingOf(typeLabel, styles));
+        overlay?.ApplyToNode(data, id);
 
         //Sphere is the default 3D solid when nothing else set one.
         if (!data.ContainsKey("shape3d"))
@@ -389,22 +529,44 @@ public static class GraphDataConverter
         nodes.Add(data);
     }
 
-    private static void AddForceLink(List<object> links, JsonElement from, JsonElement edge, JsonElement to, int edgeColorMode, IReadOnlyDictionary<string, string> edgeColors)
+    private static void AddForceLink(
+        List<object> links,
+        JsonElement from,
+        JsonElement edge,
+        JsonElement to,
+        int edgeColorMode,
+        IReadOnlyDictionary<string, string> edgeColors,
+        AlgorithmOverlay overlay,
+        IReadOnlyCollection<string> edgeDetails)
     {
         string source = GetId(from);
         string target = GetId(to);
         string label = GetStringProp(edge, "label") ?? "edge";
 
         var properties = ExtractProperties(edge);
-        links.Add(new { source, target, label, color = ResolveEdgeColor(label, properties, edgeColorMode, edgeColors), properties });
+        var color = overlay?.EdgeColor(source, target) ?? ResolveEdgeColor(label, properties, edgeColorMode, edgeColors);
+        var details = EdgeDetailsOf(label, properties, edgeDetails);
+
+        links.Add(new { source, target, label, color, properties, details });
     }
 
-    private static void AddForceLinkStandalone(List<object> nodes, List<object> links, HashSet<string> seenNodes, JsonElement edge, Dictionary<string, int> labelGroups, ref int groupCounter, int edgeColorMode, IReadOnlyDictionary<string, string> edgeColors)
+    private static void AddForceLinkStandalone(
+        List<object> nodes,
+        List<object> links,
+        HashSet<string> seenNodes,
+        JsonElement edge,
+        Dictionary<string, int> labelGroups,
+        ref int groupCounter,
+        int edgeColorMode,
+        IReadOnlyDictionary<string, string> edgeColors,
+        AlgorithmOverlay overlay,
+        IReadOnlyCollection<string> edgeDetails)
     {
-        string sourceId = GetEdgeVertexId(edge, "outV") ?? GetEdgeVertexId(edge, "inV");
-        string targetId = GetEdgeVertexId(edge, "inV") ?? GetEdgeVertexId(edge, "outV");
+        //As on the 2D canvas: an edge naming one end only is not drawn.
+        string sourceId = GetEdgeVertexId(edge, "outV");
+        string targetId = GetEdgeVertexId(edge, "inV");
 
-        if (sourceId == null || targetId == null) 
+        if (sourceId == null || targetId == null)
             return;
 
         if (seenNodes.Add(sourceId))
@@ -415,7 +577,7 @@ public static class GraphDataConverter
                 labelGroups["vertex"] = g;
             }
 
-            nodes.Add(new { id = sourceId, label = sourceId, group = g, properties = new Dictionary<string, string>() });
+            nodes.Add(ForcePlaceholder(sourceId, g, overlay));
         }
 
         if (seenNodes.Add(targetId))
@@ -426,12 +588,25 @@ public static class GraphDataConverter
                 labelGroups["vertex"] = g;
             }
 
-            nodes.Add(new { id = targetId, label = targetId, group = g, properties = new Dictionary<string, string>() });
+            nodes.Add(ForcePlaceholder(targetId, g, overlay));
         }
 
         string label = GetStringProp(edge, "label") ?? "edge";
         var properties = ExtractProperties(edge);
-        links.Add(new { source = sourceId, target = targetId, label, color = ResolveEdgeColor(label, properties, edgeColorMode, edgeColors), properties });
+        var color = overlay?.EdgeColor(sourceId, targetId) ?? ResolveEdgeColor(label, properties, edgeColorMode, edgeColors);
+        var details = EdgeDetailsOf(label, properties, edgeDetails);
+
+        links.Add(new { source = sourceId, target = targetId, label, color, properties, details });
+    }
+
+    ///<summary>The 3D node an edge's end is drawn as when the result does not hold that vertex, with an overlay's look, since an algorithm counts it.</summary>
+    private static Dictionary<string, object> ForcePlaceholder(string id, int group, AlgorithmOverlay overlay)
+    {
+        var data = new Dictionary<string, object> { ["id"] = id, ["label"] = id, ["group"] = group, ["properties"] = new Dictionary<string, string>() };
+
+        overlay?.ApplyToNode(data, id);
+
+        return data;
     }
 
     //The default edge line color (matches the 2D base edge selector), used when coloring is off.
@@ -514,6 +689,40 @@ public static class GraphDataConverter
         return UnwrapGraphSON(element);
     }
 
+    ///<summary>
+    ///The result's elements, each unwrapped: an item as it is, or, for a path() result, what the path went through. A
+    ///g:Path holds its labels and its objects, and the objects are the vertices and edges, which drew nothing while the
+    ///path was read whole (2026-11-07).
+    ///</summary>
+    private static IEnumerable<JsonElement> ResultElements(JsonElement results)
+    {
+        foreach (var item in results.EnumerateArray())
+        {
+            var unwrapped = UnwrapGraphSON(item);
+
+            if (IsPath(item, unwrapped))
+                foreach (var step in UnwrapGraphSON(unwrapped.GetProperty("objects")).EnumerateArray())
+                    yield return UnwrapGraphSON(step);
+            else
+                yield return unwrapped;
+        }
+    }
+
+    ///<summary>A g:Path, or one written without its type: an object holding its labels and its objects, with no id of its own.</summary>
+    private static bool IsPath(JsonElement item, JsonElement unwrapped)
+    {
+        if (unwrapped.ValueKind != JsonValueKind.Object || !unwrapped.TryGetProperty("objects", out var objects))
+            return false;
+
+        if (UnwrapGraphSON(objects).ValueKind != JsonValueKind.Array)
+            return false;
+
+        if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("@type", out var type) && type.GetString() == "g:Path")
+            return true;
+
+        return unwrapped.TryGetProperty("labels", out _) && !unwrapped.TryGetProperty("id", out _);
+    }
+
     private static JsonElement UnwrapGraphSON(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty("@type", out var typeEl) && element.TryGetProperty("@value", out var inner))
@@ -551,15 +760,43 @@ public static class GraphDataConverter
             if (value.TryGetDouble(out var number))
                 return number.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
         }
-
-        //A JSON boolean's ToString is C#'s "True"; every reader compares against the word as Gremlin says it.
-        if (value.ValueKind == JsonValueKind.True)
+        else if (value.ValueKind == JsonValueKind.True)
+            //A JSON boolean's ToString is C#'s "True"; every reader compares against the word as Gremlin says it.
             return "true";
-
-        if (value.ValueKind == JsonValueKind.False)
+        else if (value.ValueKind == JsonValueKind.False)
             return "false";
 
         return value.ToString();
+    }
+
+    ///<summary>
+    ///A plain value, one no GraphSON wraps, as text: a string as it is and a number as its own text, as the wire has
+    ///them, and a null as empty text, as they have always read; but a boolean as the word Gremlin says, through
+    ///<see cref="GraphWireText.Stringify"/> as every engine's converter reads one, where a JsonElement's ToString
+    ///says C#'s "True". Until 2026-09-26 the flat shapes read it through ToString (<see cref="ExtractProperties"/>).
+    ///</summary>
+    private static string PlainText(JsonElement value)
+    {
+        return GraphWireText.Stringify(value) ?? "";
+    }
+
+    ///<summary>A string, a number or a boolean, as the wire has it: a value that is text already, or has one text.</summary>
+    private static bool IsScalar(JsonElement value)
+    {
+        return value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False;
+    }
+
+    ///<summary>
+    ///A scalar GraphSON 3 wraps with its type: {"@type":"g:Int32","@value":250}, and every other number, a g:Date's
+    ///epoch milliseconds and a g:UUID's string the same way. A wrapper around a list, a map or an element is not
+    ///one: what it holds has no single text.
+    ///</summary>
+    private static bool IsTypedScalar(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty("@type", out _))
+            return false;
+
+        return value.TryGetProperty("@value", out var inner) && IsScalar(inner);
     }
 
     ///<summary>Epoch milliseconds as the ISO 8601 UTC instant they stand for — 2026-09-05T00:00:00Z, milliseconds only when there are any.</summary>
@@ -573,19 +810,55 @@ public static class GraphDataConverter
         return at.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    ///<summary>
+    ///A g:Map as the JSON object it stands for, each key read by <see cref="MapKeyText"/>. The values are kept as the
+    ///wire has them, typed, for their readers to unwrap. A token key is the element's own id, label or end, so a
+    ///property stored under the same name, which JanusGraph allows for id, never displaces it, whichever comes first.
+    ///</summary>
     private static JsonElement ConvertGraphSONMapToObject(JsonElement kvArray)
     {
         var dict = new Dictionary<string, JsonElement>();
+        var tokens = new HashSet<string>();
+
         for (int i = 0; i + 1 < kvArray.GetArrayLength(); i += 2)
         {
-            string? key = kvArray[i].GetString();
-            if (key != null)
-                dict[key] = kvArray[i + 1];
+            string? key = MapKeyText(kvArray[i], out bool token);
+
+            if (key == null)
+                continue;
+
+            if (!token && tokens.Contains(key))
+                continue;
+
+            if (token)
+                tokens.Add(key);
+
+            dict[key] = kvArray[i + 1];
         }
 
         var json = JsonSerializer.Serialize(dict);
 
         return JsonDocument.Parse(json).RootElement;
+    }
+
+    ///<summary>
+    ///A g:Map key as the name it has in the object: a string as it is; a key the wire types as the text of what it
+    ///wraps, so a g:T token reads "id" or "label", a g:Direction one "IN" or "OUT" and a number its digits, which is
+    ///what the same map is keyed by untyped; and anything else, a vertex groupCount() keys by, as its JSON. A null key
+    ///names nothing and reads as null. Until 2026-09-27 every key was asked for its string, and a typed one threw,
+    ///so every elementMap() and valueMap(true) answer did, from every reader of it.
+    ///</summary>
+    private static string? MapKeyText(JsonElement key, out bool token)
+    {
+        token = false;
+
+        if (key.ValueKind == JsonValueKind.String)
+            return key.GetString();
+
+        if (key.ValueKind == JsonValueKind.Object && key.TryGetProperty("@type", out var type) && type.ValueKind == JsonValueKind.String)
+            token = type.GetString() is "g:T" or "g:Direction";
+
+        return GraphWireText.Stringify(UnwrapGraphSON(key));
     }
 
     private static bool TryExtractTraversalTriple(JsonElement item, out JsonElement v, out JsonElement e, out JsonElement o)
@@ -610,15 +883,23 @@ public static class GraphDataConverter
         return false;
     }
 
+    //An element map's keys are the element's own property names, so a "type" there may be a stored number: only a
+    //string names the element's type.
     private static bool IsVertex(JsonElement el)
     {
         if (el.ValueKind != JsonValueKind.Object)
             return false;
 
-        if (el.TryGetProperty("type", out var t) && t.GetString() == "vertex")
+        if (el.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "vertex")
             return true;
 
-        if (el.TryGetProperty("id", out _) && el.TryGetProperty("label", out _) && !el.TryGetProperty("outV", out _))
+        //Either end rules it out, as either one makes it an edge (IsEdge); until 2026-11-07 only outV did here.
+        if (el.TryGetProperty("id", out _)
+            && el.TryGetProperty("label", out _)
+            && !el.TryGetProperty("outV", out _)
+            && !el.TryGetProperty("inV", out _)
+            && !HasElementMapEnds(el)
+            && !IsEdgeWithoutEnds(el))
             return true;
 
         return false;
@@ -629,13 +910,52 @@ public static class GraphDataConverter
         if (el.ValueKind != JsonValueKind.Object)
             return false;
 
-        if (el.TryGetProperty("type", out var t) && t.GetString() == "edge")
+        if (el.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "edge")
             return true;
 
         if (el.TryGetProperty("outV", out _) || el.TryGetProperty("inV", out _))
             return true;
 
+        if (HasElementMapEnds(el))
+            return true;
+
+        if (IsEdgeWithoutEnds(el))
+            return true;
+
         return false;
+    }
+
+    ///<summary>
+    ///Whether the element is an edge that names neither of its ends, which is what valueMap(true) answers for an edge on
+    ///JanusGraph: an element that is its own bag, whose id JanusGraph types as the edge's RelationIdentifier. It has an
+    ///id and a label and no outV, as a vertex does, so until 2026-09-29 it read as a vertex, drawn as a node, and an edit
+    ///or a drop of it went to g.V() with the edge's id. No vertex has such an id. A vertex property does, and reads as
+    ///its id, its label and its value, so an element with a value is left to read as it did. Elsewhere nothing on the
+    ///wire tells such an edge from a vertex: an edge's values are single where a vertex's are lists, but so are a
+    ///vertex's under valueMap(true).by(unfold()).
+    ///</summary>
+    private static bool IsEdgeWithoutEnds(JsonElement el)
+    {
+        return el.TryGetProperty("id", out var id)
+            && IsRelationIdentifier(id)
+            && el.TryGetProperty("label", out _)
+            && !el.TryGetProperty("value", out _)
+            && !el.TryGetProperty("outV", out _)
+            && !el.TryGetProperty("inV", out _)
+            && !HasElementMapEnds(el);
+    }
+
+    ///<summary>
+    ///Whether the element names its ends as an edge's elementMap() does: IN and OUT, keyed by g:Direction tokens on
+    ///the wire and by the words untyped, each a map of that vertex's id and label. It has an id and a label and no
+    ///outV, as a vertex does, so without this an edge's element map read as a vertex (until 2026-09-27).
+    ///</summary>
+    private static bool HasElementMapEnds(JsonElement el)
+    {
+        return el.TryGetProperty("IN", out var inEnd)
+            && inEnd.ValueKind == JsonValueKind.Object
+            && el.TryGetProperty("OUT", out var outEnd)
+            && outEnd.ValueKind == JsonValueKind.Object;
     }
 
     #endregion
@@ -650,10 +970,43 @@ public static class GraphDataConverter
         if (!el.TryGetProperty("id", out var idProp))
             return null;
 
-        if (idProp.ValueKind == JsonValueKind.Object && idProp.TryGetProperty("@value", out var inner))
-            return inner.ToString();
+        return IdText(idProp);
+    }
 
-        return idProp.ToString();
+    ///<summary>The GraphSON type JanusGraph gives an edge's id, and a vertex property's.</summary>
+    private const string RelationIdentifierType = "janusgraph:RelationIdentifier";
+
+    ///<summary>
+    ///An element's id as the text the viewer shows it by and quotes into a query for it: a typed id as the text of its
+    ///value, a number's digits and a string as it is, and an untyped one as it is. But JanusGraph's edge id, typed
+    ///{"@type":"janusgraph:RelationIdentifier","@value":{"relationId":"4r-6c-2dx-3bk"}}, as its relationId, which is
+    ///how JanusGraph writes an edge's id and resolves one: g.E('4r-6c-2dx-3bk'). Until 2026-09-27 it read as the JSON
+    ///text {"relationId":"4r-6c-2dx-3bk"}, and every edit and drop of the edge was sent as g.E('{"relationId":…}'),
+    ///which JanusGraph cannot parse into an edge id. The connections panel's reading of an edge's id
+    ///(<see cref="GremlinQueryBuilderAdapter"/>) and the commit's of an added element's (<see cref="StagedIds"/>) go
+    ///through this too, so one edge has one id wherever it was read.
+    ///</summary>
+    public static string IdText(JsonElement id)
+    {
+        if (id.ValueKind != JsonValueKind.Object || !id.TryGetProperty("@value", out var value))
+            return id.ToString();
+
+        if (IsRelationIdentifier(id)
+            && value.ValueKind == JsonValueKind.Object
+            && value.TryGetProperty("relationId", out var relation)
+            && relation.ValueKind == JsonValueKind.String)
+            return relation.GetString();
+
+        return value.ToString();
+    }
+
+    ///<summary>Whether an id is typed as JanusGraph's RelationIdentifier, which <see cref="IdText"/> reads as its relationId.</summary>
+    public static bool IsRelationIdentifier(JsonElement id)
+    {
+        return id.ValueKind == JsonValueKind.Object
+            && id.TryGetProperty("@type", out var type)
+            && type.ValueKind == JsonValueKind.String
+            && type.GetString() == RelationIdentifierType;
     }
 
     ///<summary>The GraphSON id type (e.g. "g:Int64") of a vertex / edge, or null when the id carries no
@@ -684,58 +1037,71 @@ public static class GraphDataConverter
         return prop.ToString();
     }
 
+    //The id of an edge's end, "outV" or "inV": where the edge names it, or where its elementMap() does, the vertex's
+    //id in the map under OUT or IN. An end written null is no end. The staged-edit preview writes the ends it does not
+    //know that way, an edge's that came without them or a staged one's left unnamed, and read as text a null is "": both
+    //canvases drew a node with no id and an edge to it (until 2026-10-03).
     private static string GetEdgeVertexId(JsonElement edge, string direction)
     {
-        if (!edge.TryGetProperty(direction, out var val))
-            return null;
+        if (edge.TryGetProperty(direction, out var val))
+        {
+            if (val.ValueKind == JsonValueKind.Null)
+                return null;
 
-        if (val.ValueKind == JsonValueKind.Object && val.TryGetProperty("@value", out var inner))
-            return inner.ToString();
+            if (val.ValueKind == JsonValueKind.Object && val.TryGetProperty("@value", out var inner))
+                return inner.ToString();
 
-        return val.ToString();
+            return val.ToString();
+        }
+
+        string end;
+
+        if (direction == "outV")
+            end = "OUT";
+        else
+            end = "IN";
+
+        if (HasElementMapEnds(edge))
+            return GetId(UnwrapGraphSON(edge.GetProperty(end)));
+
+        return null;
     }
 
+    ///<summary>
+    ///A node's caption: the first of its display properties it has (<see cref="DisplayPropertyNames"/>), read from the
+    ///properties already extracted for it, so that it is the text its properties panel shows, a typed number as its
+    ///digits and a boolean as true or false; else its label and its id. An element that is its own bag, an elementMap()
+    ///or a projection, is captioned from what it holds as a vertex is. Until 2026-09-27 the caption read the element's
+    ///properties object again on its own, as the wire has it: on GraphSON 3 a typed value captioned as its wrapper's
+    ///JSON and a boolean as C#'s "True", and an element with no properties object read as its label and id whatever
+    ///it was named.
+    ///</summary>
     private static string ExtractLabel(JsonElement vertex, IReadOnlyDictionary<string, LabelStyle> styles, IReadOnlyDictionary<string, string> properties)
     {
         string id = GetId(vertex) ?? "?";
         string typeLabel = GetStringProp(vertex, "label");
-        string perNodeDisplay = properties?.GetValueOrDefault(GdbvKeys.Display);
 
-        if (vertex.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var propName in DisplayPropertyNames(typeLabel, styles, perNodeDisplay))
-            {
-                if (!props.TryGetProperty(propName, out var propVal))
-                    continue;
-
-                if (propVal.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var entry in propVal.EnumerateArray())
-                    {
-                        var unwrapped = UnwrapGraphSON(entry);
-                        if (unwrapped.TryGetProperty("value", out var val))
-                            return val.ToString();
-                        if (unwrapped.ValueKind == JsonValueKind.String)
-                            return unwrapped.GetString();
-                    }
-                }
-                else if (propVal.ValueKind == JsonValueKind.String)
-                {
-                    return propVal.GetString();
-                }
-                else if (propVal.ValueKind == JsonValueKind.Object)
-                {
-                    var unwrapped = UnwrapGraphSON(propVal);
-                    if (unwrapped.TryGetProperty("value", out var val))
-                        return val.ToString();
-                }
-            }
-        }
+        foreach (var propName in DisplayPropertyNames(typeLabel, styles, properties?.GetValueOrDefault(GdbvKeys.Display)))
+            if (properties != null && properties.TryGetValue(propName, out var caption))
+                return caption;
 
         if (typeLabel != null)
             return $"{typeLabel} ({id})";
 
         return id;
+    }
+
+    ///<summary>A table row's caption, as the canvas draws its vertex: the property the styles say to display, else a name, else its label and id.</summary>
+    public static string CaptionOf(GraphRow row, IReadOnlyDictionary<string, LabelStyle> styles)
+    {
+        foreach (var propName in DisplayPropertyNames(row.Label, styles, row.Properties?.GetValueOrDefault(GdbvKeys.Display)))
+            if (row.Properties != null && row.Properties.TryGetValue(propName, out var caption))
+                return caption;
+
+        if (row.Label != null)
+            return $"{row.Label} ({row.Id})";
+
+        return row.Id;
     }
 
     //Property names tried (in order) for a node's display label: the node's own gdbvDisplay
@@ -780,64 +1146,124 @@ public static class GraphDataConverter
         return true;
     }
 
-    ///<summary>Extracts an element's properties into a flat name→value dictionary, unwrapping GraphSON property shapes and skipping id/label/type metadata.</summary>
+    //An element's own metadata, skipped when the element itself is the property bag. These are names the
+    //wire gives the element, not names a database gave a value. Inside a "properties" object they are not
+    //metadata at all, so this is not applied there — see ExtractProperties.
+    private static readonly HashSet<string> ElementMetadataNames = new() { "id", "label", "type", "outV", "inV", "outVLabel", "inVLabel" };
+
+    ///<summary>Extracts an element's properties into a flat name→value dictionary, unwrapping GraphSON property shapes and skipping id/label/type metadata when the element itself is the bag.</summary>
     public static Dictionary<string, string> ExtractProperties(JsonElement element)
     {
         var result = new Dictionary<string, string>();
-        var skip = new HashSet<string> { "id", "label", "type", "outV", "inV", "outVLabel", "inVLabel" };
 
-        if (element.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
-        {
+        //A projection's properties map is typed as a g:Map on GraphSON 3, and read as the object it stands for.
+        JsonElement props = default;
+
+        if (element.TryGetProperty("properties", out var rawProps))
+            props = UnwrapGraphSON(rawProps);
+
+        if (props.ValueKind == JsonValueKind.Object)
+            //Everything in an element's own properties object is the element's data, and nothing is
+            //skipped. An element's metadata sits beside that object and never inside it — every converter
+            //strips its own before building one — so a property genuinely named label, type or id is a
+            //value somebody stored. rdfs:label above all: it captions the node on the canvas, and until
+            //2026-09-16 it was missing from the table, the properties panel and everything built on them.
             foreach (var prop in props.EnumerateObject())
-            {
-                if (skip.Contains(prop.Name) || prop.Name.StartsWith("_"))
-                    continue;
-
                 //The value itself is typed too in GraphSON 3 — {"@type":"g:Double","@value":48.2} — so it is
                 //unwrapped like the property that carries it, or a number reads as a JSON blob and no
-                //parser downstream (coordinates, pinned positions, sizes) can make anything of it. A
-                //JsonElement's ToString gives a number's raw text, which is culture-invariant by nature.
-                if (prop.Value.ValueKind == JsonValueKind.Array)
+                //parser downstream (coordinates, pinned positions, sizes) can make anything of it. Its text
+                //is invariant whatever the browser's culture: ValueText's for a value read out of a list or a
+                //wrapper, the wire's own for a bare one.
+                if (prop.Value.ValueKind == JsonValueKind.Array || prop.Value.ValueKind == JsonValueKind.Object)
                 {
-                    foreach (var entry in prop.Value.EnumerateArray())
-                    {
-                        var unwrapped = UnwrapGraphSON(entry);
-                        if (unwrapped.TryGetProperty("value", out var val))
-                        {
-                            result[prop.Name] = ValueText(UnwrapGraphSON(val));
-                            break;
-                        }
-                        result[prop.Name] = ValueText(unwrapped);
-                        break;
-                    }
-                }
-                else if (prop.Value.ValueKind == JsonValueKind.Object)
-                {
-                    var unwrapped = UnwrapGraphSON(prop.Value);
-                    if (unwrapped.TryGetProperty("value", out var val))
-                        result[prop.Name] = ValueText(UnwrapGraphSON(val));
-                    else
-                        result[prop.Name] = ValueText(unwrapped);
+                    if (HeldValueText(prop.Value, out var text))
+                        result[prop.Name] = text;
                 }
                 else
-                {
-                    result[prop.Name] = prop.Value.ToString();
-                }
-            }
-        }
+                    //The value itself, as untyped GraphSON gives an edge's: GraphSON 1's, and Cosmos DB's.
+                    result[prop.Name] = PlainText(prop.Value);
         else
-        {
+            //Here the element is the bag: a projected map or a document, where the wire's own names sit
+            //among the stored ones and there is nothing else to tell them apart by.
             foreach (var prop in element.EnumerateObject())
             {
-                if (skip.Contains(prop.Name) || prop.Name.StartsWith("_"))
+                if (ElementMetadataNames.Contains(prop.Name) || prop.Name.StartsWith("_"))
                     continue;
-                 
-                if (prop.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
-                    result[prop.Name] = prop.Value.ToString();
+
+                //A scalar GraphSON 3 types, every number, a date and a UUID, reads as the value it wraps, through
+                //the reading a vertex property's typed value gets above. Until 2026-09-27 only a bare scalar was
+                //read here, and a typed one was dropped: a projection's numbers had no column in the table.
+                if (IsScalar(prop.Value))
+                    result[prop.Name] = PlainText(prop.Value);
+                else if (IsTypedScalar(prop.Value))
+                    result[prop.Name] = ValueText(UnwrapGraphSON(prop.Value));
+                else if (FirstOfList(prop.Value, out var first))
+                    result[prop.Name] = first;
             }
-        }
 
         return result;
+    }
+
+    ///<summary>
+    ///What an element's properties object holds under a name, as text: a vertex's list of vertex properties as the first
+    ///one's value, an edge's property as its value, and a value held as it is, typed by GraphSON 3 or not, as itself. A
+    ///list reads as its first entry whatever the entry is, so a projection's valueMap() lists of plain values read as a
+    ///vertex's own properties do, and an empty list is no value. Until 2026-10-31 only a vertex property or an edge's
+    ///property was read out of a list or a wrapper, and a plain value there, the list's or a typed number standing
+    ///alone, threw: project('id','label','properties').by(id).by(label).by(valueMap()) could not be read at all.
+    ///</summary>
+    private static bool HeldValueText(JsonElement held, out string text)
+    {
+        text = null;
+
+        var value = UnwrapGraphSON(held);
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            if (value.GetArrayLength() == 0)
+                return false;
+
+            value = UnwrapGraphSON(value[0]);
+        }
+
+        if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty("value", out var inner))
+            value = UnwrapGraphSON(inner);
+
+        text = ValueText(value);
+
+        return true;
+    }
+
+    ///<summary>
+    ///A list as the text of its first value, where the element is its own bag: what valueMap(true) answers for each of a
+    ///vertex's properties, a list because a vertex property can hold more than one value. It reads as the first, which is
+    ///how a vertex's own properties object has always been read above, so the same vertex reads the same whichever of the
+    ///two brought it (the user's choice, 2026-09-29, over the values joined or the list's JSON). A list GraphSON 3 types
+    ///(g:List, g:Set) or a plain one, a typed value in it read as a vertex property's typed value is, and a vertex property
+    ///in it, as propertyMap() answers, read as its value. An empty list, and one whose first value has no one text, are no
+    ///value. Until 2026-09-29 every list was dropped here, and a valueMap(true) answer had no column but its id and label,
+    ///its nodes captioned by those two, although the viewer's own "Vertices + props" example asks for exactly that.
+    ///</summary>
+    private static bool FirstOfList(JsonElement value, out string text)
+    {
+        text = "";
+
+        var list = UnwrapGraphSON(value);
+
+        if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() == 0)
+            return false;
+
+        var first = UnwrapGraphSON(list[0]);
+
+        if (first.ValueKind == JsonValueKind.Object && first.TryGetProperty("value", out var held))
+            first = UnwrapGraphSON(held);
+
+        if (!IsScalar(first))
+            return false;
+
+        text = ValueText(first);
+
+        return true;
     }
 
     #endregion
@@ -876,11 +1302,8 @@ public static class GraphDataConverter
         var seenEdges = new HashSet<string>();
 
         if (results.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in results.EnumerateArray())
+            foreach (var unwrapped in ResultElements(results))
             {
-                var unwrapped = UnwrapGraphSON(item);
-
                 if (TryExtractTraversalTriple(unwrapped, out var v, out var e, out var o))
                 {
                     AddTableNode(table, seenNodes, v);
@@ -888,17 +1311,31 @@ public static class GraphDataConverter
                     AddTableEdge(table, seenEdges, e);
                 }
                 else if (IsVertex(unwrapped))
-                {
                     AddTableNode(table, seenNodes, unwrapped);
-                }
                 else if (IsEdge(unwrapped))
-                {
                     AddTableEdge(table, seenEdges, unwrapped);
-                }
             }
-        }
 
         return table;
+    }
+
+    ///<summary>
+    ///Why a result cannot be read as a graph, or null when it can: what <see cref="ToTable"/> threw on it. Every reader of
+    ///a result walks it as ToTable does, element by element through the same helpers, so a result ToTable reads is one
+    ///the others read too, and one it throws on is a shape none of them expected.
+    ///</summary>
+    public static string WhyUnreadable(JsonElement results)
+    {
+        try
+        {
+            ToTable(results);
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
     }
 
     ///<summary>
@@ -967,19 +1404,15 @@ public static class GraphDataConverter
         var seenIds = new HashSet<string>();
         var seenText = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var item in results.EnumerateArray())
+        foreach (var unwrapped in ResultElements(results))
         {
-            var unwrapped = UnwrapGraphSON(item);
-
             if (TryExtractTraversalTriple(unwrapped, out var v, out _, out var o))
             {
                 AddSuggestion(suggestions, seenIds, seenText, v, styles);
                 AddSuggestion(suggestions, seenIds, seenText, o, styles);
             }
             else if (IsVertex(unwrapped))
-            {
                 AddSuggestion(suggestions, seenIds, seenText, unwrapped, styles);
-            }
         }
 
         suggestions.Sort(StringComparer.OrdinalIgnoreCase);
@@ -1038,13 +1471,16 @@ public static class GraphDataConverter
         if (!seen.Add(id))
             return;
 
+        //The table shows the data as it came: an end the edge does not name stays empty, and the row stays, where the
+        //canvases draw nothing. Until 2026-11-07 the missing end was filled in from the other, and the row said the edge
+        //was a loop on the end it named.
         var row = new GraphRow
         {
             Id = id,
             IdType = GetIdType(edge),
             Label = GetStringProp(edge, "label") ?? "edge",
-            Source = GetEdgeVertexId(edge, "outV") ?? GetEdgeVertexId(edge, "inV"),
-            Target = GetEdgeVertexId(edge, "inV") ?? GetEdgeVertexId(edge, "outV"),
+            Source = GetEdgeVertexId(edge, "outV"),
+            Target = GetEdgeVertexId(edge, "inV"),
             Properties = ExtractProperties(edge)
         };
 
@@ -1235,9 +1671,7 @@ public static class GraphDataConverter
                 edgesById.Remove(key);
         }
         else if (edit.Kind == GraphEditKind.RemoveEdge)
-        {
             edgesById.Remove(edit.Id);
-        }
         else if (edit.Kind == GraphEditKind.SetProperty)
         {
             var row = FindRow(edit, nodesById, edgesById);
@@ -1261,11 +1695,8 @@ public static class GraphDataConverter
             if (nodesById.TryGetValue(edit.Id, out var n))
                 return n;
         }
-        else
-        {
-            if (edgesById.TryGetValue(edit.Id, out var e))
-                return e;
-        }
+        else if (edgesById.TryGetValue(edit.Id, out var e))
+            return e;
 
         return null;
     }
@@ -1314,13 +1745,31 @@ public static class GraphDataConverter
         return "";
     }
 
+    //A cell a spreadsheet would run is written behind an apostrophe, which Excel and LibreOffice read as "text
+    //follows", before the quoting. The apostrophe shows when Excel imports the CSV; that is the price of a CSV that
+    //cannot run anything. Until 2026-11-07 the value went out as it stood, and a stored =HYPERLINK(...) was a link.
     private static string CsvEscape(string value)
     {
         value ??= "";
+
+        if (RunsAsAFormula(value))
+            value = "'" + value;
+
         if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
             return "\"" + value.Replace("\"", "\"\"") + "\"";
 
         return value;
+    }
+
+    //Whether Excel or LibreOffice would run the cell as a formula when it opens the CSV: it begins with =, +, -, @, a
+    //tab or a carriage return (OWASP's CSV injection: =cmd|' /C calc'!A0 runs a program). A cell that reads as a plain
+    //number, -5 or +3.5, is one, and is left alone.
+    private static bool RunsAsAFormula(string value)
+    {
+        if (value.Length == 0 || value[0] is not ('=' or '+' or '-' or '@' or '\t' or '\r'))
+            return false;
+
+        return !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
     }
 
     #endregion

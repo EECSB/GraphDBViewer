@@ -1,0 +1,32 @@
+@page "/embed"
+@namespace GraphDBViewerWeb.Pages
+@layout EmbedLayout
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@inject GraphDBViewerWeb.Code.EmbedSession Session
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+@*The viewer embedded in another site (2026-10-21, DESIGN.md's embeddable viewer, the user's call: any site, in an
+  iframe, reading with a read-only token the page that embeds it passes). The viewer page itself, without the shell
+  around it and without what sets it up (Home's Embedded), showing what the address's query string says
+  (EmbedSettings). Served to anybody, since what it reads it reads with the token, and framed by anybody: the host
+  lets any site frame this page and no other of its own. And talking with the page around it when the address names
+  that page's origin (2026-10-23): a query, a view and a theme from it, the result and the selection back, all in Home
+  (Home.EmbedMessages.cs) and its browser half (EmbedMessagesInterop.js), since what they act on is Home's.*@
+<Home Embedded="true" />
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        //Read by now, since the session was made for this page before the viewer asked the host anything, the token goes
+        //from the address: a frame opened in a tab of its own, or its address copied, carries none.
+        if (!firstRender || Session.Token == null)
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("history.replaceState", null, "", Nav.Uri.Split('#')[0]);
+        }
+        catch { }
+    }
+}

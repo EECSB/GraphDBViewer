@@ -1,16 +1,16 @@
 ﻿<div class="border rounded p-2" style="height: 15em; overflow-y: auto;">
     @if (History.Count == 0)
     {
-        <div class="text-muted" style="font-size: 0.8em;">No queries run yet. Queries you run from the Query tab appear here.</div>
+        <div class="gdbv-text-sm text-muted">No queries run yet. Queries you run from the Query tab appear here.</div>
     }
     else
     {
-        <div class="text-muted mb-2" style="font-size: 0.75em;">Last @History.Count run quer@(History.Count == 1 ? "y" : "ies"): click to load into the Query tab.</div>
+        <div class="gdbv-text-xs text-muted mb-2">Last @History.Count run quer@(History.Count == 1 ? "y" : "ies"): click to load into the Query tab.</div>
         <div class="list-group list-group-flush">
             @foreach (var q in History)
             {
                 var query = q;
-                <button type="button" class="list-group-item list-group-item-action py-1 px-2 text-truncate" style="font-size: 0.78em; font-family: monospace;" title="@query" @onclick="() => OnSelect.InvokeAsync(query)">
+                <button type="button" class="gdbv-text-sm font-monospace list-group-item list-group-item-action py-1 px-2 text-truncate" title="@query" @onclick="() => OnSelect.InvokeAsync(query)">
                     @query
                 </button>
             }

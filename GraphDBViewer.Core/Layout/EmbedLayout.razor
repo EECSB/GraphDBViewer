@@ -1,0 +1,26 @@
+@inherits LayoutComponentBase
+@inject GraphDBViewerWeb.Code.ShellState Shell
+@inject NavigationManager Nav
+
+@*The embedded viewer's (2026-10-21, Embed.razor): the page and nothing around it, since it sits in another site's
+  frame, with no bar, no menu and nobody signed in. The theme is the address's to say, so the viewer can match the
+  page around it (EmbedSettings' theme), and the viewer's own where it says none.*@
+<main class="gdbv-embed" data-testid="embed">
+    @Body
+</main>
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        //What an embedded viewer keeps is kept in memory, so this loads the defaults, and applies them.
+        await Shell.LoadAsync();
+
+        var theme = GraphDBViewerWeb.Code.EmbedSettings.Parse(new Uri(Nav.Uri).Query).Theme;
+
+        if (theme != null)
+            await Shell.SetThemeAsync(theme);
+    }
+}

@@ -1,0 +1,289 @@
+@namespace GraphDBViewerWeb.Components
+@using GraphDBViewerWeb.Code
+@inject IAppStorage Storage
+@inject IEnumerable<IBoardPanel> Offered
+
+@*The panel board (panel-boards spec, ADR 0018): a page's panels in rows of columns, as the person arranged them from
+   one of the page's presets. The page hands over what its panels are and its presets, and renders each panel when the
+   board asks for it by id; the board draws them in order, offers the Layout menu and Customize, and keeps the
+   arrangement in the person's workspace, per page and per preset.
+
+   Plugins offer panels of their own to every board (ADR 0019): each is listed with the page's, hidden in every preset
+   until the person shows it with Customize, and drawn by the plugin's component given the page's key; one whose
+   permission the person lacks is not offered.
+
+   Nothing is drawn until the kept arrangement is read, so a page never jumps from its default to the person's own.
+   Dragging is HTML5's, which Firefox starts only once the drag has data: the board's own attribute gives it some,
+   since an element cannot carry both a script attribute and Blazor's handler of one name.
+
+   Rows, columns and panels are keyed by what they are, not where they fall: a panel that starts showing above another
+   would otherwise take over the other's place, and the page's component in it would be made again, losing what was
+   open and typed in it.*@
+@if (arranged != null)
+{
+    <div class="gdbv-board @(customizing ? "gdbv-board-customizing" : null)" data-testid="board" data-preset="@preset.Id"
+         ondragstart="if (event.dataTransfer) event.dataTransfer.setData('text/plain', 'panel');">
+
+        <div class="d-flex flex-wrap justify-content-end align-items-center gap-2 mb-3">
+            @if (customizing)
+            {
+                <span class="small text-body-secondary me-auto"><i class="bi bi-arrows-move me-1"></i>Drag a panel by its grip, or move it with its arrows.</span>
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="BackToPresetAsync" data-testid="board-reset"><i class="bi bi-arrow-counterclockwise me-1"></i>Back to the preset</button>
+                <button type="button" class="btn btn-primary btn-sm" @onclick="() => customizing = false" data-testid="board-done"><i class="bi bi-check2 me-1"></i>Done</button>
+            }
+            else
+            {
+                <div class="position-relative">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => choosing = !choosing" title="Layout" data-testid="board-layout"><i class="bi @preset.Icon me-1"></i>@preset.Name <span class="ms-1">@(choosing ? "▲" : "▼")</span></button>
+
+                    @if (choosing)
+                    {
+                        @* Transparent full-viewport backdrop, as the bar's menus have: a click anywhere else closes it. *@
+                        <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="() => choosing = false"></div>
+
+                        @* Compact, as the bar's theme menu is: the layout that is on is highlighted rather than ticked. *@
+                        <div class="card position-absolute end-0 mt-1 p-1 shadow" style="z-index: 1080;">
+                            @foreach (var choice in presets)
+                            {
+                                <button type="button" class="dropdown-item rounded d-flex align-items-center gap-2 gdbv-menu-row @(choice.Id == preset.Id ? "bg-primary-subtle text-primary-emphasis fw-semibold" : "")" aria-pressed="@(choice.Id == preset.Id ? "true" : "false")" @onclick="() => ChooseAsync(choice.Id)" data-testid="board-preset" data-preset="@choice.Id">
+                                    <i class="bi @choice.Icon"></i>
+                                    <span>@choice.Name</span>
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => customizing = true" data-testid="board-customize"><i class="bi bi-sliders me-1"></i>Customize</button>
+            }
+        </div>
+
+        @if (customizing && arranged.Hidden.Count > 0)
+        {
+            <div class="gdbv-board-hidden d-flex flex-wrap align-items-center gap-2 mb-3" data-testid="board-hidden">
+                <span class="small text-body-secondary">Hidden:</span>
+
+                @foreach (var id in arranged.Hidden)
+                {
+                    var panel = byId[id];
+
+                    <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => ChangeAsync(a => PanelArranging.Show(a, preset, panel))" title="Show it again" data-testid="board-show" data-panel="@id"><i class="bi bi-eye me-1"></i>@panel.Title</button>
+                }
+            </div>
+        }
+
+        @{
+            var columns = preset.Columns;
+            var first = 0;
+        }
+
+        @foreach (var row in preset.Rows)
+        {
+            var drawn = Enumerable.Range(first, row.Columns.Count).Where(c => customizing || arranged.Columns[c].Any(id => byId[id].Shown)).ToList();
+            var widths = PanelArranging.Share(drawn.Select(c => columns[c].Width).ToList());
+
+            first += row.Columns.Count;
+
+            @if (drawn.Count > 0)
+            {
+                <div class="row g-3 gdbv-board-row" @key="row">
+                    @for (var d = 0; d < drawn.Count; d++)
+                    {
+                        var column = drawn[d];
+                        var width = widths[d];
+                        var ids = arranged.Columns[column];
+
+                        <div class="col-xl-@width" @key="column">
+                            <div class="gdbv-board-column" data-testid="board-column" data-column="@column" @ondragover:preventDefault="true" @ondrop="() => DropAsync(column, null)">
+                                @for (var i = 0; i < ids.Count; i++)
+                                {
+                                    var id = ids[i];
+                                    var panel = byId[id];
+                                    var index = i;
+
+                                    @if (customizing)
+                                    {
+                                        <div class="gdbv-board-tile @(over == id ? "gdbv-board-over" : null)" @key="id" draggable="true" data-testid="board-tile" data-panel="@id"
+                                             @ondragstart="() => dragging = id" @ondragend="EndDrag" @ondragenter="() => over = id"
+                                             @ondragover:preventDefault="true" @ondrop="() => DropAsync(column, id)" @ondrop:stopPropagation="true">
+                                            <i class="bi bi-grip-vertical gdbv-board-grip" title="Drag to move"></i>
+                                            <i class="bi @panel.Icon"></i>
+                                            <span class="gdbv-board-title">@panel.Title</span>
+
+                                            @if (!panel.Shown)
+                                            {
+                                                <span class="small text-body-secondary">nothing to show now</span>
+                                            }
+
+                                            <span class="ms-auto d-flex gap-1">
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" title="Up" disabled="@(index == 0)" @onclick="() => ChangeAsync(a => PanelArranging.MoveUp(a, preset, panel))" data-testid="board-up"><i class="bi bi-arrow-up"></i></button>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" title="Down" disabled="@(index == ids.Count - 1)" @onclick="() => ChangeAsync(a => PanelArranging.MoveDown(a, preset, panel))" data-testid="board-down"><i class="bi bi-arrow-down"></i></button>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" title="To the column before" disabled="@(PanelArranging.Beside(arranged, preset, panel, -1) < 0)" @onclick="() => ChangeAsync(a => PanelArranging.MoveBeside(a, preset, panel, -1))" data-testid="board-before"><i class="bi bi-arrow-left"></i></button>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" title="To the column after" disabled="@(PanelArranging.Beside(arranged, preset, panel, 1) < 0)" @onclick="() => ChangeAsync(a => PanelArranging.MoveBeside(a, preset, panel, 1))" data-testid="board-after"><i class="bi bi-arrow-right"></i></button>
+
+                                                @if (!panel.Required)
+                                                {
+                                                    <button type="button" class="btn btn-outline-secondary btn-sm" title="Hide" @onclick="() => ChangeAsync(a => PanelArranging.Hide(a, panel))" data-testid="board-hide"><i class="bi bi-eye-slash"></i></button>
+                                                }
+                                            </span>
+                                        </div>
+                                    }
+                                    else if (panel.Shown && offeredById.TryGetValue(id, out var offer))
+                                    {
+                                        <section class="gdbv-board-panel" data-panel="@id" data-offered="true" @key="id">
+                                            <DynamicComponent Type="@offer.Component" Parameters="@(new Dictionary<string, object> { ["PageKey"] = PageKey })" />
+                                        </section>
+                                    }
+                                    else if (panel.Shown && ChildContent != null)
+                                    {
+                                        <section class="gdbv-board-panel" data-panel="@id" @key="id">@ChildContent(new PanelSlot(id, width))</section>
+                                    }
+                                }
+
+                                @if (customizing)
+                                {
+                                    <div class="gdbv-board-end">Drop here</div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </div>
+}
+
+@code {
+    ///<summary>The page's own name for the board, which names what is kept: <c>treeality.scheduling/schedule</c>.</summary>
+    [Parameter, EditorRequired] public string PageKey { get; set; }
+
+    [Parameter, EditorRequired] public IReadOnlyList<PanelInfo> Panels { get; set; }
+
+    [Parameter, EditorRequired] public IReadOnlyList<PanelPreset> Presets { get; set; }
+
+    ///<summary>A panel's content, asked for by its id with the width of the column it is in.</summary>
+    [Parameter] public RenderFragment<PanelSlot> ChildContent { get; set; }
+
+    ///<summary>Who is signed in, cascaded by the layout: the panels plugins offer are offered by their permissions.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private PanelsKept kept;
+    private PanelPreset preset;
+    private PanelArrangement arranged;
+    private Dictionary<string, PanelInfo> byId = [];
+    private Dictionary<string, IBoardPanel> offeredById = [];
+    private IReadOnlyList<PanelInfo> panels = [];
+    private IReadOnlyList<PanelPreset> presets = [];
+    private string arrangedFor;
+    private bool customizing;
+    private bool choosing;
+    private string dragging;
+    private string over;
+
+    private string Key => PanelsKept.KeyFor(PageKey);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            kept = await Storage.GetAsync<PanelsKept>(Key);
+        }
+        catch
+        {
+            //Nothing kept, or the workspace cannot be read: the page's default, which is a page that works.
+        }
+
+        kept ??= new PanelsKept();
+        kept.Arrangements ??= [];
+        Gather();
+        Arrange();
+    }
+
+    ///<summary>The page's panels are read every time it draws, and the arrangement read again when it lists other panels.</summary>
+    protected override void OnParametersSet()
+    {
+        Gather();
+
+        if (kept != null && arrangedFor != Ids())
+            Arrange();
+    }
+
+    ///<summary>The page's panels and presets with the panels plugins offer this person.</summary>
+    private void Gather()
+    {
+        var offered = BoardPanels.OfferedTo(Offered, Panels, permission => Account?.Can(permission) == true);
+
+        panels = BoardPanels.With(Panels, offered);
+        presets = BoardPanels.With(Presets, offered);
+        byId = panels.ToDictionary(p => p.Id);
+        offeredById = offered.ToDictionary(o => o.Id);
+    }
+
+    private void Arrange()
+    {
+        preset = PanelArranging.PresetOf(kept, presets);
+        arranged = PanelArranging.Resolve(kept.Arrangements.GetValueOrDefault(preset.Id), preset, panels);
+        arrangedFor = Ids();
+    }
+
+    private string Ids()
+    {
+        return string.Join("|", panels.Select(p => p.Id));
+    }
+
+    private async Task ChooseAsync(string id)
+    {
+        choosing = false;
+        kept.Preset = id;
+        Arrange();
+        await KeepAsync();
+    }
+
+    private async Task BackToPresetAsync()
+    {
+        kept.Arrangements.Remove(preset.Id);
+        Arrange();
+        await KeepAsync();
+    }
+
+    private async Task ChangeAsync(Func<PanelArrangement, bool> change)
+    {
+        if (change(arranged))
+        {
+            kept.Arrangements[preset.Id] = arranged;
+            await KeepAsync();
+        }
+    }
+
+    private async Task DropAsync(int column, string before)
+    {
+        var moving = dragging;
+
+        EndDrag();
+
+        if (moving == null || !byId.TryGetValue(moving, out var panel))
+            return;
+
+        await ChangeAsync(a => PanelArranging.Move(a, preset, panel, column, before));
+    }
+
+    private void EndDrag()
+    {
+        dragging = null;
+        over = null;
+    }
+
+    private async Task KeepAsync()
+    {
+        kept.Preset = preset.Id;
+
+        try
+        {
+            await Storage.SetAsync(Key, kept);
+        }
+        catch
+        {
+            //Not kept this time: the page is arranged as asked all the same, and the next change tries again.
+        }
+    }
+}

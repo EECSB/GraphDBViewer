@@ -15,7 +15,7 @@ namespace GraphDBViewerWeb.Code;
 ///The interop hands back the same driver-agnostic envelope the .NET driver builds, so
 ///<see cref="Neo4jConverter"/> does the record→graph mapping for both.
 ///</summary>
-public sealed class Neo4jBrowserDb : IGraphDb
+public sealed class Neo4jBrowserDb : IGraphDb, IReadOnlyCapableGraphDb
 {
     private readonly IJSRuntime _js;
     private readonly GremlinDB.GremlinConnection _connection;
@@ -30,7 +30,21 @@ public sealed class Neo4jBrowserDb : IGraphDb
         _connection = connection;
     }
 
-    public async Task<GraphDbResult> ExecuteAsync(string query, CancellationToken cancellationToken = default)
+    public Task<GraphDbResult> ExecuteAsync(string query, CancellationToken cancellationToken = default)
+    {
+        return RunAsync(query, false, cancellationToken);
+    }
+
+    ///<summary>
+    ///Runs the query in a READ session, which Neo4j will not write in whatever the query says: the path Ask AI's
+    ///read tool takes (<see cref="IReadOnlyCapableGraphDb"/>).
+    ///</summary>
+    public Task<GraphDbResult> ExecuteReadOnlyAsync(string query, CancellationToken cancellationToken = default)
+    {
+        return RunAsync(query, true, cancellationToken);
+    }
+
+    private async Task<GraphDbResult> RunAsync(string query, bool readOnly, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -38,7 +52,7 @@ public sealed class Neo4jBrowserDb : IGraphDb
         {
             //The interop creates the driver on first use for this handle from the config, then reuses it,
             //and catches its own driver / query errors into an { "error": ".." } envelope.
-            string envelope = await _js.InvokeAsync<string>("neo4jInterop.run", cancellationToken, _handle, Config(), query ?? "");
+            string envelope = await _js.InvokeAsync<string>("neo4jInterop.run", cancellationToken, _handle, Config(), query ?? "", readOnly);
 
             return Neo4jConverter.ToGraphDbResult(envelope);
         }

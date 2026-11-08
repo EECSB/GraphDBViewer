@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
 using GraphDBViewerWeb.Code;
 
@@ -20,19 +21,22 @@ public partial class Home
     private string styleFocusLabel;//vertex-label row to highlight when the style panel is opened for a node
     private string styleFocusEdgeLabel;//edge label the style panel is focused on (opened from a selected edge)
 
-    //Tracks where the mouse was pressed so a selection drag from inside the dialog to the backdrop
-    //doesn't close the Style modal — only a press that begins on the backdrop does.
-    private bool styleBackdropMouseDown;
-
-    private void CloseStyleIfBackdrop()
-    {
-        if (styleBackdropMouseDown)
-            showStyle = false;
-    }
-
     //Style dialog scope: false = per-label, saved in this browser (default); true = per-node, saved
     //on the selected vertex in the database (written as gdbv* properties via the Generated tab).
     private bool styleToNode;
+
+    //The Style window's tabs, in the browser scope (2026-11-04, the user's pick of three layouts).
+    private const int StyleTabVertices = 0;
+    private const int StyleTabEdges = 1;
+    private const int StyleTabMap = 2;
+
+    private int styleTab = StyleTabVertices;
+
+    //The vertex labels whose rows are open on their shape, icon and 3D model.
+    private readonly HashSet<string> styleOpenRows = new();
+
+    //Whether the stylesheets' menu is open.
+    private bool styleSheetsOpen;
 
     //Opens the style panel for all labels (graph toolbar) or focused on the selected vertex's label.
     private void OpenStyleAll()
@@ -40,26 +44,46 @@ public partial class Home
         styleFocusLabel = null;
         styleFocusEdgeLabel = null;
         styleToNode = false;
+        styleTab = StyleTabVertices;
+        styleOpenRows.Clear();
+        styleSheetsOpen = false;
         showStyle = true;
     }
 
     private void OpenStyleForSelected()
     {
-        //A selected edge colors by its label — open the panel focused on the edge-color controls.
+        styleOpenRows.Clear();
+        styleSheetsOpen = false;
+
+        //A selected edge colors by its label: open the panel on the Edges tab.
         if (selectedElement != null && selectedElement.Type == "edge")
         {
             styleFocusEdgeLabel = selectedElement.Label;
             styleFocusLabel = null;
             styleToNode = false;
+            styleTab = StyleTabEdges;
             showStyle = true;
             return;
         }
 
         styleFocusEdgeLabel = null;
         styleFocusLabel = selectedElement?.GLabel;
-        //Opened from a selected component — default to styling that one node (per-node/database scope).
-        styleToNode = HasSelectedNode;
+        styleTab = StyleTabVertices;
+
+        //Its one label's row opens on the rest of its settings.
+        if (!string.IsNullOrEmpty(styleFocusLabel))
+            styleOpenRows.Add(styleFocusLabel);
+
+        //Opened from a selected component — default to styling that one node (per-node/database scope), where it can be staged.
+        styleToNode = HasSelectedNode && EditsAllowed;
         showStyle = true;
+    }
+
+    //Opens a vertex label's row on its shape, icon and 3D model, or closes it.
+    private void ToggleStyleRow(string label)
+    {
+        if (!styleOpenRows.Remove(label))
+            styleOpenRows.Add(label);
     }
 
     //True when a single vertex is selected — the per-node ("This node — database") style scope needs one.
@@ -69,7 +93,7 @@ public partial class Home
     //is shown grayed-out with a tooltip otherwise, so this is a no-op in that case.
     private void SwitchToNodeScope()
     {
-        if (!HasSelectedNode)
+        if (!HasSelectedNode || !EditsAllowed)
             return;
 
         styleToNode = true;
@@ -204,6 +228,23 @@ public partial class Home
         return "sphere";
     }
 
+    //What Detailed view does, its column's and its switch's tooltip (2026-11-06, the user: hovering it should say what it looks
+    //like and what it does on the canvas).
+    private const string DetailedViewAbout = "Detailed view: on the 2D canvas, each vertex is drawn as a small card instead of its box. The card's head is in the vertex's color, with its label and id over its name, and under it a row for each property, its name beside its value. The vertex keeps its place and its edges, which end at the card's edge, and a click, drag or right-click on the card works as on the vertex.";
+
+    //Show details on canvas (2026-11-06, the user). One vertex's own gdbvDetails wins over its label's style, as its other
+    //styles do, so in that scope the box shows the vertex's answer, or its label's where it has none.
+    private bool StyleDetailsOf(string label)
+    {
+        if (styleToNode && bool.TryParse(selectedElement?.EditableProperties.GetValueOrDefault(GdbvKeys.Details), out var own))
+            return own;
+
+        if (labelStyles.TryGetValue(label, out var s))
+            return s.Details;
+
+        return false;
+    }
+
     private string StyleDisplayOf(string label)
     {
         if (styleToNode)
@@ -211,6 +252,33 @@ public partial class Home
 
         if (labelStyles.TryGetValue(label, out var s))
             return s.DisplayProperty;
+
+        return null;
+    }
+
+    //The coordinate mapping is per label and only per label: it says which properties these vertices keep
+    //their place in, which is not a thing one vertex can have its own answer to. The per-node scope sets
+    //a place instead — gdbvLat / gdbvLon — which the geocoder writes and the property panel edits.
+    private string StyleLatitudeOf(string label)
+    {
+        if (labelStyles.TryGetValue(label, out var s))
+            return s.LatitudeProperty;
+
+        return null;
+    }
+
+    private string StyleLongitudeOf(string label)
+    {
+        if (labelStyles.TryGetValue(label, out var s))
+            return s.LongitudeProperty;
+
+        return null;
+    }
+
+    private string StylePointOf(string label)
+    {
+        if (labelStyles.TryGetValue(label, out var s))
+            return s.PointProperty;
 
         return null;
     }
@@ -272,7 +340,8 @@ public partial class Home
         await ApplyLabelStylesLiveAsync();
     }
 
-    //2D canvas shape. Redraws the graph — the shape reads through node data.
+    //2D canvas shape. On the 2D canvas only the label's nodes change, where they stand (2026-11-05, the user); anywhere else
+    //the graph is drawn again, as before.
     private async Task SetLabelShape2dAsync(string label, ChangeEventArgs e)
     {
         if (styleToNode)
@@ -283,7 +352,9 @@ public partial class Home
 
         EnsureStyle(label).Shape = e.Value?.ToString();
         await SaveTabsAsync();
-        await RenderGraphAsync();
+
+        if (!await GraphView.SetLabelShape2dAsync(label, e.Value?.ToString()))
+            await RenderGraphAsync();
     }
 
     //3D solid (built when no model is set). Redraws the graph — the 3D view rebuilds its per-node meshes.
@@ -300,6 +371,34 @@ public partial class Home
         await RenderGraphAsync();
     }
 
+    //On the 2D canvas the label's vertices get or lose their cards where they stand; anywhere else the graph is drawn again.
+    //For one vertex, ticking writes gdbvDetails "true"; unticking writes "false" only where its label's style would show
+    //the card, and otherwise takes the property away.
+    private async Task SetLabelDetailsAsync(string label, ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b;
+
+        if (styleToNode)
+        {
+            var labelOn = labelStyles.TryGetValue(label, out var s) && s.Details;
+
+            if (on)
+                OnPropertyChanged(GdbvKeys.Details, "true");
+            else if (labelOn)
+                OnPropertyChanged(GdbvKeys.Details, "false");
+            else
+                RemovePropertyIfPresent(GdbvKeys.Details);
+
+            return;
+        }
+
+        EnsureStyle(label).Details = on;
+        await SaveTabsAsync();
+
+        if (!await GraphView.SetLabelDetails2dAsync(label, on))
+            await RenderGraphAsync();
+    }
+
     private async Task SetLabelDisplayAsync(string label, ChangeEventArgs e)
     {
         if (styleToNode)
@@ -309,6 +408,29 @@ public partial class Home
         }
 
         EnsureStyle(label).DisplayProperty = e.Value?.ToString();
+        await SaveTabsAsync();
+        await RenderGraphAsync();
+    }
+
+    //Naming a coordinate property changes where every vertex of this label sits, so the graph is redrawn
+    //and the Map's coverage line recounted — the point of setting it is to see the hidden ones appear.
+    private async Task SetLabelLatitudeAsync(string label, ChangeEventArgs e)
+    {
+        EnsureStyle(label).LatitudeProperty = e.Value?.ToString();
+        await SaveTabsAsync();
+        await RenderGraphAsync();
+    }
+
+    private async Task SetLabelLongitudeAsync(string label, ChangeEventArgs e)
+    {
+        EnsureStyle(label).LongitudeProperty = e.Value?.ToString();
+        await SaveTabsAsync();
+        await RenderGraphAsync();
+    }
+
+    private async Task SetLabelPointAsync(string label, ChangeEventArgs e)
+    {
+        EnsureStyle(label).PointProperty = e.Value?.ToString();
         await SaveTabsAsync();
         await RenderGraphAsync();
     }
@@ -429,6 +551,10 @@ public partial class Home
 
         var json = JsonSerializer.Serialize(map);
         await GraphView.ApplyLabelStylesAsync(json);
+
+        //That map sets every node's color and size, an algorithm's among them, so the result is drawn again over it.
+        if (ActiveOverlay() != null)
+            await RedrawOverlayAsync();
     }
 
     #region Edge colors
@@ -463,6 +589,23 @@ public partial class Home
         await RenderGraphAsync();
     }
 
+    //What Detailed view does for an edge label, its column's and its switch's tooltip.
+    private const string EdgeDetailedViewAbout = "Detailed view: each edge of this label is drawn with a small card at its middle instead of its label: the card's head in the edge's color, with the two ends over its label, and under it a row for each property, its name beside its value.";
+
+    //Draws an edge label's edges with cards, or without, and redraws: the converter marks each edge, as it colors it.
+    private async Task SetEdgeDetailsAsync(string edgeLabel, ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b;
+
+        edgeDetails.Remove(edgeLabel);
+
+        if (on)
+            edgeDetails.Add(edgeLabel);
+
+        await SaveTabsAsync();
+        await RenderGraphAsync();
+    }
+
     //Clears a per-edge-label picked color and redraws, so the label falls back to what the current mode
     //gives it — the default gray while coloring is off, otherwise its auto color.
     private async Task ResetEdgeColorAsync(string edgeLabel)
@@ -491,13 +634,16 @@ public partial class Home
         await Storage.SetAsync(StylesheetsKey, savedStylesheets);
     }
 
-    //Deep-copies a label→style map so a saved stylesheet and a tab's live styles never alias.
+    //Deep-copies a label→style map so a saved stylesheet and a tab's live styles never alias. `with { }`
+    //rather than a field-by-field copy: this used to name each one, and a field added to LabelStyle was
+    //a field a saved stylesheet silently lost. Every member is a string or an int, so a shallow copy is
+    //a whole one.
     private static Dictionary<string, LabelStyle> CloneStyles(Dictionary<string, LabelStyle> src)
     {
         var copy = new Dictionary<string, LabelStyle>();
 
         foreach (var kv in src)
-            copy[kv.Key] = new LabelStyle { Color = kv.Value.Color, Size = kv.Value.Size, Shape = kv.Value.Shape, Shape3d = kv.Value.Shape3d, DisplayProperty = kv.Value.DisplayProperty, Icon = kv.Value.Icon, Model = kv.Value.Model };
+            copy[kv.Key] = kv.Value with { };
 
         return copy;
     }
@@ -524,6 +670,19 @@ public partial class Home
         labelStyles = CloneStyles(styles);
         await SaveTabsAsync();
         await RenderGraphAsync();
+    }
+
+    private async Task ApplyStylesheetFromMenuAsync(string name)
+    {
+        styleSheetsOpen = false;
+
+        await ApplyStylesheetAsync(name);
+    }
+
+    private async Task SaveStylesheetOnEnterAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SaveStylesheetAsync();
     }
 
     private async Task DeleteStylesheetAsync(string name)

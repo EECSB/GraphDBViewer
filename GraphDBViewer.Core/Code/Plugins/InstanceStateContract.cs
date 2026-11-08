@@ -12,13 +12,17 @@ namespace GraphDBViewerWeb.Code;
 ///</summary>
 public static class InstanceStateContract
 {
-    ///<summary>
-    ///Base path for a single key's value. The key is appended as a catch-all segment, so it may carry
-    ///its colon without any escaping games.
-    ///</summary>
+    ///<summary>The address of every key's value, which names its key in the query string (<see cref="PathFor"/>).</summary>
     public const string BasePath = "api/instance";
 
-    ///<summary>The key the installed-plugin list lives under.</summary>
+    ///<summary>The query string's name for the key.</summary>
+    public const string KeyParameter = "key";
+
+    ///<summary>
+    ///The key the installed-plugin list lives under. Read here by every boot; changed only through
+    ///<see cref="PluginInstallsContract"/>, one change at a time, as are the removed bundled plugins; an
+    ///identity marker is written the same way and deleted only with the rest of a plugin's configuration.
+    ///</summary>
     public const string InstalledPluginsKey = "plugins:installed";
 
     ///<summary>
@@ -41,21 +45,6 @@ public static class InstanceStateContract
     }
 
     ///<summary>
-    ///The last rewrite of a plugin's typed properties (ADR 0014, question 1) — its report, with the
-    ///worklist of values that would not convert. Reserved on the generic surface: the worklist quotes
-    ///raw values, so it is read through the retype endpoint, behind the install permission, only.
-    ///</summary>
-    public static string RetypeKeyFor(string pluginId)
-    {
-        return $"plugins:{pluginId}:retype";
-    }
-
-    public static bool IsRetypeKey(string key)
-    {
-        return key != null && key.StartsWith("plugins:", StringComparison.Ordinal) && key.EndsWith(":retype", StringComparison.Ordinal);
-    }
-
-    ///<summary>
     ///The identity marker trust-on-first-use records at install (ADR 0012): which origin this id was
     ///first installed from. Deliberately not deleted by uninstall — surviving is its whole job, so a
     ///later install over leftovers can be recognized as the same plugin or challenged.
@@ -63,6 +52,11 @@ public static class InstanceStateContract
     public static string IdentityKeyFor(string pluginId)
     {
         return $"plugins:{pluginId}:identity";
+    }
+
+    public static bool IsIdentityKey(string key)
+    {
+        return key != null && key.StartsWith("plugins:", StringComparison.Ordinal) && key.EndsWith(":identity", StringComparison.Ordinal);
     }
 
     ///<summary>Whether a key is some plugin's settings blob, and whose.</summary>
@@ -83,10 +77,16 @@ public static class InstanceStateContract
         return true;
     }
 
-    ///<summary>The full relative path for one key.</summary>
+    ///<summary>
+    ///The full relative address for one key: the key in the query string, where it is decoded once and exactly, as
+    ///the per-user store's is (<see cref="AppStorageContract.PathFor"/>). Until 2026-09-29 it was a catch-all segment
+    ///of the path, which made a key's own "%2F" the same text as a "/", so a plugin listed with an id holding one,
+    ///from before the host refused a "%" in an id, read and wrote its settings under the key of the id with a "/"
+    ///in its place.
+    ///</summary>
     public static string PathFor(string key)
     {
-        return $"{BasePath}/{Uri.EscapeDataString(key)}";
+        return $"{BasePath}?{KeyParameter}={Uri.EscapeDataString(key)}";
     }
 
     ///<summary>Values are opaque strings here too — the server stores what it is handed.</summary>

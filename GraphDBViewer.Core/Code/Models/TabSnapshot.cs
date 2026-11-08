@@ -1,7 +1,7 @@
 namespace GraphDBViewerWeb.Code;
 
 ///<summary>
-///Serializable snapshot of a tab for localStorage (JsonElement results are stored as raw JSON text).
+///Serializable snapshot of a tab for the workspace store (JsonElement results are stored as raw JSON text).
 ///</summary>
 public class TabSnapshot
 {
@@ -31,12 +31,18 @@ public class TabSnapshot
     public bool Show3dEdgeLabels { get; set; }
     //Nullable so a tab saved before this field existed restores with the default (on) rather than off.
     public bool? Show3dProps { get; set; }
+    //Nullable too, so a tab saved before the three sliders were kept restores with each at 100 (its "Full") rather than
+    //at nothing, while a 0 chosen at a slider's end survives.
+    public int? Draw3dLabelDistance { get; set; }
+    public int? Draw3dNodeDistance { get; set; }
+    public int? MapNodeSize { get; set; }
     public string G3dExportFormat { get; set; }
     public string ImageExportFormat { get; set; }
     public string TableExportFormat { get; set; }
     public Dictionary<string, LabelStyle> LabelStyles { get; set; }
     public int EdgeColorMode { get; set; }
     public Dictionary<string, string> EdgeColors { get; set; }
+    public List<string> EdgeDetails { get; set; }
 }
 
 ///<summary>

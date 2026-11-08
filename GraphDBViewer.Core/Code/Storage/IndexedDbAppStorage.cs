@@ -18,7 +18,7 @@ namespace GraphDBViewerWeb.Code;
 ///Writes are best-effort: a failed write (a full quota, or IndexedDB disabled in private browsing) raises
 ///<see cref="StorageQuotaExceeded"/> rather than throwing, so the UI can warn instead of crashing.
 ///</summary>
-public class IndexedDbAppStorage : IAppStorage
+public class IndexedDbAppStorage : IMirrorStorage
 {
     private readonly IJSRuntime _js;
     private readonly ILocalStorageService _localStorage;
@@ -39,21 +39,7 @@ public class IndexedDbAppStorage : IAppStorage
 
     public async Task<T> GetAsync<T>(string key)
     {
-        var json = await GetStringAsync(key);
-
-        if (string.IsNullOrEmpty(json))
-            return default;
-
-        try
-        {
-            return JsonSerializer.Deserialize<T>(json);
-        }
-        catch
-        {
-            //A value written by an older/other serializer that no longer deserializes — treat as absent
-            //rather than crash. The app defaults anything missing.
-            return default;
-        }
+        return StoredJson.Read<T>(await GetStringAsync(key));
     }
 
     public async Task SetAsync<T>(string key, T value)
@@ -82,6 +68,21 @@ public class IndexedDbAppStorage : IAppStorage
         try
         {
             await _js.InvokeVoidAsync("gdbvIdb.remove", key);
+        }
+        catch { }
+    }
+
+    ///<summary>
+    ///Everything but the migration marker, which stays: without it the next boot would carry the old
+    ///localStorage data back in, and that is exactly the copy this is emptying.
+    ///</summary>
+    public async Task ClearAsync()
+    {
+        await EnsureReadyAsync();
+
+        try
+        {
+            await _js.InvokeVoidAsync("gdbvIdb.clear", new[] { MigratedFlagKey });
         }
         catch { }
     }

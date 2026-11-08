@@ -1,0 +1,108 @@
+@* The frame of a wizard in an AI chat window (2026-11-05, the user): its title, numbered steps, Back, Next and the last
+   step's button, for an owner to fill with each step's inputs. It knows nothing of what is being asked, and it sends nothing:
+   the owner's OnFinish does, usually with AiChatWindow.AskAsync. wiki/pages/integrating/writing-a-plugin.md has how to make one. *@
+
+<div class="gdbv-ai-wizard" data-testid="@TestId">
+    <div class="gdbv-ai-wizard-head">
+        <span class="gdbv-ai-wizard-title">@Title</span>
+        <button type="button" class="btn-close" aria-label="Close the wizard" title="Close the wizard" data-testid="ai-wizard-close" @onclick="OnClose"></button>
+    </div>
+
+    <ol class="gdbv-ai-wizard-steps" aria-label="Steps">
+        @for (int i = 0; i < Steps.Count; i++)
+        {
+            var at = i;
+
+            <li class="gdbv-ai-wizard-step @(at == step ? "is-current" : "") @(at < step ? "is-done" : "")" aria-current="@(at == step ? "step" : null)" data-testid="ai-wizard-step">
+                @* A step already reached is a click away, back or forward again, as long as the steps before it still hold
+                   (2026-11-05, the user: going back by its name up here did not look like a thing to click). *@
+                <button type="button" class="gdbv-ai-wizard-step-button" disabled="@(!CanGoTo(at))" title="@(CanGoTo(at) && at != step ? $"Go to {Steps[at]}" : null)" @onclick="() => GoTo(at)">
+                    <span class="gdbv-ai-wizard-step-number">
+                        @if (at < step)
+                        {
+                            <i class="bi bi-check-lg" aria-hidden="true"></i>
+                        }
+                        else
+                        {
+                            @(at + 1)
+                        }
+                    </span>
+                    <span>@Steps[at]</span>
+                </button>
+            </li>
+        }
+    </ol>
+
+    @ChildContent(step)
+
+    <div class="gdbv-ai-wizard-foot">
+        @if (step > 0)
+        {
+            @* Each with its arrow beside its word (2026-11-05, the user). *@
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="ai-wizard-back" @onclick="() => GoTo(step - 1)"><i class="bi bi-arrow-left me-1" aria-hidden="true"></i>Back</button>
+        }
+
+        @if (step < Steps.Count - 1)
+        {
+            <button type="button" class="btn btn-sm btn-primary ms-auto" data-testid="ai-wizard-next" disabled="@(!CanContinue(step))" @onclick="() => GoTo(step + 1)">Next<i class="bi bi-arrow-right ms-1" aria-hidden="true"></i></button>
+        }
+        else
+        {
+            <button type="button" class="btn btn-sm btn-primary ms-auto" data-testid="ai-wizard-finish" disabled="@(!CanContinue(step))" @onclick="OnFinish">@if (!string.IsNullOrEmpty(FinishIcon))
+                {
+                    <i class="bi @FinishIcon me-1" aria-hidden="true"></i>
+                }@FinishText</button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+
+    ///<summary>The steps' names, in order.</summary>
+    [Parameter] public IReadOnlyList<string> Steps { get; set; } = [];
+
+    ///<summary>What a step shows, given its index. The owner keeps the inputs, so going back loses nothing.</summary>
+    [Parameter] public RenderFragment<int> ChildContent { get; set; }
+
+    ///<summary>Whether a step is filled in enough to leave: Next, and on the last step its button.</summary>
+    [Parameter] public Func<int, bool> CanContinue { get; set; } = _ => true;
+
+    ///<summary>What the last step's button says.</summary>
+    [Parameter] public string FinishText { get; set; } = "Send";
+
+    ///<summary>A Bootstrap icon before the last step's button's words, such as bi-diagram-3, or none.</summary>
+    [Parameter] public string FinishIcon { get; set; }
+
+    [Parameter] public EventCallback OnFinish { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    [Parameter] public string TestId { get; set; } = "ai-wizard";
+
+    private int step;
+
+    //The furthest step reached, which the step names above go back and forth to.
+    private int reached;
+
+    private bool CanGoTo(int at)
+    {
+        if (at < 0 || at >= Steps.Count || at > reached)
+            return false;
+
+        for (var i = 0; i < at; i++)
+            if (!CanContinue(i))
+                return false;
+
+        return true;
+    }
+
+    private void GoTo(int at)
+    {
+        if (at > step && !CanContinue(step))
+            return;
+
+        step = at;
+        reached = Math.Max(reached, at);
+    }
+}

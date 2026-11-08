@@ -69,4 +69,63 @@ public class ExcelExportTests
         XDocument.Parse(ReadEntry(zip, "xl/worksheets/sheet1.xml"));
         XDocument.Parse(ReadEntry(zip, "xl/styles.xml"));
     }
+
+    private static GraphDataConverter.GraphTable TableWithProperty(string value)
+    {
+        var json = JsonSerializer.Serialize(new object[]
+        {
+            new { id = "n1", label = "Item", properties = new { note = value } }
+        });
+
+        return GraphDataConverter.ToTable(JsonDocument.Parse(json).RootElement);
+    }
+
+    //The text of every cell in the sheet, read through an XML parser as Excel reads it.
+    private static List<string> CellTexts(byte[] xlsx)
+    {
+        using var ms = new MemoryStream(xlsx);
+        using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
+
+        var doc = XDocument.Parse(ReadEntry(zip, "xl/worksheets/sheet1.xml"));
+
+        return doc.Descendants().Where(e => e.Name.LocalName == "t").Select(e => e.Value).ToList();
+    }
+
+    [Fact]
+    public void AControlCharacterInAValue_IsDroppedFromTheWorkbook()
+    {
+        //U+0001 is not a character XML 1.0 allows at all, escaped or not, so Excel refuses the whole workbook over it.
+        //A tab and a line feed are control characters XML does allow, and they stay.
+        var bytes = ExcelExport.BuildXlsx(TableWithProperty("a\u0001b\u001fc\td\ne"), null);
+
+        var texts = CellTexts(bytes);
+
+        Assert.Contains("abc\td\ne", texts);
+        Assert.DoesNotContain(texts, t => t.Contains('\u0001') || t.Contains('\u001f'));
+    }
+
+    [Fact]
+    public void AValueLongerThanExcelsCellLimit_IsCutToIt()
+    {
+        //Excel holds at most 32,767 characters in a cell and "repairs" a workbook that has more, with a warning dialog.
+        var value = new string('x', 32_767) + new string('y', 7_233);
+        var bytes = ExcelExport.BuildXlsx(TableWithProperty(value), null);
+
+        var longest = CellTexts(bytes).OrderByDescending(t => t.Length).First();
+
+        Assert.Equal(ExcelExport.CellLimit, longest.Length);
+        Assert.Equal(new string('x', 32_767), longest);
+    }
+
+    [Fact]
+    public void ACutAtTheCellLimit_DoesNotHalveASurrogatePair()
+    {
+        //An emoji is two UTF-16 units; cut between them, the half left is a character XML cannot carry either.
+        var value = new string('x', 32_766) + "\U0001F600" + new string('y', 10);
+        var bytes = ExcelExport.BuildXlsx(TableWithProperty(value), null);
+
+        var longest = CellTexts(bytes).OrderByDescending(t => t.Length).First();
+
+        Assert.Equal(new string('x', 32_766), longest);
+    }
 }

@@ -28,8 +28,7 @@ public static class ArangoConverter
 
     //Arango's own document metadata, dropped rather than repeated as properties: _id and _from / _to are
     //already the element's id and endpoints, _key is just the tail of _id, and _rev is storage plumbing.
-    //Keeping any of them would be pointless besides — GraphDataConverter filters every "_"-prefixed
-    //property key out of the render data, so they would never reach the UI anyway.
+    //Keeping any of them would be pointless besides: they say nothing a person reads a property for.
     private static readonly HashSet<string> MetadataFields = new(StringComparer.Ordinal)
     {
         IdField, KeyField, RevisionField, FromField, ToField
@@ -176,7 +175,6 @@ public static class ArangoConverter
         //AQL names a column only when the query projects one; a row that is a bare value has none, so it
         //shows under a single "value" column.
         foreach (var row in rows.EnumerateArray())
-        {
             if (row.ValueKind == JsonValueKind.Object)
             {
                 foreach (var property in row.EnumerateObject())
@@ -184,10 +182,7 @@ public static class ArangoConverter
                         columns.Add(property.Name);
             }
             else if (!columns.Contains(ValueColumn))
-            {
                 columns.Add(ValueColumn);
-            }
-        }
 
         foreach (var row in rows.EnumerateArray())
         {
@@ -197,14 +192,10 @@ public static class ArangoConverter
                 cells[column] = "";
 
             if (row.ValueKind == JsonValueKind.Object)
-            {
                 foreach (var property in row.EnumerateObject())
                     cells[property.Name] = GraphWireText.Stringify(property.Value) ?? "";
-            }
             else
-            {
                 cells[ValueColumn] = GraphWireText.Stringify(row) ?? "";
-            }
 
             table.Rows.Add(cells);
         }

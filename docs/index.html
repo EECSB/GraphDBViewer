@@ -6,7 +6,7 @@
 <!-- Every link opens in a new tab. -->
 <base target="_blank" />
 <title>Graph DB Viewer — Query, visualize &amp; edit graph databases in the browser</title>
-<meta name="description" content="A zero-backend Blazor WebAssembly app for exploring Gremlin, openCypher and SPARQL graphs. Query, visualize in 2D/3D, debug traversals, edit your graph — or generate one from text with AI, all in the browser." />
+<meta name="description" content="A Blazor WebAssembly app for exploring Gremlin, Cypher, AQL, DQL and SPARQL graphs. Query, visualize in 2D, 3D, on a map or a globe, debug traversals, edit your graph, ask an AI about it or generate one from text, all in the browser." />
 <link rel="icon" type="image/svg+xml" href="../GraphDBViewerWeb/wwwroot/favicon.svg" />
 <style>
   :root{
@@ -59,7 +59,9 @@
   @media(max-width:760px){.nav-links{display:none}}
 
   /* Hero */
-  .hero{padding:76px 0 54px;display:grid;grid-template-columns:1fr 1.2fr;gap:44px;align-items:center}
+  /* Wider than the page's column, most of it the slideshow (2026-11-06, the user: the pictures bigger). */
+  .hero{padding:76px 0 54px;display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.5fr);gap:44px;align-items:center;
+    width:min(1480px,calc(100vw - 44px));margin-left:calc((100% - min(1480px,calc(100vw - 44px))) / 2)}
   .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:.78rem;font-weight:650;letter-spacing:.06em;
     text-transform:uppercase;color:var(--blue-400);background:rgba(59,130,246,.12);
     border:1px solid rgba(59,130,246,.28);padding:6px 12px;border-radius:999px}
@@ -98,6 +100,36 @@
     background:rgba(255,255,255,.42);box-shadow:0 1px 4px rgba(0,0,0,.55);transition:background .2s,transform .2s}
   .viz .dot-btn:hover{background:rgba(255,255,255,.7)}
   .viz .dot-btn.on{background:var(--blue-400);transform:scale(1.3)}
+  /* Arrows to go through the pictures, beside the dots (2026-11-06, the user). */
+  .viz .slide-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:3;width:42px;height:42px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;padding:0;border:1px solid rgba(255,255,255,.2);
+    background:rgba(8,13,26,.62);color:#fff;cursor:pointer;opacity:.85;transition:opacity .2s,background .2s;
+    backdrop-filter:blur(4px)}
+  .viz .slide-nav:hover,.viz .slide-nav:focus-visible{opacity:1;background:rgba(37,99,235,.88)}
+  .viz .slide-nav.prev{left:12px}
+  .viz .slide-nav.next{right:12px}
+  .viz .slide-nav svg{width:18px;height:18px}
+  .viz .slides,.viewimg,.feature-media img,section img{cursor:zoom-in}
+
+  /* A picture opened large, any on the page (2026-11-06, the user), its caption under it; arrows and the arrow keys go
+     through them all, and Esc or a click beside it closes it. */
+  .lb{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;padding:56px 80px;
+    background:rgba(3,7,18,.92);backdrop-filter:blur(6px)}
+  .lb[hidden]{display:none}
+  .lb figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:12px;max-width:100%;max-height:100%}
+  .lb img{display:block;max-width:100%;max-height:calc(100vh - 150px);width:auto;height:auto;border-radius:10px;
+    border:1px solid var(--line);box-shadow:var(--shadow);cursor:default}
+  .lb figcaption{color:var(--muted);font-size:.92rem;text-align:center;max-width:80ch}
+  .lb-btn{position:absolute;width:46px;height:46px;border-radius:50%;padding:0;border:1px solid rgba(255,255,255,.2);
+    background:rgba(15,23,42,.75);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;
+    transition:background .2s}
+  .lb-btn:hover,.lb-btn:focus-visible{background:rgba(37,99,235,.88)}
+  .lb-btn svg{width:20px;height:20px}
+  .lb-prev{left:18px;top:50%;transform:translateY(-50%)}
+  .lb-next{right:18px;top:50%;transform:translateY(-50%)}
+  .lb-close{top:16px;right:18px}
+  .lb-count{position:absolute;top:28px;left:26px;color:var(--muted);font-size:.85rem}
+  @media(max-width:640px){.lb{padding:64px 12px}.lb-prev{left:6px}.lb-next{right:6px}}
 
   /* Stats strip */
   .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:12px 0 20px}
@@ -158,7 +190,6 @@
   .dbtable th{background:rgba(255,255,255,.03);color:var(--muted);font-weight:650;letter-spacing:.02em}
   .dbtable tr:last-child td{border-bottom:none}
   .ok{color:#4ade80;font-weight:650}
-  .soon{color:var(--blue-400);font-weight:650}
 
   /* CTA */
   .cta{margin:20px 0 8px;text-align:center;padding:56px 28px;border:1px solid var(--line);border-radius:24px;
@@ -184,16 +215,16 @@
   <div class="wrap nav-inner">
     <a class="brand" href="#top">
       <svg viewBox="-10 -15 100 90" fill="none" stroke="#60a5fa" stroke-width="3" xmlns="http://www.w3.org/2000/svg">
-        <g transform="scale(1.59) translate(-16.6,-8.6)">
+        <g transform="scale(1.59) translate(-16.6,-8.49)">
           <g transform="rotate(-5)">
-            <line x1="20" y1="20" x2="40" y2="12"/><line x1="20" y1="20" x2="30" y2="40"/>
-            <line x1="40" y1="12" x2="60" y2="22"/><line x1="40" y1="12" x2="50" y2="36"/>
-            <line x1="30" y1="40" x2="50" y2="36"/><line x1="60" y1="22" x2="50" y2="36"/>
-            <circle cx="20" cy="20" r="4" fill="#3B82F6"/><circle cx="40" cy="12" r="4" fill="#3B82F6"/>
-            <circle cx="30" cy="40" r="4" fill="#3B82F6"/><circle cx="50" cy="36" r="4" fill="#3B82F6"/>
-            <circle cx="60" cy="22" r="4" fill="#3B82F6"/>
+            <line x1="18.42" y1="23.19" x2="38.64" y2="10.75"/><line x1="18.42" y1="23.19" x2="29.19" y2="48.67"/>
+            <line x1="38.64" y1="10.75" x2="62.84" y2="28.17"/><line x1="38.64" y1="10.75" x2="44.17" y2="33.01"/>
+            <line x1="29.19" y1="48.67" x2="44.17" y2="33.01"/><line x1="62.84" y1="28.17" x2="44.17" y2="33.01"/>
+            <circle cx="18.42" cy="23.19" r="4" fill="#3B82F6"/><circle cx="38.64" cy="10.75" r="4" fill="#3B82F6"/>
+            <circle cx="29.19" cy="48.67" r="4" fill="#3B82F6"/><circle cx="44.17" cy="33.01" r="4" fill="#3B82F6"/>
+            <circle cx="62.84" cy="28.17" r="4" fill="#3B82F6"/>
           </g>
-          <g transform="translate(24,24) scale(0.7)">
+          <g transform="translate(32.59,21.53) scale(0.7)">
             <path d="M22 32c4-6 11-10 15-10s11 4 15 10c-4 6-11 10-15 10S26 38 22 32z" stroke="#60a5fa" fill="none"/>
             <circle cx="37" cy="32" r="6" fill="#60a5fa"/>
           </g>
@@ -204,7 +235,8 @@
     <nav class="nav-links">
       <a href="#features">Features</a>
       <a href="#visualize">Visualize</a>
-      <a href="#generate">Generate with AI</a>
+      <a href="#map">Map &amp; Globe</a>
+      <a href="#generate">AI</a>
       <a href="#debug">Debug</a>
       <a href="#databases">Databases</a>
     </nav>
@@ -218,9 +250,9 @@
 <div class="wrap">
   <div class="hero">
     <div class="reveal in">
-      <span class="eyebrow">● Blazor WebAssembly · No backend</span>
+      <span class="eyebrow">● Blazor WebAssembly · No backend needed</span>
       <h1>Explore your graph database <span class="grad">in the browser.</span></h1>
-      <p class="lede">Connect to Gremlin, openCypher or SPARQL, run a query, and see your data as an interactive 2D or 3D graph, a table, or raw JSON — edit it and commit changes back, or generate a whole graph from text with AI.</p>
+      <p class="lede">Connect to Gremlin, Cypher, AQL, DQL or SPARQL, run a query, and see your data as an interactive 2D or 3D graph, on a world map or a globe, as a table or raw JSON. Edit it and commit changes back, ask an AI about it, or generate a whole graph from text.</p>
       <div class="hero-cta">
         <a class="btn btn-primary" href="https://eecs.blog/BlazorApps/GraphDBViewer/" target="_blank" rel="noopener">Try it live</a>
         <a class="btn btn-ghost" href="#features">See features</a>
@@ -237,11 +269,18 @@
         <span class="tag" id="heroTag">2D graph view</span>
       </div>
       <div class="slides">
-        <img class="slide on" src="img/app-2d.png" alt="The full app showing a loaded graph in the interactive 2D view" data-tag="2D graph view" />
-        <img class="slide" src="img/app-3d.png" alt="The full app showing the same graph in the interactive 3D view" data-tag="3D graph view" />
+        <img class="slide on" src="img/app-2d.png" alt="The full app showing a table's parts as an interactive 2D graph, one of them selected with its properties beside it" data-tag="2D graph view" />
+        <img class="slide" src="img/app-3d.png" alt="The full app showing the same parts in the interactive 3D view" data-tag="3D graph view" />
+<img class="slide" src="img/app-detailed.png" alt="The full app with Detailed view on for three labels: the lumber, the unpainted table and the finished table drawn as cards with their label, name and description" data-tag="Detailed view" />
+        <img class="slide" src="img/app-map.jpg" alt="The full app showing cities and the routes between them on a satellite world map" data-tag="Map" />
+        <img class="slide" src="img/app-place.jpg" alt="The full app with Find a place open on the Map: Austria found and pinned, its cities linked by rail on a street map" data-tag="Find a place" />
+        <img class="slide" src="img/app-globe.jpg" alt="The full app showing the same cities and routes on a 3D globe, seen over the North Atlantic" data-tag="Globe" />
         <img class="slide" src="img/app-table.png" alt="The full app showing the results as a vertices and edges table" data-tag="Table view" />
         <img class="slide" src="img/app-json.png" alt="The full app showing the raw JSON results" data-tag="JSON results" />
-        <img class="slide" src="img/app-debug.png" alt="The full app showing the step-through traversal debugger" data-tag="Traversal debugger" />
+        <img class="slide" src="img/app-debug.png" alt="The full app showing the step-through traversal debugger, a step opened to show what went in and what came out" data-tag="Traversal debugger" />
+        <img class="slide" src="img/app-ai.png" alt="The full app with the AI window open: the model ran a query against the graph and answered from its result" data-tag="AI" />
+        <button type="button" class="slide-nav prev" id="heroPrev" aria-label="Previous picture"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
+        <button type="button" class="slide-nav next" id="heroNext" aria-label="Next picture"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg></button>
       </div>
       <div class="dots" id="heroDots"></div>
     </div>
@@ -249,9 +288,9 @@
 
   <!-- STATS -->
   <div class="stats reveal">
-    <div class="stat"><b>4</b><span>view modes: JSON · 2D · 3D · Table</span></div>
-    <div class="stat"><b>12</b><span>graph layouts (6 in 2D, 6 in 3D)</span></div>
-    <div class="stat"><b>3</b><span>query languages highlighted</span></div>
+    <div class="stat"><b>6</b><span>database engines, browser-direct</span></div>
+    <div class="stat"><b>6</b><span>views: JSON · 2D · Map · 3D · Globe · Table</span></div>
+    <div class="stat"><b>13</b><span>graph layouts (7 in 2D, 6 in 3D)</span></div>
     <div class="stat"><b>0</b><span>servers to run — 100% in-browser</span></div>
   </div>
 </div>
@@ -265,23 +304,32 @@
     </div>
     <div class="grid">
       <div class="card reveal"><div class="ico">🔌</div>
-        <h3>Browser-direct connections</h3>
+        <h3>Six engines, browser-direct</h3>
         <p>Talk to your database with no proxy in between.</p>
         <ul>
-          <li>Gremlin over WebSocket <em>or</em> HTTP</li>
-          <li>Azure Cosmos DB (HMAC-SHA256 auth)</li>
-          <li>SPARQL / RDF endpoints</li>
-          <li>Saved connections, SSL toggle, status badge</li>
+          <li>Gremlin: TinkerPop, JanusGraph, Azure Cosmos DB</li>
+          <li>Cypher (Neo4j, Memgraph) · AQL (ArangoDB) · DQL (Dgraph)</li>
+          <li>SPARQL / RDF endpoints · GUN</li>
+          <li>An optional server edition for databases a browser cannot reach</li>
         </ul>
       </div>
       <div class="card reveal"><div class="ico">🧠</div>
         <h3>Schema-aware editor</h3>
         <p>A vendored Monaco editor that knows your graph.</p>
         <ul>
-          <li>Gremlin, openCypher &amp; SPARQL highlighting</li>
+          <li>Gremlin, Cypher, SPARQL, AQL &amp; DQL highlighting</li>
           <li>Autocomplete from real labels &amp; property keys</li>
-          <li>Context-aware suggestions &amp; auto-indent</li>
-          <li>✨ Ask AI in plain English — Anthropic · OpenAI · Gemini (bring your own key)</li>
+          <li>Saved queries, history and ready-made examples</li>
+        </ul>
+      </div>
+      <div class="card reveal"><div class="ico">✨</div>
+        <h3>AI</h3>
+        <p>A conversation about your graph, with your own key.</p>
+        <ul>
+          <li>Anthropic · OpenAI · Gemini · any OpenAI-compatible server</li>
+          <li>Runs read queries itself to check its answer, on your say-so</li>
+          <li>Ask with a file, a photo, a screenshot or your voice</li>
+          <li>Every chat kept, with the cost of each request shown</li>
         </ul>
       </div>
       <div class="card reveal"><div class="ico">🎨</div>
@@ -289,17 +337,38 @@
         <p>Flip any result between views instantly.</p>
         <ul>
           <li>Interactive 2D (Cytoscape.js) &amp; 3D (three.js)</li>
-          <li>Property table &amp; raw JSON</li>
-          <li>Per-label styling · edge colours · image &amp; 3D-model nodes</li>
+          <li>Property table with Excel-style column sizing &amp; raw JSON</li>
+          <li>Detailed view: a vertex drawn as a card with its label, name and properties</li>
+          <li>Per-label styling · edge colors · image &amp; 3D-model nodes · saved stylesheets</li>
           <li>WebXR VR/AR viewer with a phone QR</li>
+        </ul>
+      </div>
+      <div class="card reveal"><div class="ico">🌍</div>
+        <h3>Map &amp; Globe</h3>
+        <p>Vertices that carry coordinates, drawn where they are.</p>
+        <ul>
+          <li>A world map behind the 2D graph, a globe in 3D</li>
+          <li>Built-in satellite and outline earths, no network needed</li>
+          <li>Street, topographic and satellite tile servers in one click, or your own server and key</li>
+          <li>The globe zooms down to the street, labels and all</li>
+          <li>Find a place by its address and go there, with the geocoder you choose</li>
+        </ul>
+      </div>
+      <div class="card reveal"><div class="ico">📊</div>
+        <h3>Analyze</h3>
+        <p>Find out what the graph holds before you query it.</p>
+        <ul>
+          <li>PageRank, betweenness, degree, communities, components, shortest paths</li>
+          <li>A data-model diagram inferred from what is loaded</li>
+          <li>The database's own schema, read from the server</li>
         </ul>
       </div>
       <div class="card reveal"><div class="ico">🐞</div>
         <h3>Traversal debugger</h3>
         <p>gdotV-style step-through for Gremlin.</p>
         <ul>
-          <li>Traverser count after every step</li>
-          <li>Zero-drops highlighted</li>
+          <li>Traverser count after every step, drawn in the query too</li>
+          <li>Zero-drops highlighted · what went in and came out of a step</li>
           <li>Profile &amp; Explain tabs · mutation-safe</li>
         </ul>
       </div>
@@ -308,8 +377,9 @@
         <p>Mutations are staged and committed on your word.</p>
         <ul>
           <li>Add / edit / delete vertices, edges, properties</li>
-          <li>Two-click edge creation</li>
-          <li>Review generated queries before commit</li>
+          <li>Two-click edge creation · delete mode · grid snapping</li>
+          <li>Right-click a vertex for its menu, or the empty canvas for a new component</li>
+          <li>Preview staged changes on the canvas before you commit</li>
         </ul>
       </div>
       <div class="card reveal"><div class="ico">📥</div>
@@ -318,7 +388,34 @@
         <ul>
           <li>Paste GraphSON, Graphviz DOT or Mermaid — or draw offline</li>
           <li>✨ Generate a graph from text, files or Wikipedia</li>
-          <li>Export CSV · Excel · PNG/JPEG/SVG · DOT · 3D models</li>
+          <li>Export CSV · Excel · PNG/JPEG/SVG · Graphviz/DOT · 3D models</li>
+        </ul>
+      </div>
+      <div class="card reveal"><div class="ico">🤖</div>
+        <h3>Claude, through MCP</h3>
+        <p>Let Claude Code or Claude Desktop query through a viewer tab.</p>
+        <ul>
+          <li>Read queries, a picture of the graph, what the tab has open</li>
+          <li>Writes only when you tick the box, asked again on every link</li>
+          <li>Linked by a code you give it, on your own machine</li>
+        </ul>
+      </div>
+      <div class="card reveal"><div class="ico">🔗</div>
+        <h3>Share &amp; embed</h3>
+        <p>Hand somebody the view you are looking at.</p>
+        <ul>
+          <li>A link that opens the viewer set up as yours is</li>
+          <li>The code to embed it in a page of your own</li>
+          <li>Multiple query tabs, each its own workspace, kept on reload</li>
+        </ul>
+      </div>
+      <div class="card reveal"><div class="ico">🧭</div>
+        <h3>Easy to find your way</h3>
+        <p>Comfortable from the first minute.</p>
+        <ul>
+          <li>A guided tour of the parts, whenever you want it</li>
+          <li>Six themes, dark and light · full-width layout · an editor you drag taller</li>
+          <li>Installable PWA that works offline</li>
         </ul>
       </div>
     </div>
@@ -331,32 +428,101 @@
     <div class="feature reveal">
       <div>
         <h3>See your data the way that makes sense</h3>
-        <p>Every result is one click away from four representations, with a search box and per-label filter in both graph views. Style each vertex label with its own colour, size, display property and icon.</p>
+        <p>Every result is one click away from four representations, with a search box and per-label filter in both graph views, and a map or a globe behind them when the vertices have coordinates. Style each vertex label with its own color, size, display property and icon.</p>
         <div class="chips">
           <span class="chip">Force-directed</span><span class="chip">Tree</span><span class="chip">Concentric</span>
           <span class="chip">Circle</span><span class="chip">Grid</span><span class="chip">Radial 3D</span>
-          <span class="chip">Double-click to expand</span><span class="chip">Multiple tabs</span>
+          <span class="chip">Double-click to expand</span><span class="chip">Multiple tabs</span><span class="chip">VR / AR</span>
         </div>
       </div>
       <div class="feature-media">
         <div class="viewtabs" id="viewtabs">
           <button type="button" class="vtab" data-img="img/graph-json.png" data-alt="The sample graph shown as raw JSON">JSON</button>
-          <button type="button" class="vtab on" data-img="img/graph-2d.svg" data-alt="The sample graph shown in the interactive 2D view">2D</button>
+          <button type="button" class="vtab on" data-img="img/graph-2d.png" data-alt="The sample graph shown in the interactive 2D view">2D</button>
+          <button type="button" class="vtab" data-img="img/graph-map.jpg" data-alt="Cities and routes shown on the 2D view's world map">Map</button>
           <button type="button" class="vtab" data-img="img/graph-3d.png" data-alt="The sample graph shown in the interactive 3D view">3D</button>
+          <button type="button" class="vtab" data-img="img/graph-globe.jpg" data-alt="Cities and routes shown on the 3D view's globe">Globe</button>
           <button type="button" class="vtab" data-img="img/graph-table.png" data-alt="The sample graph shown as a vertices and edges table">Table</button>
         </div>
-        <img id="viewimg" class="viewimg" src="img/graph-2d.svg" alt="The sample graph shown in the interactive 2D view" />
+        <img id="viewimg" class="viewimg" src="img/graph-2d.png" alt="The sample graph shown in the interactive 2D view" />
+      </div>
+    </div>
+
+    <div class="feature reveal">
+      <div>
+        <h3>Cards on the canvas, and a window for the look</h3>
+        <p>Turn <b>Detailed view</b> on for a label and its vertices are drawn as cards: the label, the name, and the properties you tick to show, so a part reads at a glance without a click. The <b>Styling</b> window sets each label&rsquo;s color, size, shape, icon and 3D model, per label in this browser or per node saved to the database, and keeps whole stylesheets to apply again.</p>
+        <div class="chips"><span class="chip">Detailed view</span><span class="chip">Per label or per node</span><span class="chip">Shapes · icons · 3D models</span><span class="chip">Saved stylesheets</span></div>
+      </div>
+      <div class="feature-media">
+        <img src="img/graph-detailed.png" alt="The 2D canvas with Detailed view on for three labels: the lumber, the unpainted table and the finished table drawn as cards with their label, name and description, the other parts as plain nodes" style="display:block;width:100%;height:auto;border-radius:10px" />
+        <img src="img/styling.png" alt="The Styling window: one row per label with its color, size, Detailed view switch and display property, the Component row opened to its 2D shape, 3D shape, icon URL and 3D model URL" style="display:block;width:100%;height:auto;border-radius:10px;margin-top:12px" />
       </div>
     </div>
 
     <div class="feature reveal">
       <div>
         <h3>Write in the language your database speaks</h3>
-        <p>A self-hosted Monaco editor highlights Gremlin, openCypher and SPARQL, auto-closes brackets and quotes, and completes real vertex labels, edge labels and property keys pulled live from your database.</p>
-        <div class="chips"><span class="chip">Gremlin</span><span class="chip">openCypher</span><span class="chip">SPARQL</span><span class="chip">Schema autocomplete</span></div>
+        <p>A self-hosted Monaco editor highlights Gremlin, Cypher, SPARQL, AQL and DQL, auto-closes brackets and quotes, and completes real vertex labels, edge labels and property keys pulled live from your database.</p>
+        <div class="chips"><span class="chip">Gremlin</span><span class="chip">Cypher</span><span class="chip">SPARQL</span><span class="chip">AQL</span><span class="chip">DQL</span><span class="chip">Schema autocomplete</span></div>
       </div>
       <div class="feature-media">
-        <img src="img/query-editor.png" alt="The self-hosted Monaco query editor showing a syntax-highlighted Gremlin query" style="display:block;width:100%;height:auto;border-radius:10px" />
+        <img src="img/query-editor.png" alt="The query editor with a syntax-highlighted Gremlin query, suggesting the database's own labels and property keys as it is typed" style="display:block;width:100%;height:auto;border-radius:10px" />
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MAP AND GLOBE -->
+<section id="map">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <h2>Put your graph on the map</h2>
+      <p>Vertices that carry coordinates are drawn where they are: hover 2D and pick Map, or hover 3D and pick Globe. Nothing to configure: <code>lat</code> and <code>lon</code>, a <code>"48.2, 16.4"</code> string, a GeoJSON or WKT point are all found by convention.</p>
+    </div>
+    <div class="feature reveal">
+      <div>
+        <h3>Pick the earth under it</h3>
+        <p>The satellite and outline earths ship with the app, so the map works offline with no key and no outside service. The layers button in the corner switches to a street, topographic or satellite map from a free tile server in one click, or to a server of your own with its key, kept in your browser.</p>
+        <div class="chips">
+          <span class="chip">Built-in satellite</span><span class="chip">Outline</span><span class="chip">OpenStreetMap</span>
+          <span class="chip">OpenTopoMap</span><span class="chip">Esri World Imagery</span><span class="chip">Sentinel-2</span><span class="chip">Your own server</span>
+        </div>
+      </div>
+      <div class="feature-media">
+        <img src="img/map-layers.jpg" alt="The Map with its layers menu open: the built-in satellite and outline earths, and free street, topographic, satellite, light and dark tile servers" style="display:block;width:100%;height:auto;border-radius:10px" />
+      </div>
+    </div>
+
+    <div class="feature reveal">
+      <div>
+        <h3>A globe you can fly down to the street</h3>
+        <p>On the globe, links arc over the surface and labels on the far side of the earth hide themselves. Zoom from the whole planet down to a street: the vertices keep their size on screen, and a tile server's map gets sharper as you go.</p>
+        <div class="chips"><span class="chip">Great-circle routes</span><span class="chip">Street-level zoom</span><span class="chip">Same editing &amp; styling</span></div>
+      </div>
+      <div class="feature-media">
+        <img src="img/graph-globe.jpg" alt="Cities in North America and Europe on the globe, seen over the North Atlantic" style="display:block;width:100%;height:auto;border-radius:10px" />
+      </div>
+    </div>
+
+    <div class="feature reveal">
+      <div>
+        <h3>Find a place, and go there</h3>
+        <p>The magnifier under the layers button looks up an address or a place's name and takes the Map or the Globe there, with a pin on it and its coordinates to copy. Nothing leaves the browser until you press Enter, and then only to the geocoder you chose: OpenStreetMap's by default, or Photon, or one of your own. Vertices with an address and no coordinates can be looked up the same way, the ones you tick, and placed on the map as changes to commit.</p>
+        <div class="chips"><span class="chip">Address search</span><span class="chip">Nominatim</span><span class="chip">Photon</span><span class="chip">Your own geocoder</span></div>
+      </div>
+      <div class="feature-media">
+        <img src="img/map-place.jpg" alt="The Map with Find a place open: Austria found, a pin in its middle, its coordinates ready to copy, and Austria's cities linked by rail around it on a street map" style="display:block;width:100%;height:auto;border-radius:10px" />
+      </div>
+    </div>
+    <div class="feature reveal">
+      <div>
+        <h3>Your own earth, and your own geocoder</h3>
+        <p><b>Map settings</b> takes a tile server&rsquo;s URL and key, so the Map and the Globe draw from your own server, a free one, or a commercial one with your key; and it names which geocoder looks places up, OpenStreetMap&rsquo;s own, a Photon, or a Nominatim you run, so an address need not leave your network. A slider under the map sets how large the nodes are drawn on it, and they keep that size as you zoom.</p>
+        <div class="chips"><span class="chip">Tile server URL + key</span><span class="chip">Free presets</span><span class="chip">Nominatim · Photon</span><span class="chip">Node size on map</span></div>
+      </div>
+      <div class="feature-media">
+        <img src="img/map-settings.png" alt="Map settings: the built-in map or a free tile server in one click, a tile server URL and key of your own, and which geocoder looks places up" style="display:block;width:100%;height:auto;border-radius:10px" />
       </div>
     </div>
   </div>
@@ -366,30 +532,35 @@
 <section id="generate">
   <div class="wrap">
     <div class="sec-head reveal">
-      <h2>Turn text into a graph</h2>
-      <p>Paste notes, drop in a Word, Excel or CSV file, or name a Wikipedia article — an AI model extracts the entities and relationships and draws them, ready to review before anything is saved.</p>
+      <h2>Ask about your graph, or turn text into one</h2>
+      <p>Bring your own model: Anthropic, OpenAI, Gemini or any OpenAI-compatible server. Nothing is sent until you press Send, and every request shows what it cost.</p>
     </div>
     <div class="feature reveal">
       <div>
-        <h3>Generate a knowledge graph with AI</h3>
-        <p>Bring your own model — Anthropic, OpenAI, Gemini or any OpenAI-compatible server. The app asks for strict JSON, cleans it up (merging &ldquo;Acme&rdquo; and &ldquo;Acme Inc.&rdquo; into one node), and previews the counts, labels and every repair before you accept. Then <em>merge</em> it into your drawing or <em>replace</em> it — and write to a database only when you say so.</p>
+        <h3>A conversation, not a query box</h3>
+        <p>Describe what you want and the assistant writes the query against your live schema. Tool-capable models run read queries themselves to check their answer, under a setting you pick: ask each time, run reads, or run reads and writes. Attach a file, a photo or a screenshot, or speak your question, and come back to any chat later.</p>
         <div class="chips">
           <span class="chip">Anthropic</span><span class="chip">OpenAI</span><span class="chip">Gemini</span>
-          <span class="chip">Word · Excel · CSV</span><span class="chip">Wikipedia</span>
-          <span class="chip">Entity de-duplication</span><span class="chip">Merge or replace</span><span class="chip">Review before commit</span>
+          <span class="chip">Runs read queries</span><span class="chip">Files · photos · voice</span><span class="chip">Chats kept</span>
         </div>
       </div>
       <div class="feature-media">
-        <div class="code" style="text-align:left">
-          <span class="c">"Alice, an engineer at Acme,</span><br>
-          <span class="c">&nbsp;works with Bob on the Table project."</span><br><br>
-          <span class="k">&rarr;</span> Person <span class="m">Alice</span> <span class="s">&mdash;[worksAt]&rarr;</span> Company <span class="m">Acme</span><br>
-          <span class="k">&rarr;</span> Person <span class="m">Alice</span> <span class="s">&mdash;[worksWith]&rarr;</span> Person <span class="m">Bob</span><br>
-          <span class="k">&rarr;</span> Person <span class="m">Alice</span> <span class="s">&mdash;[worksOn]&rarr;</span> Project <span class="m">Table</span>
+        <img src="img/ai-chat.png" alt="The AI window answering how many cities each country has: the model ran a groupCount query and answered from its result" style="display:block;width:100%;height:auto;border-radius:10px" />
+      </div>
+    </div>
+
+    <div class="feature reveal">
+      <div>
+        <h3>Generate a knowledge graph</h3>
+        <p>A short wizard takes the text, a Word, Excel, PDF or CSV file, or a Wikipedia article, and what to look for. The model answers with strict JSON that the app cleans up (merging &ldquo;Acme&rdquo; and &ldquo;Acme Inc.&rdquo; into one node) and shows as a card: the counts, the labels and the exact script. Then <em>replace</em> the drawing or <em>merge</em> into it, and write to a database only when you say so.</p>
+        <div class="chips">
+          <span class="chip">Text · files · Wikipedia</span><span class="chip">Entity de-duplication</span>
+          <span class="chip">Merge or replace</span><span class="chip">Review before commit</span>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;justify-content:center;font-size:.82rem;color:var(--muted)">
-          <span class="count" style="color:var(--blue-400)">4 nodes</span> · <span class="count" style="color:var(--blue-400)">3 edges</span> · previewed before drawing
-        </div>
+      </div>
+      <div class="feature-media">
+        <img src="img/kg-card.png" alt="A knowledge graph proposed from a paragraph about Apollo 11: 14 nodes and 15 edges by label, the script that adds them, and Replace drawing, Merge into drawing and Use this graph" style="display:block;width:100%;height:auto;border-radius:10px" />
+        <img src="img/app-generated.png" alt="The Apollo 11 graph drawn on the canvas, its additions staged in the Generated tab to commit" style="display:block;width:100%;height:auto;border-radius:10px" />
       </div>
     </div>
   </div>
@@ -403,8 +574,8 @@
       <p>The step debugger re-runs your query truncated at each step and shows how many traversers survive — so a query that returns nothing stops being a mystery.</p>
     </div>
     <div class="feature-media reveal" style="max-width:680px;margin:0 auto">
-      <img src="img/debugger.png" alt="The step debugger showing the traverser count after each step, with the final step dropped to zero highlighted in red" style="display:block;width:100%;height:auto;border-radius:10px" />
-      <p class="muted" style="font-size:.82rem;margin:8px 2px 0">Each step shows the traverser count; the red zero is where every result was dropped — click any step to visualize that intermediate result in 2D or 3D.</p>
+      <img src="img/debugger.png" alt="The step debugger showing the traverser count after each step, one step opened to show the traversers going in and coming out, and the final step dropped to zero highlighted in red" style="display:block;width:100%;height:auto;border-radius:10px" />
+      <p class="muted" style="font-size:.82rem;margin:8px 2px 0">Each step shows the traverser count; the red zero is where every result was dropped. Open a step to see what went into it and what came out, or visualize that intermediate result in 2D or 3D.</p>
     </div>
   </div>
 </section>
@@ -414,17 +585,20 @@
   <div class="wrap">
     <div class="sec-head reveal">
       <h2>Connects to the graphs you already use</h2>
-      <p>Anything reachable from your browser over WebSocket or HTTP (with CORS) works — no server component required.</p>
+      <p>Anything reachable from your browser over WebSocket, HTTP (with CORS) or Bolt works with no server component. For a database that sends no CORS headers, sits on a private network or speaks only Bolt to servers, the optional server edition connects from its host instead.</p>
     </div>
     <div class="reveal">
       <table class="dbtable">
-        <thead><tr><th>Database</th><th>Protocol</th><th>Status</th></tr></thead>
+        <thead><tr><th>Database</th><th>Query language</th><th>Route</th></tr></thead>
         <tbody>
-          <tr><td>Apache TinkerPop / TinkerGraph</td><td>Gremlin over WebSocket or HTTP</td><td class="ok">✔ Supported</td></tr>
-          <tr><td>Azure Cosmos DB (Gremlin API)</td><td>Gremlin + HMAC-SHA256</td><td class="ok">✔ Supported</td></tr>
-          <tr><td>Fuseki · Blazegraph · GraphDB · Virtuoso</td><td>SPARQL 1.1 over HTTP</td><td class="ok">✔ Supported</td></tr>
-          <tr><td>Wikidata · DBpedia (public)</td><td>SPARQL over HTTPS</td><td class="ok">✔ Supported</td></tr>
-          <tr><td>Neo4j · Memgraph · ArangoDB · Dgraph</td><td>Cypher / AQL / DQL</td><td class="soon">◷ On the roadmap</td></tr>
+          <tr><td>Apache TinkerPop / TinkerGraph · JanusGraph</td><td>Gremlin over WebSocket or HTTP</td><td class="ok">✔ Browser or server</td></tr>
+          <tr><td>Azure Cosmos DB (Gremlin API)</td><td>Gremlin over WebSocket, the key as the login</td><td class="ok">✔ Browser or server</td></tr>
+          <tr><td>Neo4j · Memgraph</td><td>Cypher over Bolt</td><td class="ok">✔ Browser or server</td></tr>
+          <tr><td>ArangoDB</td><td>AQL over HTTP</td><td class="ok">✔ Browser or server</td></tr>
+          <tr><td>Dgraph</td><td>DQL over HTTP</td><td class="ok">✔ Browser or server</td></tr>
+          <tr><td>GUN</td><td>Peer-to-peer</td><td class="ok">✔ Browser</td></tr>
+          <tr><td>Fuseki · Blazegraph · GraphDB · Virtuoso</td><td>SPARQL 1.1 over HTTP</td><td class="ok">✔ Browser or server</td></tr>
+          <tr><td>Wikidata · DBpedia (public)</td><td>SPARQL over HTTPS</td><td class="ok">✔ Browser or server</td></tr>
         </tbody>
       </table>
     </div>
@@ -455,10 +629,10 @@
   <div class="wrap foot-inner">
     <span class="brand">
       <svg viewBox="-10 -15 100 90" width="24" height="20" fill="none" stroke="#60a5fa" stroke-width="3" xmlns="http://www.w3.org/2000/svg">
-        <g transform="scale(1.59) translate(-16.6,-8.6)"><g transform="rotate(-5)">
-          <line x1="20" y1="20" x2="40" y2="12"/><line x1="40" y1="12" x2="60" y2="22"/><line x1="30" y1="40" x2="50" y2="36"/>
-          <circle cx="20" cy="20" r="4" fill="#3B82F6"/><circle cx="40" cy="12" r="4" fill="#3B82F6"/>
-          <circle cx="60" cy="22" r="4" fill="#3B82F6"/><circle cx="50" cy="36" r="4" fill="#3B82F6"/>
+        <g transform="scale(1.59) translate(-16.6,-8.49)"><g transform="rotate(-5)">
+          <line x1="18.42" y1="23.19" x2="38.64" y2="10.75"/><line x1="38.64" y1="10.75" x2="62.84" y2="28.17"/><line x1="29.19" y1="48.67" x2="44.17" y2="33.01"/>
+          <circle cx="18.42" cy="23.19" r="4" fill="#3B82F6"/><circle cx="38.64" cy="10.75" r="4" fill="#3B82F6"/>
+          <circle cx="62.84" cy="28.17" r="4" fill="#3B82F6"/><circle cx="44.17" cy="33.01" r="4" fill="#3B82F6"/>
         </g></g>
       </svg>
       Graph DB Viewer
@@ -467,6 +641,15 @@
     <span class="sp">Built for developers who just want to see the graph.</span>
   </div>
 </footer>
+
+<!-- A picture opened large -->
+<div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-label="Picture" hidden>
+  <span class="lb-count" id="lbCount"></span>
+  <button type="button" class="lb-btn lb-close" id="lbClose" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button>
+  <button type="button" class="lb-btn lb-prev" id="lbPrev" aria-label="Previous picture"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
+  <figure><img id="lbImg" alt="" /><figcaption id="lbCaption"></figcaption></figure>
+  <button type="button" class="lb-btn lb-next" id="lbNext" aria-label="Next picture"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg></button>
+</div>
 
 <script>
   const io = new IntersectionObserver((entries)=>{
@@ -484,7 +667,55 @@
     viewimg.alt = tab.dataset.alt;
   }));
 
-  // Hero slideshow: cross-fade through the app screenshots, auto-advancing, with clickable dots.
+  // Lightbox: any picture on the page opened large with its caption; the arrows and the arrow keys go through them all, in
+  // the page's order, and Esc, the cross or a click beside the picture closes it.
+  (function(){
+    const lb = document.getElementById('lightbox');
+    const img = document.getElementById('lbImg');
+    const caption = document.getElementById('lbCaption');
+    const count = document.getElementById('lbCount');
+    let list = [], at = 0, back = null;
+    function show(n){
+      at = (n + list.length) % list.length;
+      const p = list[at];
+      img.src = p.currentSrc || p.src;
+      img.alt = p.alt;
+      caption.textContent = p.alt;
+      count.textContent = (at + 1) + ' / ' + list.length;
+    }
+    function close(){
+      lb.hidden = true;
+      document.body.style.overflow = '';
+      if(back) back.focus();
+    }
+    window.openLightbox = function(picture){
+      list = [...document.querySelectorAll('img')].filter(i => !lb.contains(i));
+      back = document.activeElement;
+      show(Math.max(0, list.indexOf(picture)));
+      lb.hidden = false;
+      document.body.style.overflow = 'hidden';
+      document.getElementById('lbClose').focus();
+    };
+    document.getElementById('lbClose').addEventListener('click', close);
+    document.getElementById('lbPrev').addEventListener('click', ()=>show(at - 1));
+    document.getElementById('lbNext').addEventListener('click', ()=>show(at + 1));
+    lb.addEventListener('click', e=>{ if(e.target === lb || e.target.tagName === 'FIGURE') close(); });
+    document.addEventListener('keydown', e=>{
+      if(lb.hidden) return;
+      if(e.key === 'Escape') close();
+      else if(e.key === 'ArrowLeft') show(at - 1);
+      else if(e.key === 'ArrowRight') show(at + 1);
+    });
+    //The slideshow opens its own picture on screen (its others are stacked under it, unseen), so it is left to itself here.
+    document.addEventListener('click', e=>{
+      const p = e.target.closest && e.target.closest('img');
+      if(!p || lb.contains(p) || p.closest('#heroshow')) return;
+      window.openLightbox(p);
+    });
+  })();
+
+  // Hero slideshow: cross-fade through the app screenshots, auto-advancing, with clickable dots and arrows (2026-11-06, the
+  // user), resting while the pointer is over it; a click on a picture opens it large.
   (function(){
     const show = document.getElementById('heroshow');
     if(!show) return;
@@ -492,6 +723,11 @@
     const tag = document.getElementById('heroTag');
     const dotsWrap = document.getElementById('heroDots');
     let idx = 0, timer;
+    document.getElementById('heroPrev').addEventListener('click', e=>{ e.stopPropagation(); go((idx - 1 + slides.length) % slides.length); restart(); });
+    document.getElementById('heroNext').addEventListener('click', e=>{ e.stopPropagation(); go((idx + 1) % slides.length); restart(); });
+    show.querySelector('.slides').addEventListener('click', e=>{ if(!e.target.closest('.slide-nav')) window.openLightbox(slides[idx]); });
+    show.addEventListener('mouseenter', ()=>clearInterval(timer));
+    show.addEventListener('mouseleave', ()=>restart());
     slides.forEach((s,i)=>{
       const b = document.createElement('button');
       b.className = 'dot-btn' + (i===0 ? ' on' : '');

@@ -85,15 +85,12 @@ public sealed class GunQueryBuilder : IGraphQueryBuilder
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var node in table.Nodes)
-        {
             if (node.Properties.TryGetValue("name", out var name) && !string.IsNullOrWhiteSpace(name))
                 names[node.Id] = name;
             else
                 names[node.Id] = node.Id;
-        }
 
         foreach (var edge in table.Edges)
-        {
             edges.Add(new EdgeInfo
             {
                 EdgeId = edge.Id,
@@ -103,7 +100,6 @@ public sealed class GunQueryBuilder : IGraphQueryBuilder
                 OtherNodeId = edge.Target,
                 OtherNodeLabel = NameOf(names, edge.Target)
             });
-        }
 
         return edges;
     }
@@ -184,12 +180,16 @@ public sealed class GunQueryBuilder : IGraphQueryBuilder
     ///<summary>
     ///An edge, with its properties dropped. A GUN link is a key holding a node — there is nothing on it to
     ///carry a property, so an edge that had them would need a node of its own standing in for it, which is
-    ///a modelling decision for whoever owns the data rather than one the viewer should make silently.
+    ///a modeling decision for whoever owns the data rather than one the viewer should make silently.
     ///</summary>
     public string AddEdgeWithProperties(string sourceId, string label, string targetId, IReadOnlyDictionary<string, string> properties)
     {
         return AddEdge(sourceId, label, targetId);
     }
+
+    ///<summary>A link is a key holding a node, so a property offered for one is dropped — said out loud
+    ///wherever properties are composed for edges, rather than only in the note at the top of this file.</summary>
+    public bool WritesEdgeProperties => false;
 
     ///<summary>
     ///Not offered, because GUN will not do it. A node lives at the root of the graph and the root only

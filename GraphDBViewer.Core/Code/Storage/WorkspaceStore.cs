@@ -15,6 +15,8 @@ public class WorkspaceStore
     private const string HistoryKey = "graphdbviewer:queryHistory";
     private const string TabsKey = "graphdbviewer:tabs";
     private const string TabTextKey = "graphdbviewer:tabText";
+    private const string OpenConnectionsKey = "graphdbviewer:openConnections";
+    private const string ActiveConnectionKey = "graphdbviewer:activeConnection";
 
     public const int MaxHistory = 20;
 
@@ -44,7 +46,6 @@ public class WorkspaceStore
         //Overlay the per-keystroke editor text, which is fresher than the last heavy checkpoint.
         var texts = await _storage.GetAsync<List<TabText>>(TabTextKey);
         if (texts != null)
-        {
             foreach (var tab in tabs)
             {
                 var t = texts.FirstOrDefault(x => x.Id == tab.Id);
@@ -54,9 +55,93 @@ public class WorkspaceStore
                 tab.QueryText = t.Query;
                 tab.GeneratedQueryText = t.Generated;
             }
-        }
 
         return tabs;
+    }
+
+    ///<summary>
+    ///Restores the viewer's open connections, each with its query tabs, and which was in front (the multiple-connections
+    ///spec, task 3), the fresher per-keystroke editor text overlaid on every tab. Returns null when none were stored: a
+    ///browser from before there were several keeps its one list of tabs under the old key, and LoadTabsAsync brings them
+    ///back as the first connection's.
+    ///</summary>
+    public async Task<OpenConnections> LoadConnectionsAsync()
+    {
+        var snaps = await _storage.GetAsync<List<ConnectionSnapshot>>(OpenConnectionsKey);
+
+        if (snaps == null || snaps.Count == 0)
+            return null;
+
+        var connections = snaps.Select(FromSnapshot).ToList();
+        var texts = await _storage.GetAsync<List<TabText>>(TabTextKey);
+
+        if (texts != null)
+            foreach (var tab in connections.SelectMany(c => c.Tabs))
+            {
+                var t = texts.FirstOrDefault(x => x.Id == tab.Id);
+
+                if (t == null)
+                    continue;
+
+                tab.QueryText = t.Query;
+                tab.GeneratedQueryText = t.Generated;
+            }
+
+        var active = await _storage.GetAsync<int>(ActiveConnectionKey);
+
+        return new OpenConnections { Connections = connections, Active = Math.Clamp(active, 0, connections.Count - 1) };
+    }
+
+    ///<summary>Persists the open connections, every tab of each as a heavy snapshot, and which is in front.</summary>
+    public async Task SaveConnectionsAsync(IReadOnlyList<ViewerConnection> connections, int active)
+    {
+        try
+        {
+            await _storage.SetAsync(OpenConnectionsKey, connections.Select(ToSnapshot).ToList());
+            await _storage.SetAsync(ActiveConnectionKey, active);
+        }
+        catch (Exception ex)
+        {
+            //As for the tabs: a quota run out is no reason to break what the user is doing.
+            Console.WriteLine($"Saving the open connections failed: {ex.Message}");
+        }
+    }
+
+    public static ConnectionSnapshot ToSnapshot(ViewerConnection c)
+    {
+        var form = new GremlinDB.GremlinConnection(c.Connection) { AuthKey = string.Empty };
+
+        return new ConnectionSnapshot
+        {
+            Id = c.Id,
+            SavedKey = c.SelectedConnectionKey,
+            Form = form,
+            Offline = c.OfflineMode,
+            Tabs = c.Tabs.Select(ToSnapshot).ToList(),
+            ActiveTab = c.ActiveTabIndex
+        };
+    }
+
+    ///<summary>Rebuilds an open connection, disconnected, with a tab of its own when it kept none.</summary>
+    public static ViewerConnection FromSnapshot(ConnectionSnapshot s)
+    {
+        var c = new ViewerConnection
+        {
+            Id = Or(s.Id, Guid.NewGuid().ToString()),
+            SelectedConnectionKey = s.SavedKey,
+            OfflineMode = s.Offline
+        };
+
+        if (s.Form != null)
+            c.Connection = s.Form;
+
+        if (s.Tabs is { Count: > 0 })
+        {
+            c.Tabs = s.Tabs.Select(FromSnapshot).ToList();
+            c.ActiveTabIndex = Math.Clamp(s.ActiveTab, 0, c.Tabs.Count - 1);
+        }
+
+        return c;
     }
 
     ///<summary>Persists every tab as a heavy snapshot (results included).</summary>
@@ -115,12 +200,16 @@ public class WorkspaceStore
             Show3dVertexLabels = t.Show3dVertexLabels,
             Show3dEdgeLabels = t.Show3dEdgeLabels,
             Show3dProps = t.Show3dProps,
+            Draw3dLabelDistance = t.Draw3dLabelDistance,
+            Draw3dNodeDistance = t.Draw3dNodeDistance,
+            MapNodeSize = t.MapNodeSize,
             G3dExportFormat = t.G3dExportFormat,
             ImageExportFormat = t.ImageExportFormat,
             TableExportFormat = t.TableExportFormat,
             LabelStyles = t.LabelStyles,
             EdgeColorMode = t.EdgeColorMode,
-            EdgeColors = t.EdgeColors
+            EdgeColors = t.EdgeColors,
+            EdgeDetails = t.EdgeDetails
         };
     }
 
@@ -158,12 +247,16 @@ public class WorkspaceStore
             Show3dVertexLabels = s.Show3dVertexLabels,
             Show3dEdgeLabels = s.Show3dEdgeLabels,
             Show3dProps = s.Show3dProps ?? true,
+            Draw3dLabelDistance = s.Draw3dLabelDistance ?? 100,
+            Draw3dNodeDistance = s.Draw3dNodeDistance ?? 100,
+            MapNodeSize = s.MapNodeSize ?? 100,
             G3dExportFormat = Or(s.G3dExportFormat, "obj"),
             ImageExportFormat = "png",//always default the image-download format to PNG on load
             TableExportFormat = Or(s.TableExportFormat, "csv"),
             LabelStyles = s.LabelStyles ?? new Dictionary<string, LabelStyle>(),
             EdgeColorMode = s.EdgeColorMode,
-            EdgeColors = s.EdgeColors ?? new Dictionary<string, string>()
+            EdgeColors = s.EdgeColors ?? new Dictionary<string, string>(),
+            EdgeDetails = s.EdgeDetails ?? new List<string>()
         };
     }
 
@@ -191,7 +284,7 @@ public class WorkspaceStore
     }
 
     //Coerces a saved / embedded editor language to one the dropdown can actually select — Gremlin, Cypher,
-    //SPARQL or AQL. Anything else (an empty legacy value, an unknown id) falls back to Gremlin, otherwise
+    //SPARQL, AQL or DQL. Anything else (an empty legacy value, an unknown id) falls back to Gremlin, otherwise
     //the language <select> would show no selection.
     public static string NormalizeEditorLanguage(string language)
     {

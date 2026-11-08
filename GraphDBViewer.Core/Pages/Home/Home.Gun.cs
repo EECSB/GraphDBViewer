@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
 using GraphDBViewerWeb.Code;
 
@@ -105,13 +106,22 @@ public partial class Home
         await RunQueryAsync();
     }
 
+    //The start key's Enter, which runs the read without waiting for the box to lose focus.
+    private async Task OnGunStartKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter")
+            return;
+
+        await RunGunQueryAsync();
+    }
+
     //── Live updates ────────────────────────────────────────────────────
 
     ///<summary>
     ///Whether the canvas is following the database rather than showing one moment of it. Off by default:
     ///a subscription that keeps redrawing is not what someone reading a graph always wants.
     ///</summary>
-    private bool liveUpdates;
+    private bool liveUpdates { get => activeConnection.LiveUpdates; set => activeConnection.LiveUpdates = value; }
 
     ///<summary>Live only means anything where the engine pushes; everywhere else a result is final.</summary>
     private ILiveGraphDb LiveDb
@@ -149,6 +159,8 @@ public partial class Home
         live.GraphChanged -= OnLiveGraphChanged;
         live.GraphChanged += OnLiveGraphChanged;
 
+        //A watch that cannot start says why, in the bar a failed read uses, and Live goes back off: the toggle
+        //lit over nothing reads as a database with nothing changing.
         try
         {
             await live.WatchAsync(queryText ?? "");
@@ -190,9 +202,7 @@ public partial class Home
             //A push is later than what is drawn, so it replaces those elements rather than being weighed
             //against them — a property the peer removed has to disappear here too.
             if (current.ValueKind == JsonValueKind.Undefined)
-            {
                 graphResultData = result.Data;
-            }
             else
             {
                 //A pushed node's links are all of its links — GUN keeps them as keys, and a key holds one
@@ -205,9 +215,9 @@ public partial class Home
             //Reconciled rather than added to: a live update can take an element away — a peer re-pointing a
             //link leaves the old edge with nothing behind it — and the add-only path has no way to say so.
             if (visualizationMode == 2)
-                await JS.InvokeVoidAsync("syncCytoscapeGraph", GraphDataConverter.ToCytoscapeJson(graphResultData, labelStyles, edgeColorMode, edgeColors));
+                await JS.InvokeVoidAsync("syncCytoscapeGraph", GraphDataConverter.ToCytoscapeJson(graphResultData, labelStyles, edgeColorMode, edgeColors, ActiveOverlay(), edgeDetails));
             else if (visualizationMode == 3)
-                await JS.InvokeVoidAsync("graph3DInterop.syncData", GraphDataConverter.ToForceGraphJson(graphResultData, labelStyles, edgeColorMode, edgeColors));
+                await JS.InvokeVoidAsync("graph3DInterop.syncData", GraphDataConverter.ToForceGraphJson(graphResultData, labelStyles, edgeColorMode, edgeColors, ActiveOverlay(), edgeDetails));
             else
                 await RenderGraphAsync();
 

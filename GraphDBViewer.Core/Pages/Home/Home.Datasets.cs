@@ -62,10 +62,8 @@ public partial class Home
                 return datasetsOnCanvas;
 
             foreach (var row in GraphDataConverter.ToTable(data).Nodes)
-            {
                 if (row.Label == DatasetVertex.Label)
                     datasetsOnCanvas.Add(row);
-            }
 
             return datasetsOnCanvas;
         }

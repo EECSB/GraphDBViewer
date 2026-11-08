@@ -7,13 +7,24 @@ const CY_HEAVY_THRESHOLD = 500;
 //Whether the live instance was built in heavy mode — a redraw that crosses the threshold must re-create
 //the instance, since these are init-time render options that can't be toggled on a live graph.
 let cyHeavyMode = false;
+//Above this many elements the graph is drawn by Cytoscape's WebGL renderer where the browser gives WebGL 2
+//(2026-10-21): the GPU draws in batches what the canvas draws a shape at a time, which is how gdotV shows tens of
+//thousands of elements. Past the zoom its textures are made for, it hands back to the canvas renderer itself, so
+//close up a graph reads as it always did. Tunable.
+const CY_WEBGL_THRESHOLD = 2000;
+//Whether the live instance draws with WebGL: fixed when it is made, as the heavy mode is.
+let cyWebglMode = false;
+//Whether the browser gives WebGL 2, asked once; null until then.
+let cyWebgl2 = null;
 let cyResizeObserver = null;
 let cyResizeFrameId = null;
+//Takes the middle-button pan's listeners back off its container and the window, while they are on (attachMiddleDragPan).
+let middlePanDetach = null;
 let dotNetRef = null;
 let lastTapNodeId = null;
 let lastTapTime = 0;
 let gridEnabled = false;
-const GRID_STEP = 50;//spacing (graph units) for grid-mode snapping and the grid overlay
+let gridStep = 50;//spacing (graph units) for grid-mode snapping and the grid overlay: Grid size, setCytoscapeGridSize
 
 //Per-node HTML overlay: a small +/- toggle on each node with properties, plus a lighter-colored box
 //pinned below the node listing either its "show"-marked properties (data.showProps) or — when the node
@@ -104,6 +115,195 @@ function boxContentFor(n) {
     return n.data('showProps') || [];
 }
 
+//Show details on canvas (2026-11-06, the user): a vertex whose label's style, or whose own gdbvDetails, asks for it is drawn
+//as a small element card in place of its box (the same evening, the user: not under it, instead of it). The card has a head
+//in the vertex's color with its name, label and id, and under it a row for each property, the key muted beside its value.
+//The vertex itself stays, see-through and sized to the card (data detailsW and detailsH, the live stylesheet's
+//node[detailsW]), so its edges end at the card's edge and a click, a drag or a right-click on the card is the vertex's.
+//What the card says is graphGeometry's (detailsCardContent), which lays out the same card for what has no HTML to show
+//it: an image export, and the 3D view.
+function hasCanvasDetails(n) {
+    return n.data('details') === true;
+}
+
+//What a carded element's card says (graphGeometry.detailsCardContent): a vertex's kind and id over its name, an edge's two
+//ends over its label (Detailed view on edges, 2026-11-07), and under either a row for each property. An edge's id is left
+//out: it is seldom anyone's to read, and often made up.
+function detailsContentOf(el) {
+    const geo = window.graphGeometry;
+
+    if (el.isEdge()) {
+        const content = geo.detailsCardContent({ kind: el.source().id() + ' → ' + el.target().id(), id: el.id(), label: el.data('label'), properties: el.data('properties') });
+        content.id = null;
+
+        return content;
+    }
+
+    return geo.detailsCardContent({ kind: el.data('glabel') || 'vertex', id: el.id(), label: el.data('label'), properties: el.data('properties') });
+}
+
+//A card's head color: a vertex's color, or an edge's.
+function detailsColorOf(el) {
+    if (el.isEdge())
+        return el.data('edgeColor') || '#6c757d';
+
+    return el.data('bgColor') || '#0d6efd';
+}
+
+function hasEdgeDetails(e) {
+    return e.data('details') === true;
+}
+
+//Where a carded element stands, in the graph's own coordinates and on screen: a vertex's center, an edge's middle.
+function modelPlaceOf(el) {
+    if (el.isEdge())
+        return el.midpoint();
+
+    return el.position();
+}
+
+function renderedPlaceOf(el) {
+    if (el.isEdge())
+        return el.renderedMidpoint();
+
+    return el.renderedPosition();
+}
+
+function makeDetailsCard(n) {
+    const content = detailsContentOf(n);
+    const card = document.createElement('div');
+    card.className = 'gdbv-canvas-details';
+    card.style.setProperty('--gdbv-details-color', detailsColorOf(n));
+
+    if (n.isEdge())
+        card.setAttribute('data-edge', String(n.id()));
+    else
+        card.setAttribute('data-node', String(n.id()));
+
+    const head = document.createElement('div');
+    head.className = 'gdbv-canvas-details-head';
+
+    const meta = document.createElement('div');
+    meta.className = 'gdbv-canvas-details-meta';
+
+    const kindEl = document.createElement('span');
+    kindEl.className = 'gdbv-canvas-details-kind';
+    kindEl.textContent = content.kind;
+    meta.appendChild(kindEl);
+
+    if (content.id !== null) {
+        const idEl = document.createElement('span');
+        idEl.className = 'gdbv-canvas-details-id';
+        idEl.textContent = '#' + content.id;
+        meta.appendChild(idEl);
+    }
+
+    head.appendChild(meta);
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'gdbv-canvas-details-title';
+    titleEl.textContent = content.title;
+    head.appendChild(titleEl);
+    card.appendChild(head);
+
+    if (content.rows.length === 0)
+        return card;
+
+    const grid = document.createElement('div');
+    grid.className = 'gdbv-canvas-details-rows';
+
+    content.rows.forEach(function (row) {
+        const key = document.createElement('span');
+        key.className = 'gdbv-canvas-details-key';
+        key.textContent = row[0];
+
+        const value = document.createElement('span');
+        value.className = 'gdbv-canvas-details-value';
+        value.textContent = row[1];
+
+        grid.appendChild(key);
+        grid.appendChild(value);
+    });
+
+    card.appendChild(grid);
+
+    if (content.more > 0) {
+        const more = document.createElement('div');
+        more.className = 'gdbv-canvas-details-more';
+        more.textContent = '+' + content.more + ' more';
+        card.appendChild(more);
+    }
+
+    return card;
+}
+
+//Sizes each carded vertex to its card, measured as laid out at a zoom of 1, and gives a vertex whose card has gone its own
+//box back. On the map a vertex's sizes are read once for the marker scale, so a vertex whose size changed is read again.
+function fitDetailsNodes(cards) {
+    const changed = [];
+
+    cy.batch(() => {
+        cy.nodes('[detailsW]').forEach(n => {
+            if (hasCanvasDetails(n))
+                return;
+
+            n.removeData('detailsW detailsH');
+            changed.push(n);
+        });
+
+        cards.forEach(item => {
+            const rect = item.el.getBoundingClientRect();
+            const w = Math.ceil(rect.width);
+            const h = Math.ceil(rect.height);
+
+            //Not laid out (the 2D view hidden): the vertex keeps its box until the next build.
+            if (w === 0 || h === 0)
+                return;
+
+            item.el.style.width = w + 'px';
+            item.el.style.height = h + 'px';
+
+            //An edge's card is drawn over it, the edge keeping its own shape.
+            if (item.node.isEdge()) {
+                item.node.scratch('gdbvCardW', w);
+                return;
+            }
+
+            if (item.node.data('detailsW') === w && item.node.data('detailsH') === h)
+                return;
+
+            item.node.data({ detailsW: w, detailsH: h });
+            changed.push(item.node);
+        });
+    });
+
+    if (changed.length === 0 || !geoLayerOn)
+        return;
+
+    changed.forEach(n => n.removeScratch('gdbvMarker'));
+    applyGeoMarkerScale();
+}
+
+//Gives a label's vertices on the 2D canvas their details cards, or takes them away, where they stand; a vertex with its own
+//gdbvDetails keeps its own answer. False with no 2D graph, so the caller draws the graph instead.
+function setCytoscapeLabelDetails(label, on) {
+    if (!cy)
+        return false;
+
+    cy.nodes().filter(n => n.data('glabel') === label).forEach(n => {
+        const own = (n.data('properties') || {}).gdbvDetails;
+
+        if (own === 'true' || own === 'false')
+            return;
+
+        n.data('details', !!on);
+    });
+
+    setupCytoscapeShowLabels();
+
+    return true;
+}
+
 //Builds the lighter-colored property box (one left-aligned, separator-lined row per property). When the
 //node is fully expanded it also gets an "Additional Viewer Properties" expander that reveals its gdbv*
 //keys in the same box.
@@ -143,7 +343,11 @@ function makeShowBox(color, lines, n) {
             const viewerOpen = viewerExpandedNodes.has(id);
 
             const toggleRow = document.createElement('div');
-            toggleRow.textContent = (viewerOpen ? '− ' : '+ ') + 'Additional Viewer Properties';
+            if (viewerOpen)
+                toggleRow.textContent = '− Additional Viewer Properties';
+            else
+                toggleRow.textContent = '+ Additional Viewer Properties';
+
             toggleRow.style.whiteSpace = 'nowrap';
             toggleRow.style.padding = '1px 0';
             toggleRow.style.marginTop = '1px';
@@ -211,8 +415,13 @@ function makeToggleButton(n) {
     //Centered on its (left, top) point and scaled with the zoom (set in the update loop) so it stays
     //the same size relative to the node.
     btn.style.transformOrigin = 'center center';
-    btn.textContent = expanded ? '−' : '+';
-    btn.title = expanded ? 'Hide properties' : 'Show all properties';
+    if (expanded) {
+        btn.textContent = '−';
+        btn.title = 'Hide properties';
+    } else {
+        btn.textContent = '+';
+        btn.title = 'Show all properties';
+    }
 
     ['pointerdown', 'pointerup', 'mousedown', 'mouseup'].forEach(function (evt) {
         btn.addEventListener(evt, function (e) { e.stopPropagation(); });
@@ -233,6 +442,18 @@ function makeToggleButton(n) {
     return btn;
 }
 
+//Shows or hides a node's properties, as a click on its +/- button does: the element menu's Show / Hide properties.
+function toggleCytoscapeNodeProps(id) {
+    id = String(id);
+
+    if (expandedNodes.has(id))
+        expandedNodes.delete(id);
+    else
+        expandedNodes.add(id);
+
+    setupCytoscapeShowLabels();
+}
+
 //(Re)builds the per-node overlay: a +/- toggle on every node with properties, plus a box for the nodes
 //that currently have something to show (their show-marked props, or all props while expanded).
 function setupCytoscapeShowLabels() {
@@ -246,11 +467,14 @@ function setupCytoscapeShowLabels() {
         return;
 
     const propNodes = cy.nodes().filter(function (n) {
-        return nodeAllPropLines(n).length > 0;
+        return nodeAllPropLines(n).length > 0 || hasCanvasDetails(n);
     });
+    const cardedEdges = cy.edges().filter(hasEdgeDetails);
 
-    if (propNodes.length === 0)
+    if (propNodes.length === 0 && cardedEdges.length === 0) {
+        fitDetailsNodes([]);
         return;
+    }
 
     if (getComputedStyle(container).position === 'static')
         container.style.position = 'relative';
@@ -296,7 +520,19 @@ function setupCytoscapeShowLabels() {
     showItems = [];
     nodeButtons = [];
 
+    const cards = [];
+
     propNodes.forEach(function (n) {
+        //A details card is the vertex, and already shows every property, so it has no +/- to show them.
+        if (hasCanvasDetails(n)) {
+            const card = makeDetailsCard(n);
+
+            boxLayer.appendChild(card);
+            cards.push({ el: card, line: null, node: n, card: true });
+
+            return;
+        }
+
         const btn = makeToggleButton(n);
         btnLayer.appendChild(btn);
         nodeButtons.push({ el: btn, node: n });
@@ -318,6 +554,15 @@ function setupCytoscapeShowLabels() {
         showItems.push({ el: box, line: line, node: n });
     });
 
+    cardedEdges.forEach(function (e) {
+        const card = makeDetailsCard(e);
+
+        boxLayer.appendChild(card);
+        cards.push({ el: card, line: null, node: e, card: true });
+    });
+
+    fitDetailsNodes(cards);
+    cards.forEach(item => showItems.push(item));
     updateCytoscapeShowLabels();
 }
 
@@ -327,8 +572,13 @@ function updateCytoscapeShowLabels() {
     if (!showButtonLayer || !cyIsLive())
         return;
 
-    //Scale the boxes with the zoom so they stay proportional to the (also-scaling) nodes.
-    const z = cy.zoom();
+    //Scale the boxes with the zoom so they stay proportional to the (also-scaling) nodes. On the map the nodes keep their
+    //zoom-1 size whatever the zoom (applyGeoMarkerScale), so the + and the box keep theirs too, where they grew with the
+    //earth until 2026-11-05 (the user).
+    let z = cy.zoom();
+
+    if (geoLayerOn)
+        z = geoMarkerSize;
 
     nodeButtons.forEach(function (item) {
         const n = item.node;
@@ -350,11 +600,22 @@ function updateCytoscapeShowLabels() {
             item.el.style.display = 'none';
             if (item.line)
                 item.line.style.display = 'none';
+
             return;
         }
 
         item.el.style.display = '';
-        const p = n.renderedPosition();
+        const p = renderedPlaceOf(n);
+
+        //A details card stands where its vertex is, at its size, or at its edge's middle, and shows its selection.
+        if (item.card) {
+            item.el.style.left = p.x + 'px';
+            item.el.style.top = p.y + 'px';
+            item.el.style.transform = 'translate(-50%, -50%) scale(' + z + ')';
+            item.el.classList.toggle('is-selected', n.selected());
+            return;
+        }
+
         const h = n.renderedHeight();
         const nodeBottom = p.y + h / 2;
         const boxTop = nodeBottom + 16 * z;
@@ -412,6 +673,15 @@ function unobserveCyResize() {
     }
 }
 
+//Takes the middle-button pan's listeners back off the container they were put on and off the window. The window's
+//would otherwise hold that container once it has left the page, one more for every container the view was drawn in.
+function detachMiddleDragPan() {
+    if (middlePanDetach) {
+        middlePanDetach();
+        middlePanDetach = null;
+    }
+}
+
 function setCytoscapeDotNetRef(ref) {
     dotNetRef = ref;
 }
@@ -420,12 +690,26 @@ function setCytoscapeDotNetRef(ref) {
 //A layout animates for ~500ms after run(); if cy.destroy() lands during that window (e.g. the user
 //clicks Load DB again the moment it re-enables) the old layout's next animation frame runs against a
 //destroyed core and throws inside Cytoscape (endBatch -> notify on a null internal).
+//
+//Stopping alone does not prevent that for cose, which runs on animation frames of its own (Cytoscape 3.34.3): the
+//frame it has already asked for still comes, finds it stopped, and finishes as a completed run does, placing every
+//node and fitting the view. Switching from 2D to Table and back while one ran destroyed the instance in between, and
+//that frame threw (2026-11-02); on a live instance it moved the graph after a newer layout had taken over. So a
+//stopped layout is left nothing to place and no view to fit.
 function stopCurrentLayout() {
     if (currentLayout) {
+        const layout = currentLayout;//stop() clears currentLayout, through runTrackedLayout's layoutstop
+
         try {
-            currentLayout.stop();
+            layout.stop();
         }
         catch { }
+
+        if (layout.options && layout.options.cy) {
+            layout.options.eles = layout.options.cy.collection();
+            layout.options.fit = false;
+        }
+
         currentLayout = null;
     }
 }
@@ -494,16 +778,50 @@ const GEO_OUTLINE_URL = '_content/GraphDBViewer.Core/img/earth-outline.json';
 const GEO_MAP_WIDTH = 2048;
 const GEO_MAP_HEIGHT = 1024;
 const GEO_GRATICULE_MIN_SPACING = 70;//px between graticule lines, at least
-const GEO_MARKER_PROPS = 'font-size padding text-max-width width height';//what the marker scale bypasses on a node
+const GEO_MARKER_PROPS = 'font-size padding text-max-width width height border-width overlay-padding underlay-padding';//what the marker scale bypasses on a node
 const GEO_MARKER_EDGE_PROPS = 'font-size width arrow-scale';//and on an edge
 let geoLayerOn = false;
 let geoLayer = null;//the canvas behind the graph while the map is on
 let geoStyle = 'satellite';//'satellite' or 'outline' — setCytoscapeMapStyle
 let geoDetail = 'standard';//'standard' or 'high' — setCytoscapeMapDetail
+let geoMarkerSize = 1;//Node size on map, as a multiple of the size a node keeps at every zoom — setCytoscapeMapNodeSize
 let geoImages = {};//url → the world image at that size, once loaded
 let geoDetailedFailed = false;//the detailed image's download failed; asked for again only by choosing it again
 let geoOutline = null;//the coastline rings [[[lon, lat], ...], ...], once loaded
 let geoLoading = {};//url → true while a fetch is in flight, so a redraw never starts a second one
+
+//A tile server, when one is set in Settings (MapTilesPreference.cs): the earth is then drawn from its Web Mercator tiles,
+//each reprojected in strips onto the equirectangular world (graphGeometry.geoTileStrips), at the tile zoom whose pixels
+//match the screen's. A tile still on its way is stood in for by the nearest ancestor that has arrived, cut to its part,
+//so a zoom shows the coarser earth sharpening rather than holes. Neither look nor resolution applies to tiles; the
+//satellite look's veil does, so nodes read against a bright street map as they do against the image.
+const GEO_TILE_MAX_ZOOM = 22;//no server has more; one with fewer fails the deeper tiles, and their ancestors stand in
+const GEO_TILE_MOST = 300;//tiles drawn at once at most: past it the zoom steps down, as on a very tall screen
+const GEO_TILE_CACHE = 600;//tiles kept, the least recently drawn going first
+let geoTiles = null;//{ template, key, viewport, keep } while the earth comes from a tile server: setCytoscapeMapTiles
+let geoTileViewSay = null;//says the view drawn while the tiles are Google's: sayGeoTileView
+let geoTileCache = new Map();//url → { image, ready, failed }, in the order last drawn
+let geoTileShown = { zoom: null, own: 0, standIns: 0 };//what the last draw drew, for tests
+let geoTileReport = null;//'ready' or 'failed', last told to Home
+let geoTileRedraw = 0;//the frame a redraw for arrived tiles is waiting on
+
+//The plane the Map's nodes stand on: the projection's (GEO_MAP_WIDTH wide) times scale, moved by x and y. Cytoscape draws a
+//label in the plane's units at the size the zoom shows it, so a marker's 12 pixels at a city's zoom were a font of a
+//hundredth of a pixel, which the browser measures so badly that the label was cut to "…", and past that drew nothing
+//(the user, 2026-11-06). So the zoom is kept low: past GEO_PLANE_ZOOM_MOST the plane is made larger and the zoom smaller
+//by the same factor, about the middle of the view, and the other way below GEO_PLANE_ZOOM_LEAST, never smaller than the
+//projection's own. Nothing on screen moves; the view's middle is the plane's 0, so its numbers stay small at a street.
+const GEO_PLANE_ZOOM_MOST = 8;//a label's font no less than an eighth of its pixels: thinner than that it draws pale
+const GEO_PLANE_ZOOM_LEAST = 0.5;
+const GEO_PLANE_ZOOM_AIM = 2;
+let geoPlane = { scale: 1, x: 0, y: 0 };
+let geoPlaneChanging = false;
+let geoPlaneWaiting = 0;//the timer waiting for an animated zoom to end before the plane follows it
+
+//A point of the projection on the plane.
+function geoPlanePoint(p) {
+    return { x: p.x * geoPlane.scale + geoPlane.x, y: p.y * geoPlane.scale + geoPlane.y };
+}
 
 function geoPosition(n) {
     const lat = n.data('geoLat');
@@ -512,10 +830,96 @@ function geoPosition(n) {
     if (typeof lat !== 'number' || typeof lng !== 'number')
         return undefined;
 
-    return window.graphGeometry.geoProject(lat, lng, GEO_MAP_WIDTH, GEO_MAP_HEIGHT);
+    return geoPlanePoint(window.graphGeometry.geoProject(lat, lng, GEO_MAP_WIDTH, GEO_MAP_HEIGHT));
+}
+
+//Puts the nodes on another plane, the viewport moved with them so nothing on screen changes, and the routes bent for it.
+function setGeoPlane(next) {
+    if (!cy)
+        return;
+
+    const f = next.scale / geoPlane.scale;
+    const zoom = cy.zoom();
+    const pan = cy.pan();
+
+    if (f === 1 && next.x === geoPlane.x && next.y === geoPlane.y)
+        return;
+
+    geoPlaneChanging = true;
+
+    try {
+        cy.batch(() => {
+            cy.nodes().forEach(n => {
+                const p = n.position();
+
+                n.position({ x: (p.x - geoPlane.x) * f + next.x, y: (p.y - geoPlane.y) * f + next.y });
+            });
+        });
+
+        const before = geoPlane;
+
+        geoPlane = next;
+
+        if (geoLayerOn)
+            applyGeoEdgeBends();
+
+        cy.viewport({
+            zoom: zoom / f,
+            pan: { x: pan.x + before.x * zoom - next.x * zoom / f, y: pan.y + before.y * zoom - next.y * zoom / f }
+        });
+    }
+    finally {
+        geoPlaneChanging = false;
+    }
+}
+
+//The projection's own plane, which a layout places on and the plain view gets back.
+function resetGeoPlane() {
+    clearTimeout(geoPlaneWaiting);
+    setGeoPlane({ scale: 1, x: 0, y: 0 });
+}
+
+//Keeps the zoom between GEO_PLANE_ZOOM_LEAST and GEO_PLANE_ZOOM_MOST on every zoom. An animated one, as Find a place's
+//glide, is followed once it has ended: changing the plane under it would throw the rest of its way off.
+function keepGeoPlaneInRange() {
+    if (!cy || !geoLayerOn || geoPlaneChanging)
+        return;
+
+    if (cy.animated()) {
+        clearTimeout(geoPlaneWaiting);
+        geoPlaneWaiting = setTimeout(keepGeoPlaneInRange, 100);
+        return;
+    }
+
+    const zoom = cy.zoom();
+    let scale = geoPlane.scale;
+
+    if (zoom > GEO_PLANE_ZOOM_MOST)
+        scale = geoPlane.scale * zoom / GEO_PLANE_ZOOM_AIM;
+    else if (zoom < GEO_PLANE_ZOOM_LEAST && geoPlane.scale > 1)
+        scale = Math.max(1, geoPlane.scale * zoom / GEO_PLANE_ZOOM_AIM);
+    else
+        return;
+
+    if (scale === 1) {
+        setGeoPlane({ scale: 1, x: 0, y: 0 });
+        return;
+    }
+
+    //The view's middle, on the plane now and on the projection, becomes the new plane's 0.
+    const container = cy.container();
+    const pan = cy.pan();
+    const middle = {
+        x: ((container.clientWidth / 2 - pan.x) / zoom - geoPlane.x) / geoPlane.scale,
+        y: ((container.clientHeight / 2 - pan.y) / zoom - geoPlane.y) / geoPlane.scale
+    };
+
+    setGeoPlane({ scale: scale, x: -middle.x * scale, y: -middle.y * scale });
 }
 
 function geoLayout() {
+    resetGeoPlane();
+
     cy.nodes().forEach(n => {
         if (geoPosition(n))
             n.removeClass('gdbv-unlocated');
@@ -542,6 +946,7 @@ function clearGeoLayout() {
     if (!cy)
         return;
 
+    resetGeoPlane();
     cy.nodes('.gdbv-unlocated').removeClass('gdbv-unlocated');
     clearGeoEdgeBends();
     clearGeoMarkerScale();
@@ -553,11 +958,43 @@ function clearGeoLayout() {
 //how the 2D view behaves and is right there and wrong here (the user's call, 2026-09-02). Each
 //element's stylesheet values are read once, bypasses off, and kept in its scratch; every zoom writes
 //them back divided by the zoom. Edge labels the same. Off again with the map, so the plain view is
-//untouched. Nodes sized to their label keep that: only a fixed width/height is scaled.
+//untouched. A node sized to its label keeps that size, measured once (geoMarkerBase) and scaled like a fixed one. Its
+//outline and the shade drawn round it on hover and press scale too: left in the plane's units they grew with the zoom,
+//a selected node's outline several times its box and the shade a dark square over half the map (the user, 2026-11-06).
 function startGeoMarkerScale() {
+    cy.off('zoom', keepGeoPlaneInRange);
+    cy.on('zoom', keepGeoPlaneInRange);
     cy.off('zoom', applyGeoMarkerScale);
     cy.on('zoom', applyGeoMarkerScale);
+    cy.off('select unselect', 'node', geoMarkerBorder);
+    cy.on('select unselect', 'node', geoMarkerBorder);
     applyGeoMarkerScale();
+}
+
+//A node selected or let go has the stylesheet's outline for that state, measured again and scaled to the zoom.
+function geoMarkerBorder(evt) {
+    const n = evt.target;
+    const base = n.scratch('gdbvMarker');
+
+    if (!cy || !geoLayerOn || !base)
+        return;
+
+    n.removeStyle('border-width');
+    base.border = n.numericStyle('border-width');
+    n.style('border-width', base.border * geoMarkerSize / cy.zoom());
+}
+
+//Node size on map (2026-11-06, the user): how large the nodes are drawn on the map, as a percentage of the size they keep
+//at every zoom, so they stay that size as the map is zoomed. Their labels, outlines and shades with them, and the edges,
+//their labels and arrowheads, and the + and property boxes too (the user, 2026-11-06: "it should all get scaled"). One
+//setting with the globe's, and remembered for the next map when none is showing, as the style is.
+function setCytoscapeMapNodeSize(percent) {
+    geoMarkerSize = Math.max(0.1, Math.min(10, (+percent || 100) / 100));
+
+    if (cy && geoLayerOn) {
+        applyGeoMarkerScale();
+        updateCytoscapeShowLabels();
+    }
 }
 
 function applyGeoMarkerScale() {
@@ -565,44 +1002,34 @@ function applyGeoMarkerScale() {
         return;
 
     const f = 1 / cy.zoom();
+    const nodeF = f * geoMarkerSize;
+
+    //Each node's own sizes, read once and outside the batch, so a node sized to its label is measured in its stylesheet's
+    //font while that is still the font it has.
+    cy.nodes().forEach(n => {
+        if (!n.scratch('gdbvMarker'))
+            n.scratch('gdbvMarker', geoMarkerBase(n));
+    });
 
     cy.batch(() => {
         cy.nodes().forEach(n => {
-            let base = n.scratch('gdbvMarker');
+            const base = n.scratch('gdbvMarker');
 
-            if (!base) {
-                n.removeStyle(GEO_MARKER_PROPS);
-                base = {
-                    font: n.numericStyle('font-size'),
-                    padding: n.numericStyle('padding'),
-                    maxWidth: n.numericStyle('text-max-width'),
-                    width: null,
-                    height: null
-                };
-
-                if (n.style('width') !== 'label') {
-                    base.width = n.numericStyle('width');
-                    base.height = n.numericStyle('height');
-                }
-
-                n.scratch('gdbvMarker', base);
-            }
-
-            const style = {
-                'font-size': (base.font * f) + 'px',
-                'padding': (base.padding * f) + 'px',
-                'text-max-width': (base.maxWidth * f) + 'px'
-            };
-
-            if (base.width !== null) {
-                style.width = base.width * f;
-                style.height = base.height * f;
-            }
-
-            n.style(style);
+            n.style({
+                'font-size': (base.font * nodeF) + 'px',
+                'padding': (base.padding * nodeF) + 'px',
+                'text-max-width': (base.maxWidth * nodeF) + 'px',
+                'width': base.width * nodeF,
+                'height': base.height * nodeF,
+                'border-width': base.border * nodeF,
+                'overlay-padding': base.overlay * nodeF,
+                'underlay-padding': base.underlay * nodeF
+            });
         });
 
-        //Edges too: a route stays a line, not a band, and its arrowhead an arrowhead.
+        //Edges too: a route stays a line, not a band, and its arrowhead an arrowhead. Node size on map sizes them with the
+        //nodes, their labels and arrowheads included (the user, 2026-11-06). Cytoscape draws an arrowhead no smaller than
+        //29 units whatever the edge's width, so its scale is divided by the zoom as well.
         cy.edges().forEach(e => {
             let base = e.scratch('gdbvMarker');
 
@@ -613,16 +1040,46 @@ function applyGeoMarkerScale() {
             }
 
             e.style({
-                'font-size': (base.font * f) + 'px',
-                'width': base.width * f,
-                'arrow-scale': base.arrow * f
+                'font-size': (base.font * nodeF) + 'px',
+                'width': base.width * nodeF,
+                'arrow-scale': base.arrow * nodeF
             });
         });
     });
 }
 
+//A node's stylesheet sizes, its bypasses off. A node sized to its label gets that size as a number, measured now in its
+//stylesheet's font: left as 'label', it was measured again at every zoom in the font divided by the zoom, and Cytoscape
+//rounds a label's size to whole units of the graph's plane, so zoomed in to a street the font was a few thousandths of
+//a pixel, the label 0 wide, and every node gone (found by the showcase's Find a place, 2026-11-06), and long before
+//that the rounding had made a label-sized node several times too wide.
+function geoMarkerBase(n) {
+    n.removeStyle(GEO_MARKER_PROPS);
+
+    const base = {
+        font: n.numericStyle('font-size'),
+        padding: n.numericStyle('padding'),
+        maxWidth: n.numericStyle('text-max-width'),
+        width: n.numericStyle('width'),
+        height: n.numericStyle('height'),
+        border: n.numericStyle('border-width'),
+        overlay: n.numericStyle('overlay-padding'),
+        underlay: n.numericStyle('underlay-padding')
+    };
+
+    if (n.style('width') === 'label')
+        base.width = n.width();
+
+    if (n.style('height') === 'label')
+        base.height = n.height();
+
+    return base;
+}
+
 function clearGeoMarkerScale() {
+    cy.off('zoom', keepGeoPlaneInRange);
     cy.off('zoom', applyGeoMarkerScale);
+    cy.off('select unselect', 'node', geoMarkerBorder);
 
     cy.batch(() => {
         cy.nodes().forEach(n => {
@@ -657,7 +1114,7 @@ function applyGeoEdgeBends() {
         if (typeof lat1 !== 'number' || typeof lng1 !== 'number' || typeof lat2 !== 'number' || typeof lng2 !== 'number')
             return;
 
-        const bend = geo.geoEdgeBend(lat1, lng1, lat2, lng2, GEO_MAP_WIDTH, GEO_MAP_HEIGHT);
+        const bend = geo.geoEdgeBend(lat1, lng1, lat2, lng2, GEO_MAP_WIDTH * geoPlane.scale, GEO_MAP_HEIGHT * geoPlane.scale);
 
         if (!bend)
             return;
@@ -713,11 +1170,75 @@ function setCytoscapeMapDetail(detail, retry) {
 //What the layer is doing, for tests: whether it is on, its style and detail, whether the graticule is
 //drawn and at what spacing, and which assets have arrived — imageWidth being the width of the image it
 //paints, so 2048 until a detailed one has arrived.
+//Where the earth comes from: null for the built-in images, or { template, key } for a tile server. Remembered for the next
+//map even when none is showing, as the style is. A new server forgets the old one's tiles.
+function setCytoscapeMapTiles(source) {
+    let next = null;
+
+    if (source && source.template)
+        next = { template: source.template, key: source.key || '', viewport: !!source.viewport, keep: source.keep !== false };
+
+    if (!next && !geoTiles)
+        return;
+
+    //The same server with the memory switch flipped: its tiles stay, and turned off, a draw lets go of all but those on
+    //screen at once (trimGeoTiles).
+    if (next && geoTiles && next.template === geoTiles.template && next.key === geoTiles.key) {
+        if (next.keep !== geoTiles.keep) {
+            geoTiles.keep = next.keep;
+
+            if (geoLayerOn)
+                drawGeoLayer();
+        }
+
+        return;
+    }
+
+    clearGeoTiles();
+    geoTiles = next;
+
+    if (geoLayerOn) {
+        loadGeoAssets();
+        drawGeoLayer();
+    }
+}
+
+function clearGeoTiles() {
+    geoTileCache.forEach(entry => dropGeoTile(entry));
+    geoTileCache = new Map();
+    geoTileShown = { zoom: null, own: 0, standIns: 0 };
+    geoTileReport = null;
+
+    if (geoTileViewSay)
+        geoTileViewSay.forget();
+}
+
+//Google's copyright follows the view (2026-11-07): while the tiles are Google's (a source with viewport), the zoom and
+//bounds drawn are said to Home, which asks Google for the copyright to show beside its logo (OnMapTileView).
+function sayGeoTileView(z, west, east, north, south) {
+    if (!geoTileViewSay)
+        geoTileViewSay = window.graphGeometry.geoTileViewReporter(view => {
+            if (dotNetRef)
+                dotNetRef.invokeMethodAsync('OnMapTileView', view.zoom, view.west, view.east, view.north, view.south).catch(() => { });
+        }, 300);
+
+    geoTileViewSay(z, west, east, north, south);
+}
+
+//A tile no longer wanted: one still loading is stopped, so a fast pan does not queue a screenful of tiles behind it.
+function dropGeoTile(entry) {
+    entry.image.onload = null;
+    entry.image.onerror = null;
+
+    if (!entry.ready && !entry.failed)
+        entry.image.src = '';
+}
+
 function getCytoscapeGeoState() {
     let step = null;
 
     if (geoLayerOn && gridEnabled && cy)
-        step = window.graphGeometry.geoGraticuleStep(GEO_MAP_WIDTH * cy.zoom() / 360, GEO_GRATICULE_MIN_SPACING);
+        step = window.graphGeometry.geoGraticuleStep(GEO_MAP_WIDTH * geoPlane.scale * cy.zoom() / 360, GEO_GRATICULE_MIN_SPACING);
 
     const image = geoEarthImage();
     let imageWidth = 0;
@@ -733,7 +1254,13 @@ function getCytoscapeGeoState() {
         graticuleStep: step,
         imageReady: !!image,
         imageWidth: imageWidth,
-        outlineReady: !!geoOutline
+        outlineReady: !!geoOutline,
+        tiles: !!geoTiles,
+        tileZoom: geoTileShown.zoom,
+        tilesDrawn: geoTileShown.own,
+        tileStandIns: geoTileShown.standIns,
+        place: geoPlaceOnScreen(),
+        planeScale: geoPlane.scale
     };
 }
 
@@ -783,6 +1310,10 @@ function disableGeoLayer() {
 //Fetches what the current style needs, once; the layer redraws itself when it arrives. The satellite look
 //always takes the standard image, the quick one, and the detailed one as well when the tab wants it.
 function loadGeoAssets() {
+    //Tiles are fetched by the draw, for the part of the world it shows.
+    if (geoTiles)
+        return;
+
     if (geoStyle === 'satellite') {
         loadGeoImage(GEO_MAP_URL);
 
@@ -860,7 +1391,7 @@ function geoEarthImage() {
 //The colors the layer paints with, by theme. The image gets a veil so nodes read against it; the
 //outline draws on the theme's own background, so it needs none.
 function geoPalette() {
-    if (document.documentElement.getAttribute('data-bs-theme') === 'dark') {
+    if (document.documentElement.getAttribute('data-bs-theme') === 'dark')
         return {
             veil: 'rgba(10, 14, 20, 0.55)',
             coast: 'rgba(186, 198, 214, 0.75)',
@@ -869,7 +1400,6 @@ function geoPalette() {
             label: 'rgba(235, 240, 248, 0.9)',
             halo: 'rgba(10, 14, 20, 0.85)'
         };
-    }
 
     return {
         veil: 'rgba(255, 255, 255, 0.28)',
@@ -902,11 +1432,99 @@ function drawGeoLayer() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
     paintGeoScene(ctx, geoWorldRect(cy.zoom(), cy.pan()), width, height, gridEnabled);
+    paintGeoPlace(ctx);
 }
 
-//Where the world plane lands on screen for a zoom and pan.
+//── A place found ─────────────────────────────────────────────────────────────────────────────
+//The search under the layers button (2026-11-06, the user): an address or a name looked up, the Map taken there and a pin
+//stood on it. On the screen's layer only, not in an export, which is of the graph.
+const GEO_PLACE_SPAN = 0.02;//degrees across the view for a place the geocoder gave no size, a few streets
+const GEO_PLACE_SPAN_LEAST = 0.004;//and the fewest for any place, a house's box being smaller than a street
+let geoPlace = null;//{ lat, lng } while a place is shown: showCytoscapePlace
+
+//Where the place found is on screen now, or null.
+function geoPlaceOnScreen() {
+    if (!geoPlace || !cy)
+        return null;
+
+    const world = geoWorldRect(cy.zoom(), cy.pan());
+
+    return {
+        x: world.x + (geoPlace.lng + 180) / 360 * world.w,
+        y: world.y + (90 - geoPlace.lat) / 180 * world.h
+    };
+}
+
+//The pin, its point on the place: a round head on a tapering stem, red with a white rim so it reads on the satellite
+//earth, a street map and the outline alike.
+function paintGeoPlace(ctx) {
+    const at = geoPlaceOnScreen();
+
+    if (!at)
+        return;
+
+    const x = at.x;
+    const y = at.y;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.bezierCurveTo(x - 2, y - 7, x - 9, y - 12, x - 9, y - 20);
+    ctx.arc(x, y - 20, 9, Math.PI, 0);
+    ctx.bezierCurveTo(x + 9, y - 12, x + 2, y - 7, x, y);
+    ctx.closePath();
+    ctx.fillStyle = '#dc3545';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y - 20, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.restore();
+}
+
+//Takes the Map to a place and pins it: in the middle, framed by what it spans with room round it, or by a few streets
+//when the geocoder did not say. Glides there, as the zoom buttons do not, so the eye follows where it went.
+function showCytoscapePlace(lat, lng, span) {
+    geoPlace = { lat: lat, lng: lng };
+
+    if (!cy)
+        return;
+
+    const container = cy.container();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const point = geoPlanePoint(window.graphGeometry.geoProject(lat, lng, GEO_MAP_WIDTH, GEO_MAP_HEIGHT));
+    let degrees = GEO_PLACE_SPAN;
+
+    if (typeof span === 'number' && span > 0)
+        degrees = span * 1.5;
+
+    degrees = Math.min(180, Math.max(GEO_PLACE_SPAN_LEAST, degrees));
+
+    const zoom = Math.min(width, height) / (degrees * GEO_MAP_WIDTH * geoPlane.scale / 360);
+
+    cy.stop();
+    cy.animate({ zoom: zoom, pan: { x: width / 2 - point.x * zoom, y: height / 2 - point.y * zoom } }, { duration: 600 });
+    drawGeoLayer();
+}
+
+//Takes the pin away; the view stays where it is.
+function clearCytoscapePlace() {
+    geoPlace = null;
+    drawGeoLayer();
+}
+
+//Where the world lands on screen for a zoom and pan, on the plane the nodes stand on now.
 function geoWorldRect(zoom, pan) {
-    return { x: pan.x, y: pan.y, w: GEO_MAP_WIDTH * zoom, h: GEO_MAP_HEIGHT * zoom };
+    return {
+        x: pan.x + geoPlane.x * zoom,
+        y: pan.y + geoPlane.y * zoom,
+        w: GEO_MAP_WIDTH * geoPlane.scale * zoom,
+        h: GEO_MAP_HEIGHT * geoPlane.scale * zoom
+    };
 }
 
 //Paints the earth — and the graticule when asked — for a world rectangle onto any context of the given
@@ -921,13 +1539,18 @@ function paintGeoScene(ctx, world, width, height, graticule) {
 
     const image = geoEarthImage();
 
-    if (geoStyle === 'satellite' && image) {
+    if (geoTiles) {
+        drawGeoTiles(ctx, world, width, height);
+        ctx.fillStyle = colors.veil;
+        ctx.fillRect(world.x, world.y, world.w, world.h);
+    }
+    else if (geoStyle === 'satellite' && image) {
         ctx.drawImage(image, world.x, world.y, world.w, world.h);
         ctx.fillStyle = colors.veil;
         ctx.fillRect(world.x, world.y, world.w, world.h);
-    } else if (geoStyle === 'outline') {
-        drawGeoOutline(ctx, world, colors);
     }
+    else if (geoStyle === 'outline')
+        drawGeoOutline(ctx, world, colors);
 
     if (graticule)
         drawGeoGraticuleLines(ctx, world, colors, width, height);
@@ -936,6 +1559,198 @@ function paintGeoScene(ctx, world, width, height, graticule) {
 
     if (graticule)
         drawGeoGraticuleLabels(ctx, world, colors, width, height);
+}
+
+//The tiles over the part of the world on screen, at the zoom whose pixels match the context's: its own scale (the
+//screen's pixel ratio) times the world's width. Each tile is its own image when it has arrived, else the nearest
+//ancestor's quarter, sixteenth... of one; and a tile neither has is left to the background. An export's canvas takes
+//the zoom the screen has, whose tiles are here, and neither asks the cache to let go of the screen's nor counts as
+//what the screen shows.
+function drawGeoTiles(ctx, world, width, height) {
+    const geo = window.graphGeometry;
+    const left = Math.max(world.x, 0);
+    const right = Math.min(world.x + world.w, width);
+    const top = Math.max(world.y, 0);
+    const bottom = Math.min(world.y + world.h, height);
+
+    if (right <= left || bottom <= top)
+        return;
+
+    const west = (left - world.x) / world.w * 360 - 180;
+    const east = (right - world.x) / world.w * 360 - 180;
+    const north = 90 - (top - world.y) / world.h * 180;
+    const south = 90 - (bottom - world.y) / world.h * 180;
+    const onScreen = !!geoLayer && ctx.canvas === geoLayer;
+    const scale = ctx.getTransform().a || 1;
+    let z = geo.geoTileZoom(world.w * scale, GEO_TILE_MAX_ZOOM);
+
+    if (!onScreen && geoTileShown.zoom !== null)
+        z = geoTileShown.zoom;
+
+    let tiles = geo.geoTileRange(z, west, east, north, south);
+
+    while (tiles.length > GEO_TILE_MOST && z > 0) {
+        z--;
+        tiles = geo.geoTileRange(z, west, east, north, south);
+    }
+
+    const wanted = new Set();
+    let own = 0;
+    let standIns = 0;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    tiles.forEach(t => {
+        const url = geo.geoTileUrl(geoTiles.template, t.z, t.x, t.y, geoTiles.key);
+        const entry = geoTileEntry(url);
+        wanted.add(url);
+
+        if (entry.ready) {
+            drawGeoTile(ctx, world, entry.image, t, 0, 0, 1);
+            own++;
+            return;
+        }
+
+        //The nearest ancestor that has arrived, and which part of it this tile is.
+        for (let k = 1; k <= t.z; k++) {
+            const ax = t.x >> k;
+            const ay = t.y >> k;
+            const ancestor = geoTileCache.get(geo.geoTileUrl(geoTiles.template, t.z - k, ax, ay, geoTiles.key));
+
+            if (ancestor && ancestor.ready) {
+                const part = 1 / (1 << k);
+                drawGeoTile(ctx, world, ancestor.image, t, (t.x - (ax << k)) * part, (t.y - (ay << k)) * part, part);
+                standIns++;
+                return;
+            }
+        }
+    });
+
+    //The lowest zooms are asked for too, once, so there is always an ancestor to stand in while the rest arrive.
+    for (let low = 0; low <= Math.min(z - 1, 2); low++)
+        geo.geoTileRange(low, west, east, north, south).forEach(t => {
+            const url = geo.geoTileUrl(geoTiles.template, t.z, t.x, t.y, geoTiles.key);
+            geoTileEntry(url);
+            wanted.add(url);
+        });
+
+    if (!onScreen)
+        return;
+
+    trimGeoTiles(wanted);
+    geoTileShown = { zoom: z, own: own, standIns: standIns };
+
+    if (geoTiles.viewport)
+        sayGeoTileView(z, west, east, north, south);
+}
+
+//Tile t, drawn from the square of `image` starting at (u, v) and `part` of its side wide (all as fractions of the
+//image), in the strips its rows need on this world.
+function drawGeoTile(ctx, world, image, t, u, v, part) {
+    const geo = window.graphGeometry;
+    const size = image.naturalWidth || 256;
+    const strips = geo.geoTileStrips(t.z, t.x, t.y, world, geo.geoTileStripCount(t.z, world.h));
+
+    //Each strip reaches a little past its neighbors, so the seams between them and between tiles never show the
+    //background through a sub-pixel gap.
+    strips.forEach(s => {
+        const sy = (v + s.f0 * part) * size;
+        const sh = (s.f1 - s.f0) * part * size;
+
+        ctx.drawImage(image, u * size, sy, part * size, sh, s.x, s.y, s.w + 0.5, s.h + 0.5);
+    });
+}
+
+//The tile at a URL, asked for on first sight; drawn again, it moves to the back of the queue the cache is trimmed from.
+function geoTileEntry(url) {
+    let entry = geoTileCache.get(url);
+
+    if (entry) {
+        geoTileCache.delete(url);
+        geoTileCache.set(url, entry);
+        return entry;
+    }
+
+    entry = { image: new Image(), ready: false, failed: false };
+
+    //Read across origins, so the canvas stays exportable: a server that does not allow it sends no tiles here at all,
+    //which the corner then says, rather than tiles that make Export fail.
+    entry.image.crossOrigin = 'anonymous';
+    entry.image.onload = function () {
+        entry.ready = true;
+        reportGeoTiles('ready');
+        redrawGeoForTiles();
+    };
+    entry.image.onerror = function () {
+        entry.failed = true;
+
+        if (geoTileReport !== 'ready')
+            reportGeoTiles('failed');
+    };
+    entry.image.src = url;
+    geoTileCache.set(url, entry);
+
+    return entry;
+}
+
+//Past the cache's size the least recently drawn tiles go, and at any size a tile still loading that this draw did not
+//want: the world has moved on from it.
+function trimGeoTiles(wanted) {
+    const drop = new Set();
+
+    geoTileCache.forEach((entry, url) => {
+        if (!wanted.has(url) && !entry.ready && !entry.failed)
+            drop.add(url);
+    });
+
+    //Past the cache's size, or with the memory switch off (Map settings, 2026-11-07) past none: only the drawn stay.
+    let most = GEO_TILE_CACHE;
+
+    if (geoTiles && geoTiles.keep === false)
+        most = 0;
+
+    let excess = geoTileCache.size - drop.size - most;
+
+    for (const url of geoTileCache.keys()) {
+        if (excess <= 0)
+            break;
+
+        if (!wanted.has(url) && !drop.has(url)) {
+            drop.add(url);
+            excess--;
+        }
+    }
+
+    drop.forEach(url => {
+        dropGeoTile(geoTileCache.get(url));
+        geoTileCache.delete(url);
+    });
+}
+
+//Arrived tiles are drawn on the next frame, all together.
+function redrawGeoForTiles() {
+    if (geoTileRedraw)
+        return;
+
+    geoTileRedraw = requestAnimationFrame(() => {
+        geoTileRedraw = 0;
+        drawGeoLayer();
+    });
+}
+
+//'ready' once a tile has arrived, 'failed' when one has failed and none has arrived: to Home, which says in the canvas
+//corner that the server sends nothing, as it does for the detailed image.
+function reportGeoTiles(state) {
+    if (geoTileReport === state)
+        return;
+
+    geoTileReport = state;
+
+    if (!dotNetRef)
+        return;
+
+    dotNetRef.invokeMethodAsync('OnMapTiles', state).catch(() => { });
 }
 
 //Coastlines and borders as one stroke per ring, and the edge of the world so the map has one.
@@ -1125,7 +1940,9 @@ function clusterByLabelLayout() {
     });
 
     const maxRadius = Math.max(nodeGap, ...clusters.map(c => c.radius));
-    const ringRadius = clusters.length > 1 ? Math.max(maxRadius * 2.4, (clusters.length * maxRadius * 2.4) / (2 * Math.PI)) : 0;
+    let ringRadius = 0;
+    if (clusters.length > 1)
+        ringRadius = Math.max(maxRadius * 2.4, (clusters.length * maxRadius * 2.4) / (2 * Math.PI));
 
     clusters.forEach((cluster, ci) => {
         const angle = (2 * Math.PI * ci) / clusters.length;
@@ -1194,8 +2011,8 @@ function applyCytoscapeLayout(layoutName) {
 
 //The Cytoscape stylesheet, shared by the live 2D view (drawCytoscapeGraph) and the off-screen
 //SVG export (cytoscapeLayoutToSvg) so both render nodes and edges identically.
-function cytoscapeStyle() {
-    return [
+function cytoscapeStyle(withCards) {
+    const style = [
             {
                 selector: 'node',
                 style: {
@@ -1317,6 +2134,141 @@ function cytoscapeStyle() {
                 }
             }
     ];
+
+    //Show details on canvas: a carded vertex is the card's size and draws nothing itself; the card over it is its body
+    //and shows its selection. Only where cards are drawn: on the live canvas, as HTML over it, and in the SVG (fresh
+    //layout) export, painted in (cytoscapeLayoutToSvg). An edge with a card says its label on the card.
+    if (withCards)
+        style.splice(style.length - 1, 0, {
+            selector: 'edge[?details]',
+            style: {
+                'label': ''
+            }
+        });
+
+    if (withCards)
+        style.splice(style.length - 1, 0, {
+            selector: 'node[detailsW]',
+            style: {
+                'label': '',
+                'width': 'data(detailsW)',
+                'height': 'data(detailsH)',
+                'padding': '0px',
+                'shape': 'round-rectangle',
+                'background-opacity': 0,
+                'background-image': 'none',
+                'border-width': 0
+            }
+        });
+
+    return style;
+}
+
+//Whether the browser gives WebGL 2, which the WebGL renderer needs: without it Cytoscape throws as the instance is
+//made, so the canvas renderer draws instead. The context it asks for to find out is let go of at once.
+function supportsWebgl2() {
+    if (cyWebgl2 !== null)
+        return cyWebgl2;
+
+    cyWebgl2 = false;
+
+    try {
+        const gl = document.createElement('canvas').getContext('webgl2');
+
+        if (gl) {
+            cyWebgl2 = true;
+            loseWebglContext(gl);
+        }
+    }
+    catch { }
+
+    return cyWebgl2;
+}
+
+function loseWebglContext(gl) {
+    const lose = gl.getExtension('WEBGL_lose_context');
+
+    if (lose)
+        lose.loseContext();
+}
+
+//The WebGL renderer draws its frames without the 'render' event the canvas renderer emits after each (Cytoscape
+//3.34.3), and the shown-properties boxes follow that event through pan, zoom and drag. So a WebGL instance emits it.
+function emitRenderAfterWebglFrames(instance) {
+    const renderer = instance.renderer();
+
+    if (!renderer || !renderer.webgl)
+        return;
+
+    const render = renderer.render;
+
+    renderer.render = function (options) {
+        render.call(renderer, options);
+
+        if (!options || !options.forcedContext)
+            instance.emit('render');
+    };
+}
+
+//The WebGL contexts an instance holds, to let go of when it goes rather than whenever the page collects them: a
+//browser keeps sixteen or so and loses the oldest past that, which may be the 3D view's. A WebGL instance has its
+//own, and every instance made after one has a spare, since Cytoscape 3.34.3 counts its canvas layers on a prototype
+//they all share and never counts back.
+function webglContextsOf(instance) {
+    const renderer = instance && instance.renderer();
+    const contexts = (renderer && renderer.data && renderer.data.contexts) || [];
+
+    if (typeof WebGL2RenderingContext === 'undefined')
+        return [];
+
+    return contexts.filter(c => c instanceof WebGL2RenderingContext);
+}
+
+//Cytoscape 3.34.3 decides whether an element takes up space while a new instance applies its elements' styles, before
+//the instance has a renderer to measure a label with (2026-10-21, found by the 2D walks on the upgrade from 3.30.4,
+//which asked later). An edge asks of its source first, so a source node sized by its label, as the viewer's every node
+//is, was nothing wide then, and the answer stays cached with its style: every edge from it is taken for hidden, with no
+//midpoint, no hit area and nothing drawn. The answers go once the renderer is there to measure.
+function forgetEarlySpace(instance) {
+    instance.elements().dirtyStyleCache();
+}
+
+//Destroys the live instance and lets go of the WebGL contexts it held.
+function destroyCy() {
+    const contexts = webglContextsOf(cy);
+
+    cy.destroy();
+    contexts.forEach(loseWebglContext);
+    cy = null;
+
+    //A new instance starts on the projection's own plane.
+    clearTimeout(geoPlaneWaiting);
+    geoPlane = { scale: 1, x: 0, y: 0 };
+}
+
+//Which renderer draws the live instance: 'webgl', 'canvas', or null with none. For the walks.
+function cytoscapeRenderer() {
+    if (!cy)
+        return null;
+
+    if (cyWebglMode)
+        return 'webgl';
+
+    return 'canvas';
+}
+
+//Puts a selection back after a redraw rebuilt the elements under it. Ids that no longer exist are
+//skipped, so a redraw that removed something does not resurrect it as a selection.
+function reselect(ids) {
+    if (!ids || ids.length === 0)
+        return;
+
+    ids.forEach(function (id) {
+        const el = cy.getElementById(id);
+
+        if (el && el.length > 0)
+            el.select();
+    });
 }
 
 function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
@@ -1332,23 +2284,40 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
 
     //Parsed once here so the element count can pick the render mode (see CY_HEAVY_THRESHOLD).
     const elements = JSON.parse(elementsJson);
-    const count = Array.isArray(elements)
-        ? elements.length
-        : ((elements.nodes ? elements.nodes.length : 0) + (elements.edges ? elements.edges.length : 0));
+    let count = 0;
+
+    if (Array.isArray(elements))
+        count = elements.length;
+    else {
+        if (elements.nodes)
+            count += elements.nodes.length;
+
+        if (elements.edges)
+            count += elements.edges.length;
+    }
+
     const heavy = count > CY_HEAVY_THRESHOLD;
+    const webgl = count > CY_WEBGL_THRESHOLD && supportsWebgl2();
 
     //Reuse a live instance on the same container instead of destroy+recreate. Spam-clicking Load DB
     //could otherwise tear an instance down while its layout animation is mid-flight, which throws
     //inside Cytoscape (endBatch -> notify on a null renderer). Reusing never destroys, so there's no race.
-    //A redraw that crosses the heavy/light threshold can't reuse — the render options are fixed at
-    //creation — so it falls through to the layout-stopped, race-safe re-create below.
-    if (cy && cy.container() === container && container.isConnected && cyHeavyMode === heavy) {
+    //A redraw that crosses the heavy/light threshold, or the WebGL one, can't reuse — the render options
+    //are fixed at creation — so it falls through to the layout-stopped, race-safe re-create below.
+    if (cy && cy.container() === container && container.isConnected && cyHeavyMode === heavy && cyWebglMode === webgl) {
+        //What the user had selected is user state, and a redraw is not a reason to throw it away: a
+        //redraw that lands a moment after a shift-select would otherwise leave the canvas looking
+        //selected while nothing is, and the next Delete would silently do nothing at all. Only ids that
+        //are still here come back, so elements the redraw removed stay removed.
+        const wasSelected = cy.$(':selected').map(el => el.id());
+
         stopCurrentLayout();
         teardownShowLabels();
         cy.elements().remove();
         cy.add(elements);
+        reselect(wasSelected);
+        setupCytoscapeShowLabels();//first, so a carded vertex has its card's size when the layout places it
         applyCytoscapeLayout(layoutName);
-        setupCytoscapeShowLabels();
         return;
     }
 
@@ -1359,8 +2328,7 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
         //The map layer is a sibling of the container, which outlives the instance — take it down while
         //the instance can still unhook its listener.
         disableGeoLayer();
-        cy.destroy();
-        cy = null;
+        destroyCy();
     }
     //Middle-button drag pans from anywhere on the canvas, including from on top of a node.
     //
@@ -1374,6 +2342,9 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
     function attachMiddleDragPan(container) {
         if (!container || container.gdbvMiddlePan)
             return;
+
+        //One container at a time: a draw in a new one means the one before has left the page.
+        detachMiddleDragPan();
 
         container.gdbvMiddlePan = true;
 
@@ -1408,7 +2379,7 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
             stop();
         };
 
-        container.addEventListener('mousedown', (e) => {
+        const onDown = (e) => {
             if (e.button !== 1)
                 return;
 
@@ -1423,37 +2394,59 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
             window.addEventListener('mouseup', onUp, true);
 
             e.preventDefault();
-        });
+        };
 
         //Nothing else should act on the middle click that ended a pan.
-        container.addEventListener('auxclick', (e) => {
+        const onAuxClick = (e) => {
             if (e.button === 1)
                 e.preventDefault();
-        });
+        };
+
+        container.addEventListener('mousedown', onDown);
+        container.addEventListener('auxclick', onAuxClick);
 
         //A drag interrupted by the window losing focus would otherwise pan forever.
         window.addEventListener('blur', stop);
+
+        middlePanDetach = () => {
+            stop();
+            container.removeEventListener('mousedown', onDown);
+            container.removeEventListener('auxclick', onAuxClick);
+            window.removeEventListener('blur', stop);
+            container.gdbvMiddlePan = false;
+        };
     }
 
 
     cyHeavyMode = heavy;
+    cyWebglMode = webgl;
 
     const cyOptions = {
         container: container,
         elements: elements,
-        style: cytoscapeStyle(),
+        style: cytoscapeStyle(true),
         layout: { name: 'preset' }
     };
 
     if (heavy) {
         //Big-graph render options (see CY_HEAVY_THRESHOLD): hide edges and draw a cached bitmap while the
         //viewport is moving, and stop supersampling on hi-DPI screens. motionBlur is already off by default.
+        //A graph past CY_WEBGL_THRESHOLD is drawn by the GPU instead, at the screen's own resolution; the
+        //first two serve the canvas renderer it hands back to close up.
         cyOptions.hideEdgesOnViewport = true;
         cyOptions.textureOnViewport = true;
-        cyOptions.pixelRatio = 1;
+
+        if (webgl)
+            cyOptions.webgl = true;
+        else
+            cyOptions.pixelRatio = 1;
     }
 
     cy = cytoscape(cyOptions);
+    forgetEarlySpace(cy);
+
+    if (webgl)
+        emitRenderAfterWebglFrames(cy);
 
     attachMiddleDragPan(container);
 
@@ -1486,9 +2479,62 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
         }));
     });
 
+    //A right-click on a vertex or an edge opens the page's menu for it where the pointer is (2026-11-04, the user).
+    //Cytoscape holds the browser's own menu back over its canvas itself.
+    cy.on('cxttap', 'node, edge', function (evt) {
+        const d = evt.target.data();
+        const e = evt.originalEvent;
+        if (!dotNetRef || !e)
+            return;
+
+        let type = 'edge';
+        if (evt.target.isNode())
+            type = 'node';
+
+        //What a click on it sends, for the menu's Style, which selects it first.
+        const selection = { type: type, id: d.id, label: d.label || '', glabel: d.glabel || '', properties: d.properties || {} };
+
+        if (type == 'edge') {
+            selection.source = d.source;
+            selection.target = d.target;
+        }
+
+        //Whether its properties are shown, for the menu's Show / Hide properties, the + button's twin: 'shown', 'hidden', or
+        //null for an edge or a node with none, which has no button.
+        let props = null;
+
+        if (type == 'node' && nodeAllPropLines(evt.target).length > 0 && !hasCanvasDetails(evt.target)) {
+            if (expandedNodes.has(String(d.id)))
+                props = 'shown';
+            else
+                props = 'hidden';
+        }
+
+        dotNetRef.invokeMethodAsync('OnElementContextMenu', type, String(d.id), String(d.label || d.id), e.clientX, e.clientY, JSON.stringify(selection), props);
+    });
+
+    //A right-click on the empty space opens the page's menu for the canvas, with where a new component would go, in the
+    //same grid as a tap's (2026-11-05, the user).
+    cy.on('cxttap', function (evt) {
+        const e = evt.originalEvent;
+
+        if (evt.target !== cy || !dotNetRef || !e)
+            return;
+
+        let x = evt.position.x;
+        let y = evt.position.y;
+
+        if (gridEnabled) {
+            x = Math.round(x / gridStep) * gridStep;
+            y = Math.round(y / gridStep) * gridStep;
+        }
+
+        dotNetRef.invokeMethodAsync('OnCanvasContextMenu', e.clientX, e.clientY, x, y);
+    });
+
     cy.on('tap', 'edge', function (evt) {
         const d = evt.target.data();
-        if (dotNetRef) {
+        if (dotNetRef)
             dotNetRef.invokeMethodAsync('OnElementSelected', JSON.stringify({
                 type: 'edge',
                 id: d.id,
@@ -1498,7 +2544,6 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
                 properties: d.properties || {},
                 selectedGroup: currentSelectionList()
             }));
-        }
     });
 
     cy.on('tap', function (evt) {
@@ -1508,18 +2553,18 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
             let x = evt.position.x;
             let y = evt.position.y;
             if (gridEnabled) {
-                x = Math.round(x / GRID_STEP) * GRID_STEP;
-                y = Math.round(y / GRID_STEP) * GRID_STEP;
+                x = Math.round(x / gridStep) * gridStep;
+                y = Math.round(y / gridStep) * gridStep;
             }
             dotNetRef.invokeMethodAsync('OnCanvasTapped', x, y);
         }
     });
 
-    applyCytoscapeLayout(layoutName);
-
-    //Keep the shown-properties extensions pinned under their nodes through pan / zoom / drag / layout.
+    //Keep the shown-properties extensions pinned under their nodes through pan / zoom / drag / layout. Built before the
+    //layout, so a carded vertex has its card's size when the layout places it.
     cy.on('render', updateCytoscapeShowLabels);
     setupCytoscapeShowLabels();
+    applyCytoscapeLayout(layoutName);
 
     observeCyResize(container);
 }
@@ -1752,15 +2797,24 @@ function setCytoscapeGridMode(enabled) {
         cy.on('zoom pan resize', updateGridOverlay);
         cy.on('dragfree', 'node', snapNodeToGrid);
         updateGridOverlay();
-    } else {
-        clearPlainGrid();
     }
+    else
+        clearPlainGrid();
 
     if (geoLayerOn)
         drawGeoLayer();
 }
 
-//Redraws the grid overlay so its lines fall on multiples of GRID_STEP in graph coordinates.
+//Grid size (2026-11-06, the user): the spacing of the grid's lines and of its snapping, in graph units. Kept for the next
+//graph when none is drawn, as the grid's own switch is not; the lines are drawn again at once when the grid is on.
+function setCytoscapeGridSize(step) {
+    gridStep = Math.max(10, Math.min(200, +step || 50));
+
+    if (cyIsLive() && gridEnabled)
+        updateGridOverlay();
+}
+
+//Redraws the grid overlay so its lines fall on multiples of gridStep in graph coordinates.
 function updateGridOverlay() {
     if (!cyIsLive() || !gridEnabled)
         return;
@@ -1775,12 +2829,11 @@ function updateGridOverlay() {
     if (!container)
         return;
 
-    const step = GRID_STEP * cy.zoom();
+    const step = gridStep * cy.zoom();
     const pan = cy.pan();
 
-    container.style.backgroundImage =
-        'linear-gradient(to right, rgba(128,128,128,0.3) 1px, transparent 1px),' +
-        'linear-gradient(to bottom, rgba(128,128,128,0.3) 1px, transparent 1px)';
+    container.style.backgroundImage = `linear-gradient(to right, rgba(128,128,128,0.3) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(128,128,128,0.3) 1px, transparent 1px)`;
     container.style.backgroundSize = step + 'px ' + step + 'px';
     container.style.backgroundPosition = pan.x + 'px ' + pan.y + 'px';
 }
@@ -1805,8 +2858,8 @@ function snapNodeToGrid(evt) {
     const n = evt.target;
     const p = n.position();
     n.position({
-        x: Math.round(p.x / GRID_STEP) * GRID_STEP,
-        y: Math.round(p.y / GRID_STEP) * GRID_STEP
+        x: Math.round(p.x / gridStep) * gridStep,
+        y: Math.round(p.y / gridStep) * gridStep
     });
 }
 
@@ -1815,7 +2868,12 @@ function getCytoscapePositions() {
     if (!cy)
         return "[]";
 
-    const list = cy.nodes().map(n => ({ id: n.id(), x: Math.round(n.position('x')), y: Math.round(n.position('y')) }));
+    //On the Map, on the projection's own plane, whatever the zoom has made of it.
+    const list = cy.nodes().map(n => ({
+        id: n.id(),
+        x: Math.round((n.position('x') - geoPlane.x) / geoPlane.scale),
+        y: Math.round((n.position('y') - geoPlane.y) / geoPlane.scale)
+    }));
 
     return JSON.stringify(list);
 }
@@ -1884,6 +2942,220 @@ function zoomCytoscape(factor) {
     }
 }
 
+//A PNG of the 2D graph for Ask AI's picture tool, no longer than most pixels a side, on the view's own background so a
+//label drawn light on a dark theme is still seen; or null. The whole graph, as the export has it; on the Map the export's
+//viewport with the earth under it, shrunk to fit (2026-11-02).
+async function cytoscapePicture(most) {
+    if (!cy)
+        return null;
+
+    if (geoLayerOn)
+        return shrinkPicture(await cytoscapeImage('png'), most);
+
+    return withDetailsCards(cy.png({ full: true, maxWidth: most, maxHeight: most, bg: viewBackground(cy.container()) }), 'png', pageDetailsLook());
+}
+
+//The color behind an element as the page paints it: its own, or the nearest ancestor's that is not see-through.
+function viewBackground(element) {
+    for (let at = element; at != null && at !== document.documentElement; at = at.parentElement) {
+        const color = getComputedStyle(at).backgroundColor;
+
+        if (color && color !== 'transparent' && color !== 'rgba(0, 0, 0, 0)')
+            return color;
+    }
+
+    return '#ffffff';
+}
+
+//An image data URL drawn again no longer than most pixels a side, as a PNG; one already small enough comes back as it
+//was. For the pictures Ask AI's picture tool sends, which a model scales down past about 1568 pixels anyway.
+function shrinkPicture(url, most) {
+    if (!url)
+        return Promise.resolve(null);
+
+    return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = function () {
+            const scale = Math.min(1, most / Math.max(image.width, image.height));
+
+            if (scale === 1 && url.startsWith('data:image/png'))
+                return resolve(url);
+
+            const canvas = document.createElement('canvas');
+
+            canvas.width = Math.max(1, Math.round(image.width * scale));
+            canvas.height = Math.max(1, Math.round(image.height * scale));
+            canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+
+            resolve(canvas.toDataURL('image/png'));
+        };
+        image.onerror = function () {
+            resolve(null);
+        };
+        image.src = url;
+    });
+}
+
+//── Detailed view in an image ─────────────────────────────────────────────────────────────────────────────────────────
+//An image of the 2D canvas has none of the HTML cards on it, and a carded vertex draws nothing itself, so until
+//2026-11-07 (the user's "do the loose ends") an export left a hole where each card stood. Each card is painted over the
+//image where its vertex stands, as graphGeometry lays it out at the live card's width: on a white export in the light
+//theme's colors, over the page's own background in the page's.
+const DETAILS_WHITE_LOOK = { bg: '#ffffff', fg: '#212529', muted: 'rgba(33, 37, 41, 0.75)', line: 'rgba(0, 0, 0, 0.175)' };
+
+//The page's colors for a card, as the live card takes them from the theme.
+function pageDetailsLook() {
+    const style = getComputedStyle(cy.container());
+
+    return {
+        bg: style.getPropertyValue('--bs-body-bg').trim() || DETAILS_WHITE_LOOK.bg,
+        fg: style.getPropertyValue('--bs-body-color').trim() || DETAILS_WHITE_LOOK.fg,
+        muted: style.getPropertyValue('--bs-secondary-color').trim() || DETAILS_WHITE_LOOK.muted,
+        line: style.getPropertyValue('--bs-border-color-translucent').trim() || DETAILS_WHITE_LOOK.line
+    };
+}
+
+//A text's width in a font, as a canvas measures it.
+function detailsMeasure() {
+    const ctx = document.createElement('canvas').getContext('2d');
+
+    return function (text, font) {
+        ctx.font = font;
+
+        return ctx.measureText(text).width;
+    };
+}
+
+//The carded vertices an image of a graph shows, each laid out as its card: [{ node, layout }]. The live canvas's, or the
+//off-screen instance the SVG (fresh layout) export lays out.
+function cardsToPaint(look, graph = cy) {
+    const geo = window.graphGeometry;
+    const measure = detailsMeasure();
+    const family = getComputedStyle(graph.container()).fontFamily;
+
+    const carded = graph.nodes().filter(n => hasCanvasDetails(n) && n.visible()).union(graph.edges().filter(e => hasEdgeDetails(e) && e.visible()));
+
+    return carded.map(el => {
+        const cardLook = Object.assign({ color: detailsColorOf(el), selected: el.selected(), family: family }, look);
+        let width = el.data('detailsW');
+
+        if (el.isEdge())
+            width = el.scratch('gdbvCardW');
+
+        return { node: el, layout: geo.detailsCardLayout(detailsContentOf(el), cardLook, measure, width) };
+    });
+}
+
+//Where a whole-graph image (full: true) puts a vertex's center, and how many image pixels a card pixel takes: the image
+//is the elements' bounds at a scale, so the scale is the image's width over the bounds'.
+function fullImagePlacer(bounds, imageWidth) {
+    const scale = imageWidth / Math.max(1, Math.ceil(bounds.w));
+
+    return function (n) {
+        const p = modelPlaceOf(n);
+
+        return { x: (p.x - bounds.x1) * scale, y: (p.y - bounds.y1) * scale, scale: scale };
+    };
+}
+
+//Where an image of the viewport puts a vertex's center: its place on screen at the image's scale, a card as large as it
+//shows (on the map the cards keep their zoom-1 size, updateCytoscapeShowLabels).
+function viewportImagePlacer(imageWidth) {
+    const scale = imageWidth / Math.max(1, cy.container().clientWidth);
+    let z = cy.zoom();
+
+    if (geoLayerOn)
+        z = geoMarkerSize;
+
+    return function (n) {
+        const p = renderedPlaceOf(n);
+
+        return { x: p.x * scale, y: p.y * scale, scale: z * scale };
+    };
+}
+
+function paintCards(ctx, cards, place) {
+    cards.forEach(card => {
+        const at = place(card.node);
+
+        window.graphGeometry.paintDetailsCard(ctx, card.layout, at.x, at.y, at.scale);
+    });
+}
+
+//A whole-graph image with its cards painted on, as a promise of the image in its format; the image itself, as it was,
+//when no vertex is carded.
+function withDetailsCards(url, format, look) {
+    const cards = cardsToPaint(look);
+
+    if (!url || cards.length === 0)
+        return url;
+
+    const bounds = cy.mutableElements().boundingBox();
+
+    return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = function () {
+            const canvas = document.createElement('canvas');
+            canvas.width = image.width;
+            canvas.height = image.height;
+
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+            paintCards(ctx, cards, fullImagePlacer(bounds, image.width));
+
+            if (format === 'jpeg')
+                resolve(canvas.toDataURL('image/jpeg', 0.92));
+            else
+                resolve(canvas.toDataURL('image/png'));
+        };
+        image.onerror = function () {
+            resolve(url);
+        };
+        image.src = url;
+    });
+}
+
+//An SVG of a graph with its cards drawn in, as vector shapes: whole (full) or the viewport, which only the live canvas has.
+function svgWithDetailsCards(svg, full, look, graph = cy) {
+    const cards = cardsToPaint(look, graph);
+    const width = /<svg\b[^>]*?\swidth="([\d.]+)/.exec(svg || '');
+
+    if (!svg || cards.length === 0 || !width)
+        return svg;
+
+    let place = viewportImagePlacer(Number(width[1]));
+
+    if (full)
+        place = fullImagePlacer(graph.mutableElements().boundingBox(), Number(width[1]));
+
+    const family = getComputedStyle(graph.container()).fontFamily;
+    const groups = cards.map(card => {
+        const at = place(card.node);
+
+        return window.graphGeometry.detailsCardSvg(card.layout, at.x, at.y, at.scale, family);
+    });
+    const close = svg.lastIndexOf('</svg>');
+
+    return svg.slice(0, close) + groups.join('') + svg.slice(close);
+}
+
+//An off-screen instance has no HTML cards to measure: each carded vertex is sized to its card as graphGeometry lays it out
+//at its own width, as the live card is, so a layout spaces the cards and the edges end at their edges (node[detailsW]).
+function sizeDetailsNodes(graph) {
+    const geo = window.graphGeometry;
+    const measure = detailsMeasure();
+    const family = getComputedStyle(graph.container()).fontFamily;
+
+    graph.nodes().filter(hasCanvasDetails).forEach(n => {
+        const look = Object.assign({ color: detailsColorOf(n), family: family }, DETAILS_WHITE_LOOK);
+        const layout = geo.detailsCardLayout(detailsContentOf(n), look, measure);
+
+        n.data({ detailsW: Math.ceil(layout.width), detailsH: Math.ceil(layout.height) });
+    });
+}
+
 //Returns an image data URL of the current 2D graph (white background), or null.
 //format 'jpeg' emits a JPEG, otherwise PNG.
 //
@@ -1895,16 +3167,16 @@ function cytoscapeImage(format) {
     if (!cy)
         return null;
 
-    if (!geoLayerOn) {
+    if (!geoLayerOn)
         if (format === 'jpeg')
-            return cy.jpg({ full: true, scale: 2, bg: '#ffffff' });
+            return withDetailsCards(cy.jpg({ full: true, scale: 2, bg: '#ffffff' }), format, DETAILS_WHITE_LOOK);
         else
-            return cy.png({ full: true, scale: 2, bg: '#ffffff' });
-    }
+            return withDetailsCards(cy.png({ full: true, scale: 2, bg: '#ffffff' }), format, DETAILS_WHITE_LOOK);
 
     const scale = 2;
     const canvas = mapExportCanvas(scale);
     const graph = cy.png({ full: false, scale: scale });
+    const cards = cardsToPaint(pageDetailsLook());
 
     return new Promise(resolve => {
         const image = new Image();
@@ -1913,6 +3185,7 @@ function cytoscapeImage(format) {
             const ctx = canvas.getContext('2d');
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+            paintCards(ctx, cards, viewportImagePlacer(canvas.width));
 
             if (format === 'jpeg')
                 resolve(canvas.toDataURL('image/jpeg', 0.92));
@@ -1954,11 +3227,33 @@ function ensureSvgExtension() {
 
     if (typeof cytoscape === 'function' && typeof cytoscapeSvg !== 'undefined') {
         cytoscape.use(cytoscapeSvg);
+        keepCanvasPathInSvg();
         svgExtRegistered = true;
         return true;
     }
 
     return false;
+}
+
+//canvas2svg, the drawing context inside cytoscape-svg (window.C2S), keeps the path being drawn in an SVG path element, and
+//has none once a clip, a save or a restore has moved it on to a group. A canvas keeps its path across those: a vertex with
+//a picture is clipped to its shape, the picture drawn and the clip restored, and its border stroked on the path the canvas
+//still holds. canvas2svg had no element to stroke, logged "Attempted to apply path command to node g" and drew no border,
+//on every SVG export of such a graph until 2026-11-08. A path filled, stroked or clipped with no element now gets one. Once,
+//as the extension is registered (ensureSvgExtension).
+function keepCanvasPathInSvg() {
+    const apply = C2S.prototype.__applyCurrentDefaultPath;
+
+    C2S.prototype.__applyCurrentDefaultPath = function () {
+        if (this.__currentElement.nodeName !== 'path') {
+            const path = this.__createElement('path', {}, true);
+
+            this.__closestGroupOrSvg().appendChild(path);
+            this.__currentElement = path;
+        }
+
+        apply.call(this);
+    };
 }
 
 //Returns an SVG string of the current 2D graph (white background), or null. On the Map it is the
@@ -1968,12 +3263,12 @@ function cytoscapeToSvg() {
         return null;
 
     if (!geoLayerOn)
-        return cy.svg({ full: true, scale: 1, bg: '#ffffff' });
+        return svgWithDetailsCards(cy.svg({ full: true, scale: 1, bg: '#ffffff' }), true, DETAILS_WHITE_LOOK);
 
     const container = cy.container();
     const earth = mapExportCanvas(2).toDataURL('image/jpeg', 0.9);
     const image = '<image x="0" y="0" width="' + container.clientWidth + '" height="' + container.clientHeight + '" preserveAspectRatio="none" href="' + earth + '"/>';
-    const svg = cy.svg({ full: false, scale: 1 });
+    const svg = svgWithDetailsCards(cy.svg({ full: false, scale: 1 }), false, pageDetailsLook());
 
     return svg.replace(/<svg\b[^>]*>/, function (tag) {
         return tag + image;
@@ -1997,8 +3292,13 @@ function cytoscapeLayoutToSvg(elementsJson, layoutName) {
         const temp = cytoscape({
             container: container,
             elements: JSON.parse(elementsJson),
-            style: cytoscapeStyle()
+            style: cytoscapeStyle(true)
         });
+
+        forgetEarlySpace(temp);
+
+        //Detailed view: a carded vertex is its card here too, as on the canvas, and not its box (2026-11-08).
+        sizeDetailsNodes(temp);
 
         //Preset/user-saved layouts place nodes by stored coordinates; a fresh export has none, so fall
         //back to a force layout. Force animation off so the layout settles synchronously before we snapshot.
@@ -2009,8 +3309,13 @@ function cytoscapeLayoutToSvg(elementsJson, layoutName) {
         const cfg = Object.assign({}, cytoscapeLayout(name), { animate: false, fit: true, padding: 30 });
         temp.layout(cfg).run();
 
-        svg = temp.svg({ full: true, scale: 1, bg: '#ffffff' });
+        svg = svgWithDetailsCards(temp.svg({ full: true, scale: 1, bg: '#ffffff' }), true, DETAILS_WHITE_LOOK, temp);
+
+        //It has the spare WebGL context too, once a WebGL instance has been made (webglContextsOf).
+        const contexts = webglContextsOf(temp);
+
         temp.destroy();
+        contexts.forEach(loseWebglContext);
     }
     catch (e) {
         console.error('Cytoscape SVG export failed:', e);
@@ -2043,26 +3348,46 @@ function searchCytoscape(term) {
             return true;
 
         const props = d.properties || {};
-        for (const k in props) {
+        for (const k in props)
             if (String(props[k]).toLowerCase().includes(q))
                 return true;
-        }
 
         return false;
     });
 
     matches.select();
-    if (matches.length > 0) {
-        //A lone match would fit to fill the whole viewport (blown up); cap the zoom so it stays readable.
-        const bb = matches.boundingBox();
-        const padding = 80;
-        const fitZoom = Math.min((cy.width() - 2 * padding) / bb.w, (cy.height() - 2 * padding) / bb.h);
-        const targetZoom = Math.min(fitZoom, 2);
-        const mx = (bb.x1 + bb.x2) / 2;
-        const my = (bb.y1 + bb.y2) / 2;
-        const pan = { x: cy.width() / 2 - targetZoom * mx, y: cy.height() / 2 - targetZoom * my };
-        cy.animate({ zoom: targetZoom, pan: pan, duration: 400 });
-    }
+    if (matches.length > 0)
+        frameCytoscapeElements(matches);
+
+    return matches.length;
+}
+
+//Frames these elements. A lone one would fit to fill the whole viewport (blown up), so the zoom is capped to keep it readable.
+function frameCytoscapeElements(matches) {
+    const bb = matches.boundingBox();
+    const padding = 80;
+    const fitZoom = Math.min((cy.width() - 2 * padding) / bb.w, (cy.height() - 2 * padding) / bb.h);
+    const targetZoom = Math.min(fitZoom, 2);
+    const mx = (bb.x1 + bb.x2) / 2;
+    const my = (bb.y1 + bb.y2) / 2;
+    const pan = { x: cy.width() / 2 - targetZoom * mx, y: cy.height() / 2 - targetZoom * my };
+    cy.animate({ zoom: targetZoom, pan: pan, duration: 400 });
+}
+
+//Selects these vertices and frames them, as a search's matches are: what an algorithm found, its path or a vertex of
+//its top list. Returns how many of them are drawn.
+function focusCytoscapeNodes(idsJson) {
+    if (!cy)
+        return 0;
+
+    const ids = new Set(JSON.parse(idsJson || '[]').map(String));
+    const matches = cy.nodes().filter(n => ids.has(String(n.id())));
+
+    cy.elements().unselect();
+    matches.select();
+
+    if (matches.length > 0)
+        frameCytoscapeElements(matches);
 
     return matches.length;
 }
@@ -2107,6 +3432,42 @@ function applyCytoscapeLabelStyles(stylesJson) {
     setupCytoscapeShowLabels();
 }
 
+//A label's 2D shape changed in Styling: its nodes take it where they are, the rest of the graph untouched, where drawing
+//the graph again laid it all out anew (2026-11-05, the user). A node with a shape of its own (gdbvShape) keeps it, as the
+//converter has it, and no shape is the converter's rectangle. False with no graph, for the caller to draw one.
+function setCytoscapeLabelShape(label, shape) {
+    if (!cy)
+        return false;
+
+    let next = 'rectangle';
+
+    if (shape && shape.trim())
+        next = shape;
+
+    cy.nodes().filter(n => n.data('glabel') === label).forEach(n => {
+        const own = (n.data('properties') || {}).gdbvShape;
+
+        if (own && own.trim())
+            return;
+
+        n.data('shape', next);
+    });
+
+    //The shown-properties boxes stand beside each node's outline, which a new shape moves.
+    setupCytoscapeShowLabels();
+
+    return true;
+}
+
+//Takes the 2D view down and everything this file put on the page for it, as the viewer is left (Home's dispose). The
+//instance has to be destroyed by hand: Cytoscape destroys itself only when its container is taken out of its own
+//parent, which switching views does and leaving the page does not, and until then its renderer runs an animation
+//frame loop, listens on the window and observes its container. Then the observer and frame keeping it sized, the
+//overlays, the map layer and the middle-button pan's listeners. And what the page set here goes with it: its .NET
+//reference, which it disposes as it goes, so a late answer such as the detailed earth arriving does not call into
+//it; and its grid mode, which would otherwise snap the next page's taps while its button says off. Until 2026-10-04
+//nothing called this: a viewer left in 2D kept the rest until it was next drawn in 2D, its grid mode until that was
+//next switched, and the pan's window listener for good, one for every container the view had been drawn in.
 function destroyCytoscapeGraph() {
     if (cy) {
         stopCurrentLayout();
@@ -2115,7 +3476,10 @@ function destroyCytoscapeGraph() {
         //The map layer is a sibling of the container, which outlives the instance — take it down while
         //the instance can still unhook its listener.
         disableGeoLayer();
-        cy.destroy();
-        cy = null;
+        destroyCy();
     }
+
+    detachMiddleDragPan();
+    dotNetRef = null;
+    gridEnabled = false;
 }

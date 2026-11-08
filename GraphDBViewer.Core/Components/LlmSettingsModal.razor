@@ -1,19 +1,82 @@
+@using GraphDBViewerWeb.Code
+@implements IDisposable
+@inject ViewerHostOptions HostOptions
+@inject LlmConnectionStore Store
+@inject ShellState Shell
+
 @* The AI models on their own, rather than only inside a feature that happens to use them. The same
-   list feeds Ask AI and knowledge-graph generation, so adding a key here is the once-per-browser step
-   both of them need. *@
+   list feeds Ask AI and knowledge-graph generation, so adding a key here is the one step both of them
+   need.
+
+   Where the keys are kept is the host's to say (ViewerHostOptions.WhereAiKeysAreKept), since the host
+   decides where a workspace lives. The web-only edition keeps them in the browser alone and says
+   nothing, so this says the browser; Treeality keeps them in each person's workspace on its server and
+   says so. Until 2026-10-04 this said the browser in every host, and so told Treeality's people that
+   nothing was stored on a server.
+
+   And how Ask AI's microphone writes speech out (2026-11-02, GDS Viewer's): the browser's own recognition to
+   begin with, or a recording the AI provider writes out, kept with the models (SpeechPreference). And how many rounds
+   of tool calls an answer may take before Ask AI pauses to ask (ToolRoundsPreference), the same day. A model's own
+   rates are set on the model, in its form above. *@
 
 <FloatingDialog Visible="Visible"
                 OnClose="OnClose"
                 Title="AI settings"
+                TitleGlyph="bi-stars"
                 StorageKey="ai-settings-2"
                 Width="min(820px, 92vw)"
                 Height="min(860px, 92vh)">
 
-    <LlmConnectionPicker />
+    @* The MCP server first, then the models, as GDS Viewer's AI settings have them (2026-11-03). *@
+    <LiveLinkCard Link="Shell.Link" />
 
-    <div class="form-text mt-3">
-        Keys are kept in this browser and sent only to the provider they belong to. Nothing is
-        stored on a server, so a model added here is added for this browser alone.
+    @* In one card named for what it holds, with Ask AI's spark, and each part's name with an icon in front, as GDS
+       Viewer's AI settings are since 2026-11-03: the models, the note on keys with a lock, then speech to text and the
+       tool rounds, each with room above it. *@
+    <div class="border rounded p-3" data-testid="ai-models-card">
+        <div class="gdbv-ai-settings-title" data-testid="ai-models-title"><i class="bi bi-stars" aria-hidden="true"></i>Models</div>
+
+        <LlmConnectionPicker />
+
+        <div class="form-text mt-3 d-flex align-items-baseline gap-2" data-testid="ai-keys-kept">
+            <i class="bi bi-lock" aria-hidden="true"></i>
+            <span>
+                @if (string.IsNullOrEmpty(HostOptions.WhereAiKeysAreKept))
+                {
+                    <text>
+                        Keys are kept in this browser and sent only to the provider they belong to. Nothing is
+                        stored on a server, so a model added here is added for this browser alone.
+                    </text>
+                }
+                else
+                {
+                    @HostOptions.WhereAiKeysAreKept
+                }
+            </span>
+        </div>
+
+        <div class="mt-4" data-testid="ai-speech">
+            <label class="gdbv-ai-settings-title d-flex"><i class="bi bi-mic" aria-hidden="true"></i>Speech to text</label>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Speech to text">
+                <button type="button" class="btn @(speech == SpeechMode.Browser ? "btn-primary" : "btn-outline-primary")" data-testid="ai-speech-browser"
+                        aria-pressed="@(speech == SpeechMode.Browser ? "true" : "false")" @onclick="() => ChooseAsync(SpeechMode.Browser)">Browser</button>
+                <button type="button" class="btn @(speech == SpeechMode.Provider ? "btn-primary" : "btn-outline-primary")" data-testid="ai-speech-provider"
+                        aria-pressed="@(speech == SpeechMode.Provider ? "true" : "false")" @onclick="() => ChooseAsync(SpeechMode.Provider)">AI provider</button>
+            </div>
+            <div class="gdbv-text-xs form-text" data-testid="ai-speech-note">@SpeechNote()</div>
+        </div>
+
+        @* How long Ask AI may go on calling tools before it asks: the person's own cap on spend. A number typed is kept,
+           brought into range; anything else puts back the one there was. *@
+        <div class="mt-4" data-testid="ai-rounds">
+            <label class="gdbv-ai-settings-title d-flex" for="ai-tool-rounds"><i class="bi bi-arrow-left-right" aria-hidden="true"></i>Tool rounds before asking</label>
+            <input id="ai-tool-rounds" class="form-control form-control-sm" style="max-width: 7em;" type="number" data-testid="ai-tool-rounds"
+                   min="@ToolRoundsPreference.Fewest" max="@ToolRoundsPreference.Most" step="1" value="@rounds" @onchange="RoundsChangedAsync" />
+            <div class="gdbv-text-xs form-text">
+                Each round of queries the AI runs sends the whole conversation again, and is billed. When an answer takes this many
+                rounds, it pauses and asks whether to go on for another as many.
+            </div>
+        </div>
     </div>
 
 </FloatingDialog>
@@ -21,4 +84,60 @@
 @code {
     [Parameter] public bool Visible { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
+
+    ///<summary>How Ask AI's microphone writes speech out, as chosen here and kept with the models.</summary>
+    private SpeechMode speech = SpeechMode.Browser;
+
+    ///<summary>How many rounds of tool calls an answer may take before Ask AI pauses, as set here.</summary>
+    private int rounds = LlmProviderFactory.DefaultToolRounds;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Store.Speech.Changed += SpeechChangedAsync;
+        speech = await Store.Speech.GetAsync();
+        rounds = await Store.Rounds.GetAsync();
+    }
+
+    public void Dispose()
+    {
+        Store.Speech.Changed -= SpeechChangedAsync;
+    }
+
+    private async Task SpeechChangedAsync()
+    {
+        speech = await Store.Speech.GetAsync();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ChooseAsync(SpeechMode chosen)
+    {
+        speech = chosen;
+
+        await Store.Speech.SetAsync(chosen);
+    }
+
+    ///<summary>A number typed is kept, brought into range; anything else puts back the one there was.</summary>
+    private async Task RoundsChangedAsync(ChangeEventArgs e)
+    {
+        var typed = rounds;
+
+        if (int.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            typed = parsed;
+
+        //Set to something else first, so a value brought back into range is drawn again even when it equals the old one.
+        rounds = -1;
+        StateHasChanged();
+
+        rounds = await Store.Rounds.SetAsync(typed);
+    }
+
+    ///<summary>What the chosen way does, and what it costs: where the audio goes, and who bills it.</summary>
+    private string SpeechNote()
+    {
+        if (speech == SpeechMode.Provider)
+            return "The AI window's microphone records until it is pressed again, and an OpenAI or Gemini model writes it out, told the graph's labels and keys. More accurate with a graph's words, and billed by the provider, outside what the AI window counts. Claude models take no audio, so with one picked the first saved OpenAI or Gemini model writes it out.";
+
+        return "The AI window's microphone uses your browser's own speech recognition: free, and the words appear as you talk. Only Chrome and Edge have it, and both send the audio to Google's or Microsoft's servers to be recognized. It is general-purpose, so labels and query words come back as they sound.";
+    }
 }

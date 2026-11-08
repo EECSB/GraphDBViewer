@@ -56,6 +56,9 @@
     </script>
     <link rel="preload" id="webassembly" />
     <link rel="stylesheet" href="_content/GraphDBViewer.Core/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <!--Bootstrap Icons 1.11.3, vendored in the core as its stylesheet and woff2 font: an icon is <i class="bi bi-name">.
+        Treeality's page loads it the same way; without it every such icon is blank.-->
+    <link rel="stylesheet" href="_content/GraphDBViewer.Core/lib/bootstrap-icons/bootstrap-icons.min.css" />
     <link rel="stylesheet" href="_content/GraphDBViewer.Core/css/app.css" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link href="GraphDBViewerWeb.styles.css" rel="stylesheet" />
@@ -108,8 +111,14 @@
     <script src="_content/GraphDBViewer.Core/js/MonacoInterop.js"></script>
     <script src="_content/GraphDBViewer.Core/js/SplitterInterop.js"></script>
     <script src="_content/GraphDBViewer.Core/js/FloatingDialogInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/speechWav.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/SpeechInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/CameraInterop.js"></script>
     <script src="_content/GraphDBViewer.Core/js/UrlCheckInterop.js"></script>
     <script src="_content/GraphDBViewer.Core/js/IndexedDbInterop.js"></script>
+    <!--The guided tour's shade, hole and card (GuidedTour.razor).-->
+    <script src="_content/GraphDBViewer.Core/js/TourInterop.js"></script>
+    <script src="_content/GraphDBViewer.Core/js/EmbedMessagesInterop.js"></script>
     <script src="_content/GraphDBViewer.Core/js/Neo4jInterop.js"></script>
     <script src="_content/GraphDBViewer.Core/js/GunInterop.js"></script>
     <script src="_framework/blazor.webassembly.js"></script>

@@ -7,10 +7,21 @@
    It is hidden with CSS instead of being removed, which is the whole reason a conversation survives
    closing the dialog: the content keeps its component state because it is never unmounted. *@
 
-<div class="gdbv-dialog card shadow-lg @(Visible ? "" : "d-none")" @ref="panel" style="width: @Width; height: @Height;">
+<div class="gdbv-dialog card shadow-lg @Class @(Visible ? "" : "d-none")" @ref="panel" style="width: @Width; @(Resizable ? $"height: {Height};" : $"max-height: {Height};")"
+     role="dialog" aria-label="@Title" aria-hidden="@(Visible ? "false" : "true")">
 
     <div class="card-header gdbv-dialog-header d-flex align-items-center gap-2" @ref="handle">
-        <span class="fw-semibold flex-grow-1">@Title</span>
+        <span class="fw-semibold flex-grow-1">
+            @if (TitleIcon != null)
+            {
+                <span class="gdbv-title-icon" aria-hidden="true">@TitleIcon</span>
+            }
+            else if (!string.IsNullOrEmpty(TitleGlyph))
+            {
+                <i class="bi @TitleGlyph gdbv-title-icon" aria-hidden="true"></i>
+            }
+            @Title
+        </span>
         @HeaderContent
         <button type="button" class="btn-close" aria-label="Close" @onclick="OnClose"></button>
     </div>
@@ -21,19 +32,23 @@
 
     @if (FooterContent != null)
     {
-        <div class="card-footer d-flex justify-content-end gap-2">
+        @* Room at the right for the resize grip below, so a footer button never sits under it. *@
+        <div class="card-footer d-flex justify-content-end gap-2" style="padding-right: 2.25rem;">
             @FooterContent
         </div>
     }
 
     @* Its own grip rather than the CSS one. A browser's native resizer is a few faint pixels with a hit
        area to match, which is neither findable nor easy to hit; this is drawn at a size worth aiming at. *@
-    <div class="gdbv-dialog-resize" @ref="grip" title="Drag to resize">
-        <svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true">
-            <path d="M14 9.5v4a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1 0-1h2.793L9.146 9.854a.5.5 0 1 1 .708-.708L13 12.293V9.5a.5.5 0 0 1 1 0z" />
-            <path d="M2 6.5v-4a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 0 1H3.707l3.147 3.146a.5.5 0 1 1-.708.708L3 3.707V6.5a.5.5 0 0 1-1 0z" />
-        </svg>
-    </div>
+    @if (Resizable)
+    {
+        <div class="gdbv-dialog-resize" @ref="grip" title="Drag to resize">
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true">
+                <path d="M14 9.5v4a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1 0-1h2.793L9.146 9.854a.5.5 0 1 1 .708-.708L13 12.293V9.5a.5.5 0 0 1 1 0z" />
+                <path d="M2 6.5v-4a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 0 1H3.707l3.147 3.146a.5.5 0 1 1-.708.708L3 3.707V6.5a.5.5 0 0 1-1 0z" />
+            </svg>
+        </div>
+    }
 
 </div>
 
@@ -56,10 +71,25 @@
     ///<summary>Extra controls for the title bar, to the left of the close button.</summary>
     [Parameter] public RenderFragment HeaderContent { get; set; }
 
+    ///<summary>A small picture before the title: Ask AI's spark, the one on the button that opens it (2026-11-01, from GDS Viewer).</summary>
+    [Parameter] public RenderFragment TitleIcon { get; set; }
+
+    ///<summary>A Bootstrap icon before the title by its class, such as "bi-stars", when there is no TitleIcon: the icon of what opens the window (2026-11-04, the user).</summary>
+    [Parameter] public string TitleGlyph { get; set; }
+
+    ///<summary>A class of the window's own on its outermost element, for a window that is styled apart: Ask AI's.</summary>
+    [Parameter] public string Class { get; set; }
+
     [Parameter] public RenderFragment ChildContent { get; set; }
 
     ///<summary>A button row along the bottom, or null for a window with none.</summary>
     [Parameter] public RenderFragment FooterContent { get; set; }
+
+    ///<summary>
+    ///Whether the corner grip is there. A window without it is the size its content asks for, up to its Height
+    ///(as a max-height then), with as much room under its content as at its sides (Find coordinates, 2026-11-06, the user).
+    ///</summary>
+    [Parameter] public bool Resizable { get; set; } = true;
 
     private ElementReference panel;
     private ElementReference handle;
@@ -85,7 +115,12 @@
         //its peers so the one just opened is the one in front.
         try
         {
-            await JS.InvokeVoidAsync("floatingDialog.attach", panel, handle, grip, StorageKey);
+            object gripOrNone = null;
+
+            if (Resizable)
+                gripOrNone = grip;
+
+            await JS.InvokeVoidAsync("floatingDialog.attach", panel, handle, gripOrNone, StorageKey);
         }
         catch { }
     }

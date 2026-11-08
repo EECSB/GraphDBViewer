@@ -29,7 +29,8 @@ public interface ILiveGraphDb
 
     ///<summary>
     ///Starts watching everything the query reaches. Replaces any previous subscription — a viewer shows one
-    ///graph at a time, and a subscription left behind would keep pushing into a canvas that moved on.
+    ///graph at a time, and a subscription left behind would keep pushing into a canvas that moved on. Throws
+    ///when the watch cannot start, with the reason as the message, and leaves nothing watched.
     ///</summary>
     Task WatchAsync(string query, CancellationToken cancellationToken = default);
 

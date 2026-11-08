@@ -17,6 +17,11 @@ public sealed class GremlinQueryBuilderAdapter : IGraphQueryBuilder
         return GremlinQueryBuilder.LimitedVertices(limit);
     }
 
+    public string VerticesByName(string label, IReadOnlyList<string> names, int limit)
+    {
+        return GremlinQueryBuilder.VerticesByName(label, names, limit);
+    }
+
     public string FullGraph(int? limit)
     {
         return GremlinQueryBuilder.FullGraph(limit);
@@ -56,7 +61,7 @@ public sealed class GremlinQueryBuilderAdapter : IGraphQueryBuilder
 
             edges.Add(new EdgeInfo
             {
-                EdgeId = GetJsonString(unwrapped, "eId"),
+                EdgeId = GetEdgeId(unwrapped),
                 EdgeIdType = GetJsonIdType(unwrapped, "eId"),
                 Label = GetJsonString(unwrapped, "eLabel"),
                 OtherNodeId = GetJsonString(unwrapped, "vId"),
@@ -72,19 +77,35 @@ public sealed class GremlinQueryBuilderAdapter : IGraphQueryBuilder
         if (result.IsError || result.Data.ValueKind != JsonValueKind.Array || result.Data.GetArrayLength() == 0)
             return null;
 
-        return GraphDataConverter.UnwrapElement(result.Data[0]).ToString().Trim('"');
+        return Text(GraphDataConverter.UnwrapElement(result.Data[0]));
     }
 
     private static string GetJsonString(JsonElement el, string prop)
     {
         if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty(prop, out var val))
-        {
-            var unwrapped = GraphDataConverter.UnwrapElement(val);
-
-            return unwrapped.ToString().Trim('"');
-        }
+            return Text(GraphDataConverter.UnwrapElement(val));
 
         return "?";
+    }
+
+    //A string as its value, quotes it holds included: the JSON's own quotes are gone once it is read, so
+    //trimming quotes here took the value's (until 2026-11-07). Anything else reads as its text.
+    private static string Text(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.String)
+            return el.GetString();
+
+        return el.ToString();
+    }
+
+    //The edge's id as the canvas and the table read the same edge (GraphDataConverter.IdText): a JanusGraph
+    //RelationIdentifier as its relationId, which is what a drop of it has to name, and any other id as it always read.
+    private static string GetEdgeId(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("eId", out var id) && GraphDataConverter.IsRelationIdentifier(id))
+            return GraphDataConverter.IdText(id);
+
+        return GetJsonString(el, "eId");
     }
 
     //The GraphSON id type (e.g. "g:Int64") of a projected id field, read before it is unwrapped to a
@@ -161,6 +182,14 @@ public sealed class GremlinQueryBuilderAdapter : IGraphQueryBuilder
     public bool IsMutating(string query)
     {
         return GremlinStepParser.IsMutating(query);
+    }
+
+    public string ReadRefusal(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        return GremlinReading.Refusal(query);
     }
 
     public List<GraphEdit> ParseEdits(string buffer)

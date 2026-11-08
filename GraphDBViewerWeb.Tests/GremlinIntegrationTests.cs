@@ -7,13 +7,14 @@ namespace GraphDBViewerWeb.Tests;
 ///Integration tests that connect to a live Gremlin server, seed a small test graph
 ///(if it doesn't already exist), and verify queries + data conversion.
 ///
-///Configure via environment variables:
-///GREMLIN_HOST      (default: 192.168.1.5)
+///Opt-in, configured via environment variables (<see cref="LiveGremlin"/>):
+///GREMLIN_HOST      (no default: without it every test here is skipped)
 ///GREMLIN_PORT      (default: 8182)
 ///GREMLIN_TRANSPORT (default: WebSocket)
 ///
-///Skip these tests when no server is available by setting:
-///SKIP_GREMLIN_TESTS=true
+///The test graph stays on the server for the next run, so point GREMLIN_HOST at a throwaway server, never at the
+///development graph (treeality-dev-graph, 192.168.1.7:8186). A server it names that does not answer fails every test
+///here, naming the address.
 ///</summary>
 [Collection("Gremlin")]
 public class GremlinIntegrationTests : IAsyncLifetime
@@ -21,22 +22,15 @@ public class GremlinIntegrationTests : IAsyncLifetime
     private GremlinDB _gremlin = null!;
     private readonly HttpClient _http = new();
 
-    private static string Host => Environment.GetEnvironmentVariable("GREMLIN_HOST") ?? "192.168.1.5";
-    private static int Port => int.TryParse(Environment.GetEnvironmentVariable("GREMLIN_PORT"), out var p) ? p : 8182;
-    private static string Transport => Environment.GetEnvironmentVariable("GREMLIN_TRANSPORT") ?? "WebSocket";
-
-    private static bool ShouldSkip =>
-        string.Equals(Environment.GetEnvironmentVariable("SKIP_GREMLIN_TESTS"), "true", StringComparison.OrdinalIgnoreCase);
-
     //Sentinel property value to identify our test vertices
     private const string TestMarker = "__graphdbviewer_test__";
 
     public async Task InitializeAsync()
     {
-        if (ShouldSkip)
-            return;
+        //Only a test that runs gets here: without GREMLIN_HOST each is skipped before its class is made.
+        await LiveGremlin.AnswersAsync();
 
-        var connection = new GremlinDB.GremlinConnection(Transport, Port, false, Host, string.Empty, string.Empty, string.Empty);
+        var connection = new GremlinDB.GremlinConnection(LiveGremlin.Transport, LiveGremlin.Port, false, LiveGremlin.Host, string.Empty, string.Empty, string.Empty);
         _gremlin = new GremlinDB(_http, connection);
 
         await SeedTestGraphAsync();
@@ -48,8 +42,6 @@ public class GremlinIntegrationTests : IAsyncLifetime
             await _gremlin.DisposeAsync();
         _http.Dispose();
     }
-
-    private bool IsServerAvailable => !ShouldSkip && _gremlin is not null;
 
     //── Seed ──────────────────────────────────────────────────────────
 
@@ -101,6 +93,7 @@ public class GremlinIntegrationTests : IAsyncLifetime
             var first = data[0];
             if (first.ValueKind == JsonValueKind.Number)
                 return first.GetInt64();
+
             if (first.TryGetProperty("@value", out var inner) && inner.ValueKind == JsonValueKind.Number)
                 return inner.GetInt64();
         }
@@ -108,146 +101,23 @@ public class GremlinIntegrationTests : IAsyncLifetime
         return 0;
     }
 
-    //── Connection / Basic Queries ────────────────────────────────────
+    //── Connection ────────────────────────────────────────────────────
+    //What the server answers to count, hasLabel, has, outE and path over the seed is the server's to get right. The
+    //client's part is the round trip below, and reading the rows back is GremlinResultShapeTests' (2026-10-23).
 
-    [Fact]
+    [OptInFact(LiveGremlin.HostVariable)]
     public async Task Connection_CanExecuteSimpleQuery()
     {
-        if (!IsServerAvailable)
-            return;
-
         var result = await _gremlin.ExecuteAsync("g.V().limit(1)");
 
         Assert.False(result.IsError, $"Expected success but got: {result.Error}");
     }
 
-    [Fact]
-    public async Task Query_VertexCount_ReturnsNumber()
-    {
-        if (!IsServerAvailable)
-            return;
-
-        var result = await _gremlin.ExecuteAsync(
-            $"g.V().has('_testMarker', '{TestMarker}').count()");
-
-        Assert.False(result.IsError, result.Error);
-        long count = ExtractCount(result.Data);
-        Assert.True(count >= 4, $"Expected at least 4 test vertices, got {count}");
-    }
-
-    [Fact]
-    public async Task Query_EdgeCount_ReturnsNumber()
-    {
-        if (!IsServerAvailable)
-            return;
-
-        var result = await _gremlin.ExecuteAsync(
-            $"g.V().has('_testMarker', '{TestMarker}').bothE().dedup().count()");
-
-        Assert.False(result.IsError, result.Error);
-        long count = ExtractCount(result.Data);
-        Assert.True(count >= 5, $"Expected at least 5 test edges, got {count}");
-    }
-
-    //── Vertex Queries ────────────────────────────────────────────────
-
-    [Fact]
-    public async Task Query_GetVerticesByLabel_ReturnsPeople()
-    {
-        if (!IsServerAvailable)
-            return;
-
-        var result = await _gremlin.ExecuteAsync(
-            $"g.V().has('_testMarker', '{TestMarker}').hasLabel('person')");
-
-        Assert.False(result.IsError, result.Error);
-        Assert.Equal(JsonValueKind.Array, result.Data.ValueKind);
-        Assert.True(result.Data.GetArrayLength() >= 3, "Expected at least 3 person vertices");
-    }
-
-    [Fact]
-    public async Task Query_GetVertexByName_FindsAlice()
-    {
-        if (!IsServerAvailable)
-            return;
-
-        var result = await _gremlin.ExecuteAsync(
-            $"g.V().has('_testMarker', '{TestMarker}').has('name', 'Alice').valueMap(true)");
-
-        Assert.False(result.IsError, result.Error);
-        Assert.Equal(JsonValueKind.Array, result.Data.ValueKind);
-        Assert.True(result.Data.GetArrayLength() >= 1, "Expected Alice vertex in results");
-    }
-
-    //── Edge / Traversal Queries ──────────────────────────────────────
-
-    [Fact]
-    public async Task Query_TraversalTriple_ReturnsVEO()
-    {
-        if (!IsServerAvailable)
-            return;
-
-        var result = await _gremlin.ExecuteAsync(
-            $"g.V().has('_testMarker', '{TestMarker}').as('v').bothE().as('e').otherV().as('o').select('v','e','o')");
-
-        Assert.False(result.IsError, result.Error);
-        Assert.Equal(JsonValueKind.Array, result.Data.ValueKind);
-        Assert.True(result.Data.GetArrayLength() >= 1, "Expected at least one traversal triple");
-    }
-
-    [Fact]
-    public async Task Query_OutEdgesFromAlice_FindsKnowsAndCreated()
-    {
-        if (!IsServerAvailable)
-            return;
-
-        var result = await _gremlin.ExecuteAsync(
-            $"g.V().has('_testMarker', '{TestMarker}').has('name', 'Alice').outE().label()");
-
-        Assert.False(result.IsError, result.Error);
-        Assert.Equal(JsonValueKind.Array, result.Data.ValueKind);
-
-        var labels = new List<string>();
-        foreach (var item in result.Data.EnumerateArray())
-        {
-            string? val;
-            if (item.ValueKind == JsonValueKind.String)
-                val = item.GetString();
-            else if (item.TryGetProperty("@value", out var inner))
-                val = inner.GetString();
-            else
-                val = item.ToString();
-
-            if (val != null)
-                labels.Add(val);
-        }
-
-        Assert.Contains("knows", labels);
-        Assert.Contains("created", labels);
-    }
-
-    [Fact]
-    public async Task Query_PathFromAliceToBob_ReturnsPath()
-    {
-        if (!IsServerAvailable)
-            return;
-
-        var result = await _gremlin.ExecuteAsync(
-            $"g.V().has('_testMarker', '{TestMarker}').has('name', 'Alice').out('knows').has('name', 'Bob').path()");
-
-        Assert.False(result.IsError, result.Error);
-        Assert.Equal(JsonValueKind.Array, result.Data.ValueKind);
-        Assert.True(result.Data.GetArrayLength() >= 1, "Expected a path from Alice to Bob");
-    }
-
     //── Converter Integration (live data → Cytoscape / ForceGraph) ───
 
-    [Fact]
+    [OptInFact(LiveGremlin.HostVariable)]
     public async Task Converter_LiveTraversalTriples_ProducesValidCytoscapeJson()
     {
-        if (!IsServerAvailable)
-            return;
-
         var result = await _gremlin.ExecuteAsync(
             $"g.V().has('_testMarker', '{TestMarker}').as('v').bothE().as('e').otherV().as('o').select('v','e','o')");
         Assert.False(result.IsError, result.Error);
@@ -281,12 +151,9 @@ public class GremlinIntegrationTests : IAsyncLifetime
         Assert.True(edgeCount >= 1, $"Expected at least 1 edge, got {edgeCount}");
     }
 
-    [Fact]
+    [OptInFact(LiveGremlin.HostVariable)]
     public async Task Converter_LiveTraversalTriples_ProducesValidForceGraphJson()
     {
-        if (!IsServerAvailable)
-            return;
-
         var result = await _gremlin.ExecuteAsync(
             $"g.V().has('_testMarker', '{TestMarker}').as('v').bothE().as('e').otherV().as('o').select('v','e','o')");
         Assert.False(result.IsError, result.Error);
@@ -315,12 +182,9 @@ public class GremlinIntegrationTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [OptInFact(LiveGremlin.HostVariable)]
     public async Task Converter_LiveVertexOnly_ProducesNodesNoEdges()
     {
-        if (!IsServerAvailable)
-            return;
-
         var result = await _gremlin.ExecuteAsync(
             $"g.V().has('_testMarker', '{TestMarker}')");
         Assert.False(result.IsError, result.Error);
@@ -334,33 +198,25 @@ public class GremlinIntegrationTests : IAsyncLifetime
 
     //── Error Handling ────────────────────────────────────────────────
 
-    [Fact]
+    [OptInFact(LiveGremlin.HostVariable)]
     public async Task Query_InvalidGremlin_ReturnsError()
     {
-        if (!IsServerAvailable)
-            return;
-
         var result = await _gremlin.ExecuteAsync("this is not valid gremlin");
 
         Assert.True(result.IsError, "Expected an error for invalid Gremlin syntax");
         Assert.False(string.IsNullOrEmpty(result.Error));
     }
 
-    [Fact]
+    [OptInFact(LiveGremlin.HostVariable)]
     public async Task Query_EmptyResult_ReturnsEmptyOrNoContent()
     {
-        if (!IsServerAvailable)
-            return;
-
         var result = await _gremlin.ExecuteAsync(
             "g.V().has('_nonexistent_property_xyz', 'impossible_value_abc')");
 
         //TinkerPop returns 204 No Content for empty results, which is treated as an error by GremlinDB.
         //Either an empty array or a 204-based error is acceptable.
         if (result.IsError)
-        {
             Assert.Contains("204", result.Error);
-        }
         else
         {
             Assert.Equal(JsonValueKind.Array, result.Data.ValueKind);
@@ -370,12 +226,9 @@ public class GremlinIntegrationTests : IAsyncLifetime
 
     //── Batch Execution ──────────────────────────────────────────────
 
-    [Fact]
+    [OptInFact(LiveGremlin.HostVariable)]
     public async Task ExecuteMany_RunsMultipleQueries()
     {
-        if (!IsServerAvailable)
-            return;
-
         var queries = new Dictionary<string, string>
         {
             ["vertexCount"] = $"g.V().has('_testMarker', '{TestMarker}').count()",

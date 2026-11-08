@@ -1,19 +1,15 @@
 @using System.Text.Json
 @using GraphDBViewerWeb.Code
+@inject IJSRuntime JS
 
 <div class="border rounded flex-grow-1 p-2" style="overflow:auto;">
     @{
-        var hasTableData = GraphData.ValueKind != JsonValueKind.Undefined || FallbackData.ValueKind != JsonValueKind.Undefined;
+        var hasTableData = GraphData.ValueKind != JsonValueKind.Undefined;
 
         var tableData = new GraphDataConverter.GraphTable();
 
         if (hasTableData)
-        {
-            if (GraphData.ValueKind != JsonValueKind.Undefined)
-                tableData = GraphDataConverter.ToTable(GraphData);
-            else
-                tableData = GraphDataConverter.ToTable(FallbackData);
-        }
+            tableData = GraphDataConverter.ToTable(GraphData);
     }
 
     @if (!hasTableData)
@@ -47,14 +43,18 @@
                     </button>
                 }
             </div>
-            <table class="table table-sm table-hover table-bordered align-middle gdbv-data-table" style="font-size: 0.8em;">
+            <table class="gdbv-text-sm table table-sm table-hover table-bordered align-middle gdbv-data-table" data-resize-key="vertices" data-testid="table-vertices">
                 <thead class="table-light">
                     <tr>
-                        <th>Id</th>
-                        <th>Label</th>
+                        <th data-col="Id">Id@(Grip)</th>
+                        <th data-col="Label">Label@(Grip)</th>
+                        @if (Overlay != null)
+                        {
+                            <th class="text-nowrap" title="@OverlayTitle" data-testid="table-overlay" data-col="@Overlay.Name">@Overlay.Name@Grip</th>
+                        }
                         @foreach (var col in nodeCols)
                         {
-                            <th>@col</th>
+                            <th data-col="@col">@col@Grip</th>
                         }
                         @if (showNodeExtra)
                         {
@@ -72,6 +72,10 @@
                         <tr style="@NodeRowStyle(r.Label)" @onclick="() => OnNodeSelected.InvokeAsync(r)">
                             <td>@r.Id</td>
                             <td><span class="badge bg-secondary">@r.Label</span></td>
+                            @if (Overlay != null)
+                            {
+                                <td class="font-monospace text-end" data-testid="table-overlay-value">@Overlay.ValueOf(r.Id)</td>
+                            }
                             @foreach (var col in nodeCols)
                             {
                                 <td>@(r.Properties.TryGetValue(col, out var val) ? val : "")</td>
@@ -100,16 +104,16 @@
                     </button>
                 }
             </div>
-            <table class="table table-sm table-hover table-bordered align-middle gdbv-data-table" style="font-size: 0.8em;">
+            <table class="gdbv-text-sm table table-sm table-hover table-bordered align-middle gdbv-data-table" data-resize-key="edges" data-testid="table-edges">
                 <thead class="table-light">
                     <tr>
-                        <th>Id</th>
-                        <th>Label</th>
-                        <th>Source</th>
-                        <th>Target</th>
+                        <th data-col="Id">Id@(Grip)</th>
+                        <th data-col="Label">Label@(Grip)</th>
+                        <th data-col="Source">Source@(Grip)</th>
+                        <th data-col="Target">Target@(Grip)</th>
                         @foreach (var col in edgeCols)
                         {
-                            <th>@col</th>
+                            <th data-col="@col">@col@Grip</th>
                         }
                         @if (showEdgeExtra)
                         {
@@ -124,7 +128,7 @@
                     @foreach (var row in tableData.Edges)
                     {
                         var r = row;
-                        <tr style="cursor:pointer;" @onclick="() => OnEdgeSelected.InvokeAsync(r)">
+                        <tr class="gdbv-pointer" @onclick="() => OnEdgeSelected.InvokeAsync(r)">
                             <td>@r.Id</td>
                             <td><span class="badge bg-secondary">@r.Label</span></td>
                             <td>@r.Source</td>
@@ -150,10 +154,40 @@
 
 @code {
     [Parameter] public JsonElement GraphData { get; set; }
-    [Parameter] public JsonElement FallbackData { get; set; }
     [Parameter] public Dictionary<string, LabelStyle> LabelStyles { get; set; }
+
+    ///<summary>An algorithm's result for this graph, shown as a column of its own after the label; computed, not data.</summary>
+    [Parameter] public AlgorithmOverlay Overlay { get; set; }
+
+    ///<summary>
+    ///What the algorithm column's header says on hover: where its numbers were worked out, as the panel says it, in this
+    ///browser or in the database by its own library. Until 2026-10-31 it said "in this browser" of both.
+    ///</summary>
+    private string OverlayTitle
+    {
+        get
+        {
+            if (Overlay == null || string.IsNullOrEmpty(Overlay.Where))
+                return "From the Graph algorithms panel";
+
+            return $"From the Graph algorithms panel. {Overlay.Where}";
+        }
+    }
     [Parameter] public EventCallback<GraphDataConverter.GraphRow> OnNodeSelected { get; set; }
     [Parameter] public EventCallback<GraphDataConverter.GraphRow> OnEdgeSelected { get; set; }
+
+    //A header's right edge, which sizes its column dragged and fits it to its widest cell double-clicked, as a spreadsheet's
+    //does (2026-11-05, the user). The page's script does the sizing (gdbvTableColumns), so a render keeps the widths.
+    private static readonly RenderFragment Grip = @<span class="gdbv-col-grip" title="Drag to size this column. Double-click to fit it to its widest cell." aria-hidden="true"></span>;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("gdbvTableColumns.restore");
+        }
+        catch { }
+    }
 
     //"Additional properties" (the gdbv* columns) expanded, kept per table so each expands on its own.
     private bool showNodeExtra;
@@ -170,44 +204,51 @@
 
     //A gdbv* column header: its name, plus a "preview" box on the two columns that link to something
     //renderable (the image and the 3D model).
-    private RenderFragment ExtraHeaderCell(string col, HashSet<string> previewCols) =>@<th class="gdbv-extra-col">
-        <div class="d-flex align-items-center gap-3 text-nowrap">
-            <span>@col</span>
-            @if (IsPreviewable(col))
-            {
-                <label class="fw-normal d-inline-flex align-items-center gap-1 mb-0" style="cursor: pointer;" title="@PreviewTitle(col)">
-                    <input type="checkbox" class="form-check-input m-0" style="cursor: pointer;" checked="@previewCols.Contains(col)" @onchange="e => SetPreview(previewCols, col, (bool)(e.Value ?? false))" />
-                    <span style="font-size: 0.9em;">preview</span>
-                </label>
-            }
-        </div>
-    </th>;
+    private RenderFragment ExtraHeaderCell(string col, HashSet<string> previewCols)
+    {
+        return @<th class="gdbv-extra-col" data-col="@col">
+            @Grip
+            <div class="d-flex align-items-center gap-3 text-nowrap">
+                <span>@col</span>
+                @if (IsPreviewable(col))
+                {
+                    <label class="gdbv-pointer fw-normal d-inline-flex align-items-center gap-1 mb-0" title="@PreviewTitle(col)">
+                        <input type="checkbox" class="gdbv-pointer form-check-input m-0" checked="@previewCols.Contains(col)" @onchange="e => SetPreview(previewCols, col, (bool)(e.Value ?? false))" />
+                        <span class="gdbv-text-sm">preview</span>
+                    </label>
+                }
+            </div>
+        </th>;
+    }
 
     //A gdbv* cell: the raw value, with the linked image / 3D model rendered under it once the column's
     //"preview" box is ticked.
-    private RenderFragment ExtraBodyCell(string col, GraphDataConverter.GraphRow r, HashSet<string> previewCols, HashSet<string> modelPreviewIds) =>@<td class="gdbv-extra-col">
-        @{
-            var val = r.Properties.GetValueOrDefault(col) ?? "";
-        }
-        <div>@val</div>
-        @if (previewCols.Contains(col) && !string.IsNullOrWhiteSpace(val))
-        {
-            if (col == GdbvKeys.Image)
-            {
-                <img src="@val" alt="Linked image preview" class="gdbv-cell-preview mt-1" loading="lazy" />
+    private RenderFragment ExtraBodyCell(string col, GraphDataConverter.GraphRow r, HashSet<string> previewCols, HashSet<string> modelPreviewIds)
+    {
+        return @<td class="gdbv-extra-col">
+            @{
+                var val = r.Properties.GetValueOrDefault(col) ?? "";
             }
-            else if (modelPreviewIds.Contains(r.Id))
+            <div>@val</div>
+            @if (previewCols.Contains(col) && !string.IsNullOrWhiteSpace(val))
             {
-                <div class="gdbv-cell-preview mt-1">
-                    <ModelPreview Url="@val" Color="@r.Properties.GetValueOrDefault(GdbvKeys.Color)" />
-                </div>
+                if (col == GdbvKeys.Image)
+                {
+                    <img src="@val" alt="Linked image preview" class="gdbv-cell-preview mt-1" loading="lazy" />
+                }
+                else if (modelPreviewIds.Contains(r.Id))
+                {
+                    <div class="gdbv-cell-preview mt-1">
+                        <ModelPreview Url="@val" Color="@r.Properties.GetValueOrDefault(GdbvKeys.Color)" />
+                    </div>
+                }
+                else
+                {
+                    <div class="gdbv-text-xs form-text mt-1">3D preview shown for the first @MaxModelPreviews rows only.</div>
+                }
             }
-            else
-            {
-                <div class="form-text mt-1" style="font-size: 0.75em;">3D preview shown for the first @MaxModelPreviews rows only.</div>
-            }
-        }
-    </td>;
+        </td>;
+    }
 
     //Only the linked-image and linked-model columns have anything to preview.
     private static bool IsPreviewable(string col)

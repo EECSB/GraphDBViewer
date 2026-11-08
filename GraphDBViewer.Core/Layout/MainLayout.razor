@@ -6,14 +6,15 @@
 
 <div class="page">
     <main>
+        @* The application shell: the top bar renders here, on every page, rather than as page content
+           (application-shell spec). A banner across the window's top, edge to edge, with a line along its bottom
+           (2026-10-28): outside the page's padded column, so the full-width toggle widens the page under it. The
+           band holding it is what stays at the top when the bar is sticky. *@
+        <div class="gdbv-shell-band @(Shell.StickyBar ? "gdbv-sticky" : null)" data-testid="shell-band">
+            <TopBar Account="account" />
+        </div>
+        @* As far under the banner as the page is from the window's sides. *@
         <article class="content px-4" style="padding-top: 0.5rem;">
-            @* The application shell: the top bar renders here, on every page, rather than as page
-               content (application-shell spec). It sits in the same width-capped container the pages
-               use, so the bar and the content share their side margins — and the full-width toggle
-               drops both together. *@
-            <div class="container-fluid px-0 gdbv-page @(Shell.FullScreen ? "gdbv-fullscreen" : "")">
-                <TopBar Account="account" />
-            </div>
             @*The account cascades to the pages: what someone may do decides what a page offers (the
                Plugins page gates on the install permission), and only the layout knows who is signed
                in. Null until the host answers, and stays null on a host without accounts.*@
@@ -33,7 +34,7 @@
 
     protected override void OnInitialized()
     {
-        //The full-width class above is read from ShellState, which changes from inside the bar.
+        //The full-width and sticky classes above are read from ShellState, which changes from inside the bar.
         Shell.Changed += OnShellChanged;
     }
 

@@ -66,8 +66,7 @@ public static class GunStatementParser
 
             return;
         }
-
-        if (write.Kind == GunWriteKind.Clear)
+        else if (write.Kind == GunWriteKind.Clear)
         {
             //Nulling a key that holds a link removes that edge; nulling the node removes the node.
             if (!string.IsNullOrEmpty(write.Edge))

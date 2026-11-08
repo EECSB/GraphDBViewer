@@ -1,0 +1,13 @@
+@* Shown in place of the 2D / 3D canvas or the Table when the viewer could not read the result as a graph: a shape
+   none of its readers expected. Says why, in the reader's own words, and offers the JSON view, where the result is
+   shown as it came back. The query box and the tabs stay as they are, to change the query or close the tab. *@
+<div class="alert alert-warning d-flex align-items-center justify-content-between gap-2 py-1 px-2 mb-0 small shadow-sm" role="alert" data-testid="unreadable-result">
+    <span>The viewer could not read this result as a graph (@Problem). Change the query, or see the result as it came back in the JSON view.</span>
+    <button class="btn btn-sm text-nowrap" style="color: var(--bs-alert-color); border-color: var(--bs-alert-border-color);" @onclick="OnGoToJson" title="Switch to the JSON view to see the raw result">Go to JSON</button>
+</div>
+
+@code {
+    [Parameter] public string Problem { get; set; }
+
+    [Parameter] public EventCallback OnGoToJson { get; set; }
+}

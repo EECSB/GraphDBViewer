@@ -1,7 +1,7 @@
 @implements IAsyncDisposable
 @inject IJSRuntime JS
 
-@* A small three.js viewer for the selected node's linked .obj / .zip model, mirroring the image
+@* A small three.js viewer for the selected node's linked .obj, .gltf, .glb or .zip model, mirroring the image
    preview. The heavy lifting lives in modelPreviewInterop.js (one WebGL scene per element id); this
    component just owns the container and drives render / dispose from the Url parameter. *@
 <div>

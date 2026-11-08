@@ -1,0 +1,852 @@
+@page "/notifications"
+@using System.Net.Http.Json
+@using GraphDBViewerWeb.Code
+@using GraphDBViewerWeb.Components
+@implements IDisposable
+@inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
+@inject HttpClient Http
+@inject NavigationManager Navigation
+@inject IServiceProvider Services
+
+@*Notifications (the notifications spec): a person's own, newest first, and their settings. The host's own page, like
+   backups, since every plugin raises them; everybody signed in has one. Kept up to date by the same feed as the bell.*@
+@if (HostOptions.HasServerRoute)
+{
+    <PageTitle>Notifications · @HostOptions.AppName</PageTitle>
+
+    <div class="gdbv-head">
+        <div class="gdbv-head-icon"><i class="bi bi-bell"></i></div>
+        <div>
+            <h3 class="gdbv-head-title">Notifications</h3>
+            <div class="gdbv-head-sub">What is waiting for you, from every part of the app, and how long it is kept.</div>
+        </div>
+    </div>
+
+    @if (Account == null)
+    {
+        @*Still asking who this is.*@
+    }
+    else if (!Account.SignedIn)
+    {
+        <p>Sign in to see your notifications.</p>
+    }
+    else
+    {
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div class="alert alert-danger" data-testid="notifications-error">@error</div>
+        }
+
+        @if (!string.IsNullOrEmpty(notice))
+        {
+            <div class="alert alert-success" data-testid="notifications-notice">@notice</div>
+        }
+
+        <PanelBoard PageKey="@NotificationsPanels.PageKey" Panels="NotificationsPanels.Panels" Presets="NotificationsPanels.Presets">
+            @switch (context.Id)
+            {
+                case "list":
+                <div class="card gdbv-panel-card" data-testid="notifications-list">
+                    <div class="card-header">
+                        <i class="bi bi-bell text-primary"></i><span>Notifications</span>
+                        <span class="gdbv-count bg-primary-subtle text-primary-emphasis" title="Unread">@unread</span>
+                    </div>
+
+                    <div class="p-2 border-bottom d-flex gap-2 align-items-center flex-wrap">
+                        <select class="form-select form-select-sm" style="width: auto;" value="@kind" @onchange="KindChangedAsync" data-testid="notifications-kind">
+                            <option value="">Every kind</option>
+                            @foreach (var known in kinds)
+                            {
+                                <option value="@known.Id">@known.Name</option>
+                            }
+                        </select>
+
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" role="switch" id="notifications-unread" checked="@onlyUnread" @onchange="UnreadChangedAsync" data-testid="notifications-unread" />
+                            <label class="form-check-label small" for="notifications-unread">Unread only</label>
+                        </div>
+
+                        <div class="ms-auto d-flex gap-2">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@(busy || unread == 0)" @onclick="ReadAllAsync" data-testid="notifications-read-all"><i class="bi bi-check2-all me-1"></i>Mark all read</button>
+
+                            @if (confirmingDelete)
+                            {
+                                <button type="button" class="btn btn-danger btn-sm" disabled="@busy" @onclick="DeleteAllAsync" data-testid="notifications-delete-all-confirm">Delete all @items.Count@(more ? "+" : "")?</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => confirmingDelete = false">Keep them</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn btn-outline-danger btn-sm" disabled="@(busy || items.Count == 0)" @onclick="() => confirmingDelete = true" data-testid="notifications-delete-all"><i class="bi bi-trash me-1"></i>Delete all</button>
+                            }
+                        </div>
+                    </div>
+
+                    @if (!loaded)
+                    {
+                        <div class="p-3 small text-body-secondary">Reading them…</div>
+                    }
+                    else if (items.Count == 0)
+                    {
+                        <div class="p-3 small text-body-secondary" data-testid="notifications-empty">Nothing here. When something waits for you, it shows here and on the bell.</div>
+                    }
+                    else
+                    {
+                        <div class="list-group list-group-flush">
+                            @foreach (var one in items)
+                            {
+                                <div class="list-group-item bg-transparent d-flex align-items-start gap-2" data-testid="notifications-item" data-kind="@one.Kind" data-read="@(one.ReadAt != null ? "true" : "false")">
+                                    <i class="bi @one.Icon text-primary mt-1" aria-hidden="true"></i>
+                                    <div class="flex-grow-1">
+                                        <a href="@one.Link" class="text-decoration-none text-body @(one.ReadAt == null ? "fw-semibold" : null)" @onclick="() => OpenAsync(one)" @onclick:preventDefault="true">
+                                            <span class="@(one.SettledAt != null ? "text-decoration-line-through text-body-secondary" : null)">@one.Sentence</span>
+                                        </a>
+                                        <div class="small text-body-secondary">
+                                            @one.KindName · @one.Plugin@(one.ThirdParty ? " (installed plugin)" : "") · @NotificationsText.Ago(one.RaisedAt, DateTimeOffset.Now)
+                                            @if (one.SettledAt != null)
+                                            {
+                                                <span> · dealt with</span>
+                                            }
+                                        </div>
+                                    </div>
+                                    @if (one.ReadAt == null)
+                                    {
+                                        <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" title="Mark read" @onclick="() => ReadAsync(one)" data-testid="notifications-read"><i class="bi bi-check2"></i></button>
+                                    }
+                                    <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none text-danger" title="Delete" @onclick="() => DeleteAsync(one)" data-testid="notifications-delete"><i class="bi bi-x-lg"></i></button>
+                                </div>
+                            }
+                        </div>
+
+                        @if (more)
+                        {
+                            <div class="p-2 text-center">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@busy" @onclick="MoreAsync" data-testid="notifications-more">More</button>
+                            </div>
+                        }
+                    }
+                </div>
+                    break;
+
+                case "settings":
+                <div class="card gdbv-panel-card p-3" data-testid="notifications-settings">
+                    <div class="gdbv-card-title"><i class="bi bi-sliders text-primary"></i><span>Settings</span></div>
+
+                    @if (settings == null)
+                    {
+                        <div class="small text-body-secondary">Reading them…</div>
+                    }
+                    else
+                    {
+                        <div class="mb-3">
+                            <div class="fw-semibold small mb-1">How long they are kept</div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="keep" id="keep-default" checked="@(keepChoice == "default")" @onchange='() => keepChoice = "default"' data-testid="notifications-keep-default" />
+                                <label class="form-check-label small" for="keep-default">@NotificationsContract.DefaultKeepDays days</label>
+                            </div>
+                            <div class="form-check d-flex align-items-center gap-2">
+                                <input class="form-check-input" type="radio" name="keep" id="keep-days" checked="@(keepChoice == "days")" @onchange='() => keepChoice = "days"' data-testid="notifications-keep-days" />
+                                <label class="form-check-label small" for="keep-days">For</label>
+                                <input type="number" min="1" max="36500" class="form-control form-control-sm" style="width: 6rem;" value="@keepDays" @onchange="KeepDaysChanged" disabled="@(keepChoice != "days")" data-testid="notifications-keep-number" />
+                                <span class="small">days</span>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="keep" id="keep-forever" checked="@(keepChoice == "forever")" @onchange='() => keepChoice = "forever"' data-testid="notifications-keep-forever" />
+                                <label class="form-check-label small" for="keep-forever">Forever</label>
+                            </div>
+                            <div class="form-text">Older ones are removed once a day. You can delete any of them sooner.</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="fw-semibold small mb-1">What reaches you, and how</div>
+                            <div class="form-text mb-2" data-testid="notifications-ways-said">
+                                The bell lists everything you may see.
+                                @if (MailOffered)
+                                {
+                                    <span>Mail goes to @Account.Email, gathered over @NotificationsContract.MailGatherMinutes minutes, so what comes together comes as one mail.</span>
+                                }
+
+                                @if (BrowserOffered)
+                                {
+                                    <span>In the browser, they show in every browser you turn them on in below, and a burst of one kind shows as one.</span>
+                                }
+                            </div>
+
+                            @if (!MailOffered && !string.IsNullOrEmpty(offer?.MailWhyNot))
+                            {
+                                <div class="form-text mb-2" data-testid="notifications-mail-why-not"><i class="bi bi-info-circle me-1"></i>@offer.MailWhyNot</div>
+                            }
+
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                    <tr><th>Kind</th><th class="text-center">Browser</th><th class="text-center">Mail</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var known in kinds)
+                                    {
+                                        <tr data-testid="notifications-setting-kind" data-kind="@known.Id">
+                                            <td class="small"><i class="bi @known.Icon text-primary me-1"></i>@known.Name</td>
+                                            <td class="text-center"><input class="form-check-input" type="checkbox" disabled="@(!BrowserOffered)" title="@(BrowserOffered ? "Show these in my browsers" : "Browser notifications are not offered here")" aria-label="@($"Show in my browsers: {known.Name}")" checked="@Way(known.Id).Browser" @onchange="e => BrowserChanged(known.Id, e)" data-testid="notifications-browser" /></td>
+                                            <td class="text-center"><input class="form-check-input" type="checkbox" disabled="@(!MailOffered)" title="@(MailOffered ? "Mail me these" : offer?.MailWhyNot)" aria-label="@($"Mail me: {known.Name}")" checked="@Way(known.Id).Mail" @onchange="e => MailChanged(known.Id, e)" data-testid="notifications-mail" /></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+
+                        @if (BrowserOffered && Push != null)
+                        {
+                            <div class="mb-3" data-testid="notifications-this-browser">
+                                <div class="fw-semibold small mb-1">This browser</div>
+
+                                @if (pushState == null)
+                                {
+                                    <div class="form-text">Asking this browser what it can do…</div>
+                                }
+                                else if (!pushState.Secure)
+                                {
+                                    <div class="form-text" data-testid="notifications-browser-why-not"><i class="bi bi-info-circle me-1"></i>This page is not served over HTTPS, so this browser cannot show its notifications. Whoever runs the instance can serve it over HTTPS.</div>
+                                }
+                                else if (!pushState.Supported)
+                                {
+                                    <div class="form-text" data-testid="notifications-browser-why-not"><i class="bi bi-info-circle me-1"></i>This browser cannot show notifications from a page.</div>
+                                }
+                                else if (pushState.Permission == "denied")
+                                {
+                                    <div class="form-text" data-testid="notifications-browser-why-not"><i class="bi bi-info-circle me-1"></i>This browser was told not to show this site's notifications. Allow them in its site settings, then turn them on here.</div>
+                                }
+                                else if (ThisBrowserOn)
+                                {
+                                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                                        <span class="small text-success" data-testid="notifications-browser-on"><i class="bi bi-check-circle me-1"></i>On in this browser.</span>
+                                        <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@pushBusy" @onclick="TestPushAsync" data-testid="notifications-browser-test">Send a test</button>
+                                        <button type="button" class="btn btn-outline-danger btn-sm" disabled="@pushBusy" @onclick="TurnOffAsync" data-testid="notifications-browser-off">Turn off in this browser</button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn-outline-primary btn-sm" disabled="@pushBusy" @onclick="TurnOnAsync" data-testid="notifications-browser-turn-on"><i class="bi bi-bell me-1"></i>Turn on in this browser</button>
+                                    <div class="form-text">The browser asks you first, and only then.</div>
+                                }
+
+                                @if (!string.IsNullOrEmpty(pushError))
+                                {
+                                    <div class="form-text text-danger mt-1" data-testid="notifications-browser-error">@pushError</div>
+                                }
+                                else if (!string.IsNullOrEmpty(pushNotice))
+                                {
+                                    <div class="form-text text-success mt-1" data-testid="notifications-browser-notice">@pushNotice</div>
+                                }
+
+                                @if (OtherBrowsers.Count > 0)
+                                {
+                                    <div class="small mt-2">Also on in:</div>
+                                    <ul class="list-unstyled small mb-0">
+                                        @foreach (var other in OtherBrowsers)
+                                        {
+                                            <li data-testid="notifications-browser-other">
+                                                @other.Label, since @other.CreatedAt.LocalDateTime.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-decoration-none text-danger" disabled="@pushBusy" @onclick="() => ForgetBrowserAsync(other)" data-testid="notifications-browser-forget">Turn off there</button>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                        }
+
+                        <div class="mb-3" data-testid="notifications-quiet">
+                            <div class="fw-semibold small mb-1">Quiet time</div>
+                            <div class="form-text mb-2">Nothing is mailed or shown in your browsers during a quiet time, and what it held comes as one when it ends. The hours are this browser's, in @BrowserZone.</div>
+
+                            @foreach (var span in settings.Quiet.Spans)
+                            {
+                                <div class="d-flex flex-wrap align-items-center gap-2 mb-2" data-testid="notifications-quiet-span">
+                                    <div class="btn-group btn-group-sm" role="group" aria-label="Days of the week">
+                                        @foreach (var weekday in Week)
+                                        {
+                                            var id = $"quiet-{settings.Quiet.Spans.IndexOf(span)}-{weekday.Day}";
+                                            <input type="checkbox" class="btn-check" id="@id" autocomplete="off" checked="@span.Days.Contains(weekday.Day)" disabled="@(!QuietOffered)" @onchange="e => DayChanged(span, weekday.Day, e)" data-testid="notifications-quiet-day" data-day="@weekday.Day" />
+                                            <label class="btn btn-outline-secondary" for="@id">@weekday.Name</label>
+                                        }
+                                    </div>
+                                    <input type="time" class="form-control form-control-sm" style="width: 7.5rem;" value="@span.From" disabled="@(!QuietOffered)" aria-label="From" @onchange="e => span.From = Clock(e, span.From)" data-testid="notifications-quiet-from" />
+                                    <span class="small">to</span>
+                                    <input type="time" class="form-control form-control-sm" style="width: 7.5rem;" value="@span.To" disabled="@(!QuietOffered)" aria-label="To" @onchange="e => span.To = Clock(e, span.To)" data-testid="notifications-quiet-to" />
+                                    <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none text-danger" title="Remove this quiet time" disabled="@(!QuietOffered)" @onclick="() => settings.Quiet.Spans.Remove(span)" data-testid="notifications-quiet-remove"><i class="bi bi-x-lg"></i></button>
+                                </div>
+                            }
+
+                            <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@(!QuietOffered || settings.Quiet.Spans.Count >= NotificationsContract.MostQuietTimes)" @onclick="AddQuiet" data-testid="notifications-quiet-add"><i class="bi bi-moon me-1"></i>Add a quiet time</button>
+                        </div>
+
+                        <button type="button" class="btn btn-primary btn-sm" disabled="@busy" @onclick="SaveSettingsAsync" data-testid="notifications-save">Save</button>
+                    }
+                </div>
+                    break;
+            }
+        </PanelBoard>
+    }
+}
+
+@code {
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private List<NotificationShown> items = [];
+    private List<NotificationKindShown> kinds = [];
+    private NotificationSettings settings;
+    private NotificationOffer offer;
+    private NotificationPushState pushState;
+    private List<NotificationBrowserShown> browsers = [];
+    private bool pushBusy;
+    private string pushError;
+    private string pushNotice;
+    private int unread;
+    private bool more;
+    private bool loaded;
+    private bool busy;
+    private bool onlyUnread;
+    private bool confirmingDelete;
+    private string kind = "";
+    private string error;
+    private string notice;
+    private string keepChoice = "default";
+    private int keepDays = NotificationsContract.DefaultKeepDays;
+    private bool started;
+
+    ///<summary>A kind the list opens filtered by, from a link: a browser notification that counted several of a kind opens their list.</summary>
+    [SupplyParameterFromQuery(Name = "kind")] public string KindLink { get; set; }
+
+    private INotificationFeed Feed => Services.GetService(typeof(INotificationFeed)) as INotificationFeed;
+
+    private INotificationPush Push => Services.GetService(typeof(INotificationPush)) as INotificationPush;
+
+    ///<summary>Whether this instance can mail, which is what lets the mail switches be changed.</summary>
+    private bool MailOffered => offer?.Mail == true;
+
+    ///<summary>Whether this instance pushes to browsers, which is what lets the browser switches be changed.</summary>
+    private bool BrowserOffered => offer?.Browser == true;
+
+    ///<summary>Whether anything a quiet time holds back is offered: mail, or the browser.</summary>
+    private bool QuietOffered => MailOffered || BrowserOffered;
+
+    ///<summary>Whether this browser holds a subscription the instance keeps for this person.</summary>
+    private bool ThisBrowserOn => !string.IsNullOrEmpty(pushState?.Endpoint) && browsers.Any(b => b.ThisBrowser);
+
+    private List<NotificationBrowserShown> OtherBrowsers => browsers.Where(b => !b.ThisBrowser).ToList();
+
+    ///<summary>This browser's time zone, which the quiet time's hours are in and which is saved with them.</summary>
+    private static string BrowserZone => TimeZoneInfo.Local.Id;
+
+    ///<summary>The days a quiet time can start on, Monday first, each as <see cref="DayOfWeek"/> counts it.</summary>
+    private static readonly (int Day, string Name)[] Week =
+    [
+        (1, "Mon"),
+        (2, "Tue"),
+        (3, "Wed"),
+        (4, "Thu"),
+        (5, "Fri"),
+        (6, "Sat"),
+        (0, "Sun")
+    ];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (started || Account == null || !Account.SignedIn || !HostOptions.HasServerRoute)
+            return;
+
+        started = true;
+
+        if (Feed != null)
+            Feed.Changed += OnFeedChanged;
+
+        kind = KindLink ?? "";
+
+        await Task.WhenAll(LoadAsync(), KindsAsync(), SettingsAsync(), OfferAndBrowsersAsync());
+    }
+
+    private void OnFeedChanged(NotificationEvent evt)
+    {
+        //A new one, or one read or settled elsewhere (the bell, another tab): the page reads its list again.
+        if (evt == null)
+            return;
+
+        _ = InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        });
+    }
+
+    private string Query(long? before)
+    {
+        var query = $"{NotificationsContract.BasePath}?limit={NotificationsContract.PageSize}";
+
+        if (!string.IsNullOrEmpty(kind))
+            query += "&kind=" + Uri.EscapeDataString(kind);
+
+        if (onlyUnread)
+            query += "&unread=true";
+
+        if (before != null)
+            query += "&before=" + before.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        return query;
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            var page = await Http.GetFromJsonAsync<NotificationPage>(Query(null));
+
+            items = page?.Items ?? [];
+            more = page?.More ?? false;
+            unread = page?.Unread ?? 0;
+            error = null;
+        }
+        catch (Exception ex)
+        {
+            error = "Your notifications could not be read: " + ex.Message;
+        }
+
+        loaded = true;
+    }
+
+    private async Task MoreAsync()
+    {
+        if (items.Count == 0)
+            return;
+
+        busy = true;
+
+        try
+        {
+            var page = await Http.GetFromJsonAsync<NotificationPage>(Query(items[^1].Id));
+
+            items.AddRange(page?.Items ?? []);
+            more = page?.More ?? false;
+        }
+        catch (Exception ex)
+        {
+            error = "More could not be read: " + ex.Message;
+        }
+
+        busy = false;
+    }
+
+    private async Task KindsAsync()
+    {
+        try
+        {
+            kinds = await Http.GetFromJsonAsync<List<NotificationKindShown>>(NotificationsContract.KindsPath) ?? [];
+        }
+        catch (Exception)
+        {
+            kinds = [];
+        }
+    }
+
+    private async Task SettingsAsync()
+    {
+        try
+        {
+            settings = await Http.GetFromJsonAsync<NotificationSettings>(NotificationsContract.SettingsPath) ?? new NotificationSettings();
+        }
+        catch (Exception)
+        {
+            settings = new NotificationSettings();
+        }
+
+        settings.Kinds ??= [];
+        settings.Quiet ??= new NotificationQuiet();
+        settings.Quiet.Spans ??= [];
+
+        foreach (var span in settings.Quiet.Spans)
+            span.Days ??= [];
+
+        if (settings.KeepDays == null)
+            keepChoice = "forever";
+        else if (settings.KeepDays == NotificationsContract.DefaultKeepDays)
+            keepChoice = "default";
+        else
+        {
+            keepChoice = "days";
+            keepDays = settings.KeepDays.Value;
+        }
+    }
+
+    private async Task OfferAsync()
+    {
+        try
+        {
+            offer = await Http.GetFromJsonAsync<NotificationOffer>(NotificationsContract.OfferPath);
+        }
+        catch (Exception)
+        {
+            //Not offered, then: an instance that cannot say whether it mails is not trusted to.
+            offer = new NotificationOffer();
+        }
+    }
+
+    ///<summary>The offer, then, when the instance pushes and this app can, what this browser can do and the person's browsers.</summary>
+    private async Task OfferAndBrowsersAsync()
+    {
+        await OfferAsync();
+
+        if (BrowserOffered && Push != null)
+            await BrowsersAsync();
+    }
+
+    private async Task BrowsersAsync()
+    {
+        try
+        {
+            pushState = await Push.StateAsync();
+        }
+        catch (Exception)
+        {
+            //A browser that cannot say what it can do cannot do it.
+            pushState = new NotificationPushState();
+        }
+
+        try
+        {
+            browsers = await Http.GetFromJsonAsync<List<NotificationBrowserShown>>(NotificationsContract.PushBrowsersPath) ?? [];
+        }
+        catch (Exception)
+        {
+            browsers = [];
+        }
+    }
+
+    private void BrowserChanged(string id, ChangeEventArgs e)
+    {
+        if (!settings.Kinds.TryGetValue(id, out var ways))
+        {
+            ways = new NotificationWays();
+            settings.Kinds[id] = ways;
+        }
+
+        ways.Browser = e.Value is true;
+    }
+
+    ///<summary>Asks this browser's permission, which is the only time it is asked (criterion 14), and hands the host its subscription.</summary>
+    private async Task TurnOnAsync()
+    {
+        pushBusy = true;
+        pushError = null;
+        pushNotice = null;
+
+        try
+        {
+            var key = await Http.GetFromJsonAsync<NotificationPushKey>(NotificationsContract.PushKeyPath);
+            var turned = await Push.TurnOnAsync(key?.Key ?? "");
+
+            if (turned?.Subscription == null)
+                pushError = Refused(turned?.Error);
+            else
+            {
+                var answer = await (await Http.PostAsJsonAsync(NotificationsContract.PushSubscriptionPath, turned.Subscription)).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+                if (answer?.Ok == true)
+                    pushNotice = "On in this browser. Choose above which kinds your browsers show, and save.";
+                else
+                    pushError = answer?.Error ?? "This browser could not be turned on.";
+            }
+        }
+        catch (Exception ex)
+        {
+            pushError = "This browser could not be turned on: " + ex.Message;
+        }
+
+        await BrowsersAsync();
+        pushBusy = false;
+    }
+
+    private async Task TurnOffAsync()
+    {
+        pushBusy = true;
+        pushError = null;
+        pushNotice = null;
+
+        try
+        {
+            var endpoint = await Push.TurnOffAsync();
+
+            using var request = new HttpRequestMessage(HttpMethod.Delete, NotificationsContract.PushSubscriptionPath)
+            {
+                Content = JsonContent.Create(new NotificationPushSubscription { Endpoint = endpoint ?? "" })
+            };
+
+            await Http.SendAsync(request);
+            pushNotice = "Off in this browser.";
+        }
+        catch (Exception ex)
+        {
+            pushError = "This browser could not be turned off: " + ex.Message;
+        }
+
+        await BrowsersAsync();
+        pushBusy = false;
+    }
+
+    private async Task TestPushAsync()
+    {
+        pushBusy = true;
+        pushError = null;
+        pushNotice = null;
+
+        try
+        {
+            var answer = await (await Http.PostAsync(NotificationsContract.PushTestPath, null)).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+            if (answer?.Ok == true)
+                pushNotice = "Sent. It shows in a moment, the way your notifications will.";
+            else
+                pushError = answer?.Error ?? "The test could not be sent.";
+        }
+        catch (Exception ex)
+        {
+            pushError = "The test could not be sent: " + ex.Message;
+        }
+
+        pushBusy = false;
+    }
+
+    private async Task ForgetBrowserAsync(NotificationBrowserShown other)
+    {
+        pushBusy = true;
+        pushError = null;
+        pushNotice = null;
+
+        try
+        {
+            var answer = await (await Http.DeleteAsync($"{NotificationsContract.PushBrowsersPath}/{other.Id}")).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+            if (answer?.Ok == true)
+                pushNotice = $"Off in {other.Label}.";
+            else
+                pushError = answer?.Error ?? "That browser could not be turned off.";
+        }
+        catch (Exception ex)
+        {
+            pushError = "That browser could not be turned off: " + ex.Message;
+        }
+
+        await BrowsersAsync();
+        pushBusy = false;
+    }
+
+    ///<summary>Why turning on found no subscription, in the person's words rather than the browser's.</summary>
+    private static string Refused(string error)
+    {
+        if (error == "denied")
+            return "This browser was told not to show this site's notifications. Allow them in its site settings, then turn them on here.";
+        else if (error == "default")
+            return "The browser's question was closed without an answer. Turn them on again to be asked again.";
+
+        return $"This browser could not subscribe: {error ?? "it did not say why."}";
+    }
+
+
+    private NotificationWays Way(string id)
+    {
+        if (settings?.Kinds != null && settings.Kinds.TryGetValue(id, out var ways))
+            return ways;
+
+        return new NotificationWays();
+    }
+
+    private void MailChanged(string id, ChangeEventArgs e)
+    {
+        if (!settings.Kinds.TryGetValue(id, out var ways))
+        {
+            ways = new NotificationWays();
+            settings.Kinds[id] = ways;
+        }
+
+        ways.Mail = e.Value is true;
+    }
+
+    private void DayChanged(NotificationQuietSpan span, int day, ChangeEventArgs e)
+    {
+        span.Days.Remove(day);
+
+        if (e.Value is true)
+            span.Days.Add(day);
+
+        span.Days.Sort();
+    }
+
+    ///<summary>A time box's value as the settings keep it, <c>HH:mm</c>; what it had before when the box was cleared or sent something else.</summary>
+    private static string Clock(ChangeEventArgs e, string before)
+    {
+        if (TimeOnly.TryParse(e.Value?.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var time))
+            return time.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
+        return before;
+    }
+
+    ///<summary>A new quiet time: every night, from ten in the evening to seven in the morning.</summary>
+    private void AddQuiet()
+    {
+        settings.Quiet.Spans.Add(new NotificationQuietSpan { Days = [0, 1, 2, 3, 4, 5, 6], From = "22:00", To = "07:00" });
+    }
+
+    private void KeepDaysChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var days))
+            keepDays = days;
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        busy = true;
+        notice = null;
+        error = null;
+
+        if (keepChoice == "forever")
+            settings.KeepDays = null;
+        else if (keepChoice == "days")
+            settings.KeepDays = keepDays;
+        else
+            settings.KeepDays = NotificationsContract.DefaultKeepDays;
+
+        //A quiet time is the person's evening wherever they are: its hours are in the zone of the browser that saved them.
+        settings.Quiet.Zone = BrowserZone;
+
+        try
+        {
+            var answer = await (await Http.PutAsJsonAsync(NotificationsContract.SettingsPath, settings)).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+            if (answer?.Ok == true)
+                notice = "Saved.";
+            else
+                error = answer?.Error ?? "The settings could not be saved.";
+        }
+        catch (Exception ex)
+        {
+            error = "The settings could not be saved: " + ex.Message;
+        }
+
+        busy = false;
+    }
+
+    private async Task KindChangedAsync(ChangeEventArgs e)
+    {
+        kind = e.Value?.ToString() ?? "";
+        await LoadAsync();
+    }
+
+    private async Task UnreadChangedAsync(ChangeEventArgs e)
+    {
+        onlyUnread = e.Value is true;
+        await LoadAsync();
+    }
+
+    private async Task OpenAsync(NotificationShown one)
+    {
+        await ReadAsync(one);
+
+        if (!string.IsNullOrEmpty(one.Link))
+            Navigation.NavigateTo(one.Link);
+    }
+
+    private async Task ReadAsync(NotificationShown one)
+    {
+        if (one.ReadAt != null)
+            return;
+
+        try
+        {
+            var answer = await (await Http.PostAsync($"{NotificationsContract.BasePath}/{one.Id}/read", null)).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+            if (answer?.Ok == true)
+            {
+                one.ReadAt = DateTimeOffset.Now;
+                Counted(answer.Unread);
+            }
+        }
+        catch (Exception ex)
+        {
+            error = "It could not be marked read: " + ex.Message;
+        }
+    }
+
+    private async Task ReadAllAsync()
+    {
+        busy = true;
+
+        try
+        {
+            var answer = await NotificationRequests.ReadAllAsync(Http);
+
+            if (answer != null)
+                Counted(answer.Unread);
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            error = "They could not be marked read: " + ex.Message;
+        }
+
+        busy = false;
+    }
+
+    private async Task DeleteAsync(NotificationShown one)
+    {
+        try
+        {
+            var answer = await (await Http.DeleteAsync($"{NotificationsContract.BasePath}/{one.Id}")).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+            if (answer?.Ok == true)
+            {
+                items.Remove(one);
+                Counted(answer.Unread);
+            }
+            else
+                error = answer?.Error ?? "It could not be deleted.";
+        }
+        catch (Exception ex)
+        {
+            error = "It could not be deleted: " + ex.Message;
+        }
+    }
+
+    private async Task DeleteAllAsync()
+    {
+        busy = true;
+        confirmingDelete = false;
+
+        try
+        {
+            var answer = await (await Http.DeleteAsync(NotificationsContract.BasePath)).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+            if (answer?.Ok == true)
+            {
+                notice = $"{answer.Count} deleted.";
+                Counted(0);
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            error = "They could not be deleted: " + ex.Message;
+        }
+
+        busy = false;
+    }
+
+    private void Counted(int count)
+    {
+        unread = count;
+        Feed?.Counted(count);
+    }
+
+    public void Dispose()
+    {
+        if (Feed != null)
+            Feed.Changed -= OnFeedChanged;
+    }
+}

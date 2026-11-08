@@ -6,9 +6,12 @@ namespace GraphDBViewerWeb.Code;
 
 ///<summary>
 ///The install flow's IO half (plugin-system task 14), driven by the Plugins page: fetch a manifest by
-///URL, refuse or prove it, and save the rewritten list. Install is by URL — there is no catalog and
-///no marketplace, deliberately. Everything here answers with an error string for the page to show
-///rather than throwing, because every failure is an administrator standing there wanting to know why.
+///URL, refuse or prove it, and hand the host the one change to make to the list (since 2026-09-23; the
+///page used to save its whole copy). Install is by URL, from the plugin store's index, or from a zip.
+///Everything here answers with an error string for the page to show rather than throwing, because every
+///failure is an administrator standing there wanting to know why. A plugin whose manifest or code would
+///come over plain http with no sha256 to check it by is installed all the same, once whoever installs it
+///has been told so (<see cref="PlainWarning(string, string, string, string)"/>, 2026-10-04).
 ///</summary>
 public sealed class PluginInstaller
 {
@@ -70,11 +73,18 @@ public sealed class PluginInstaller
     ///store reshapes it — an origin distinguishes nothing when every release is on github.com), and its
     ///source is remembered so the page knows which records the store may update.
     ///</param>
+    ///<param name="goOnOverPlainHttp">
+    ///Asked, with <see cref="PlainWarning(string, string, string, string)"/>'s sentence, before code that would come over
+    ///plain http with nothing to check it by is fetched, since proving it runs it (2026-10-04); false installs nothing,
+    ///and answers <see cref="PlainDeclined"/>. The page asks the person, unless it said the same before they pressed the
+    ///button. Null goes on without asking.
+    ///</param>
     public async Task<(InstalledPluginRecord Record, string Error)> FetchAndProveAsync(
         string manifestUrl,
         IReadOnlyCollection<string> takenIds,
         string expectedHash = null,
-        StoreEntry entry = null)
+        StoreEntry entry = null,
+        Func<string, Task<bool>> goOnOverPlainHttp = null)
     {
         if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out var source) || (source.Scheme != "https" && source.Scheme != "http"))
             return (null, "That is not an absolute http(s) URL. Point it at the plugin's manifest.json.");
@@ -109,13 +119,17 @@ public sealed class PluginInstaller
             return (null, ex.Message);
         }
 
+        //Before the code is fetched, since proving it runs it.
+        if (!PluginManifest.RunsHere(manifest.HostApiVersion))
+            return (null, PluginManifest.HostApiRefusal(manifest));
+
         //Before "taken", so a bundled id pasted from a URL gets the reason that matters: the prefix is
         //reserved, not merely occupied.
         if (PluginIds.IsReserved(manifest.Id))
             return (null, PluginIds.ReservedRefusal(manifest.Id));
 
         if (takenIds.Contains(manifest.Id))
-            return (null, $@"""{manifest.Id}"" is already here. Uninstall it first — installing over a plugin is not yet a thing.");
+            return (null, PluginIds.AlreadyHereRefusal(manifest.Id));
 
         string assemblyUrl;
         byte[] bytes;
@@ -126,12 +140,26 @@ public sealed class PluginInstaller
 
             //The entry's file, beside the manifest — a plugin is a folder with a manifest in it.
             assemblyUrl = new Uri(source, assemblyFile).ToString();
-
-            bytes = await _http.GetByteArrayAsync(assemblyUrl);
         }
         catch (PluginLoadException ex)
         {
             return (null, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            return (null, $"The assembly could not be fetched: {ex.Message}");
+        }
+
+        //Before the code is fetched, since proving it runs it: whoever installs is told first when it would come over
+        //plain http with nothing to check it by (2026-10-04).
+        var plain = PlainWarning(source.ToString(), assemblyUrl, expectedHash, entry?.Source);
+
+        if (plain != null && goOnOverPlainHttp != null && !await goOnOverPlainHttp(plain))
+            return (null, PlainDeclined);
+
+        try
+        {
+            bytes = await _http.GetByteArrayAsync(assemblyUrl);
         }
         catch (Exception ex)
         {
@@ -153,6 +181,13 @@ public sealed class PluginInstaller
         if (refusal != null)
             return (null, refusal);
 
+        //The store's hash these bytes were just checked against, kept so the host can tell whether code that came over
+        //plain http was checked by anything.
+        string checkedAgainst = null;
+
+        if (!string.IsNullOrWhiteSpace(expectedHash))
+            checkedAgainst = hash;
+
         return (new InstalledPluginRecord
         {
             Manifest = manifest,
@@ -162,7 +197,8 @@ public sealed class PluginInstaller
             Enabled = true,
             InstalledUtc = DateTimeOffset.UtcNow,
             Repository = entry?.Repository,
-            StoreSource = entry?.Source
+            StoreSource = entry?.Source,
+            Sha256 = checkedAgainst
         }, null);
     }
 
@@ -184,18 +220,19 @@ public sealed class PluginInstaller
         string manifestUrl,
         IReadOnlyCollection<string> takenIds,
         string expectedHash = null,
-        StoreEntry entry = null)
+        StoreEntry entry = null,
+        Func<string, Task<bool>> goOnOverPlainHttp = null)
     {
         if (installed?.Manifest?.Id == null)
             return (null, "There is nothing here to update.");
 
-        var (record, error) = await FetchAndProveAsync(manifestUrl, takenIds, expectedHash, entry);
+        var (record, error) = await FetchAndProveAsync(manifestUrl, takenIds, expectedHash, entry, goOnOverPlainHttp);
 
         if (error != null)
             return (null, error);
 
-        //An update that arrived under a different id is not an update. Nothing downstream would catch
-        //it: the page swaps by position, and the record would take the old id's settings and grants.
+        //An update that arrived under a different id is not an update. The host refuses it too, but this
+        //is where a person sees why.
         if (!string.Equals(record.Manifest.Id, installed.Manifest.Id, StringComparison.Ordinal))
             return (null, $@"That manifest is ""{record.Manifest.Id}"", not ""{installed.Manifest.Id}"". An update has to be the same plugin.");
 
@@ -229,7 +266,7 @@ public sealed class PluginInstaller
     public (InstalledPluginRecord Record, byte[] Assembly, string Error) OpenAndProve(string fileName, byte[] zip, IReadOnlyCollection<string> takenIds)
     {
         if (zip != null && zip.LongLength > PluginUploads.MaxBytes)
-            return (null, null, $"That file is {Megabytes(zip.LongLength)}, past the {Megabytes(PluginUploads.MaxBytes)} a plugin package may be.");
+            return (null, null, $"That file is {ByteSizes.Human(zip.LongLength)}, past the {ByteSizes.Human(PluginUploads.MaxBytes)} a plugin package may be.");
 
         var (package, error) = PluginPackage.Read(zip);
 
@@ -242,7 +279,7 @@ public sealed class PluginInstaller
             return (null, null, PluginIds.ReservedRefusal(package.Manifest.Id));
 
         if (takenIds.Contains(package.Manifest.Id))
-            return (null, null, $@"""{package.Manifest.Id}"" is already here. Uninstall it first — installing over a plugin is not yet a thing.");
+            return (null, null, PluginIds.AlreadyHereRefusal(package.Manifest.Id));
 
         var refusal = DotNetAssemblyLoader.Prove(package.Assembly, package.Manifest);
 
@@ -277,7 +314,7 @@ public sealed class PluginInstaller
             return "There is no assembly to keep — nothing was uploaded.";
 
         if (assembly.LongLength > PluginUploads.MaxBytes)
-            return $"That assembly is {Megabytes(assembly.LongLength)}, past the {Megabytes(PluginUploads.MaxBytes)} an upload may be.";
+            return $"That assembly is {ByteSizes.Human(assembly.LongLength)}, past the {ByteSizes.Human(PluginUploads.MaxBytes)} an upload may be.";
 
         UploadedPlugin kept;
 
@@ -323,9 +360,82 @@ public sealed class PluginInstaller
         return name;
     }
 
-    private static string Megabytes(long bytes)
+    //── Over plain http ────────────────────────────────────────────────────────────────────────
+
+    ///<summary>What an install answers when the person chose not to go on over plain http: a notice rather than an error.</summary>
+    public const string PlainDeclined = "Nothing was installed, and its code was not fetched.";
+
+    ///<summary>
+    ///What whoever installs is told before the install is made, when the plugin's manifest or code would come over plain
+    ///http with no sha256 to check the code by; null when nothing would (decided with the user on 2026-10-04). It is said
+    ///and never refused, since plain stays a choice: under the address in the install form, on a store card, before the
+    ///code is fetched when only the manifest names it, and in the host's log once it is installed (the host's
+    ///PluginInstallsApi).
+    ///
+    ///<strong>Over http, anyone on the network between can hand this instance other code</strong>, which it would install
+    ///and run as this plugin: an install by URL is checked against no hash. A store entry's sha256 checks the code, but
+    ///only one from an index that came over https; from an index over http, whoever could change the code could change
+    ///the hash beside it, and the manifest's address too.
+    ///</summary>
+    ///<param name="manifest">The manifest's address: the one typed, or a store version's.</param>
+    ///<param name="assembly">The code's address once the manifest has named it, or null before.</param>
+    ///<param name="sha256">The sha256 a store version gives for the code, or null.</param>
+    ///<param name="index">The store index the version is in, or null for an install by URL.</param>
+    public static string PlainWarning(string manifest, string assembly, string sha256, string index)
     {
-        return $"{bytes / 1024d / 1024d:0.#} MB";
+        if (IsPlain(index))
+            return $"This plugin's store index, {index}, comes over plain http, so the sha256 it gives checks nothing: anyone on the network between here and there could change the code and its hash together, and this instance would install their code as this plugin. An https address for the index takes that away.";
+
+        if (!string.IsNullOrWhiteSpace(sha256))
+            return null;
+
+        if (IsPlain(manifest) || IsPlain(assembly))
+            return "This plugin comes over plain http with no sha256 to check its code by: anyone on the network between here and its server could hand this instance code of their own, and it would be installed as this plugin. An https address takes that away, as does a store entry that gives its code's sha256.";
+
+        return null;
+    }
+
+    ///<summary>
+    ///The same, of an installed record, which is how the host reads it: the store's sha256 counts only when it is the
+    ///hash of the code the record pins.
+    ///</summary>
+    public static string PlainWarning(InstalledPluginRecord record)
+    {
+        if (record == null)
+            return null;
+
+        var sha256 = record.Sha256;
+
+        if (!string.Equals((sha256 ?? "").Trim(), record.Hash, StringComparison.OrdinalIgnoreCase))
+            sha256 = null;
+
+        return PlainWarning(record.Source, record.AssemblyUrl, sha256, record.StoreSource);
+    }
+
+    ///<summary>
+    ///Where a manifest's code is fetched from: its entry's file resolved against the manifest's own address, which may
+    ///name another server altogether. Null when the entry is not one.
+    ///</summary>
+    public static string AssemblyUrlOf(string manifestUrl, PluginManifest manifest)
+    {
+        if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out var source) || manifest == null)
+            return null;
+
+        try
+        {
+            var (assemblyFile, _) = DotNetAssemblyLoader.ParseEntry(manifest.Entry);
+
+            return new Uri(source, assemblyFile).ToString();
+        }
+        catch (Exception ex) when (ex is PluginLoadException || ex is UriFormatException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsPlain(string address)
+    {
+        return Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp;
     }
 
     ///<summary>Why these bytes are not the reviewed ones, or null. Both hashes, because one is not something anybody can act on.</summary>
@@ -342,24 +452,98 @@ public sealed class PluginInstaller
         return $"The assembly is not the one the registry reviewed. The entry says {wanted}; what was fetched hashes to {actual}. Nothing was installed.";
     }
 
-    ///<summary>Writes the whole list back — install, uninstall, enable and disable are all this one
-    ///PUT, gated server-side on the install permission. Null on success, else the reason.</summary>
-    public async Task<string> SaveAsync(IReadOnlyList<InstalledPluginRecord> records)
+    //── Changing the list ─────────────────────────────────────────────────────────────────────
+
+    //Each of these is one change, made by the host to the list as it stands and answered with the list
+    //as it now is, other administrators' changes included; that is what the page shows next. The page
+    //used to write its whole copy back, and of two administrators the later undid the earlier
+    //(PluginInstallsContract).
+
+    ///<summary>
+    ///Installs a proved record. The host refuses it if the id got there first, and writes the identity
+    ///marker with it when asked.
+    ///</summary>
+    public Task<(IReadOnlyList<InstalledPluginRecord> Records, string Error)> InstallAsync(InstalledPluginRecord record, bool recordIdentity)
+    {
+        return ChangeAsync(HttpMethod.Post, PluginInstallsContract.InstalledPath, new PluginInstallChange { Record = record, RecordIdentity = recordIdentity });
+    }
+
+    ///<summary>
+    ///Puts a proved newer version where the old one stands. What the id owns (enabled, the install date)
+    ///is carried over by the host from the record as it is now, not from the page's copy.
+    ///</summary>
+    public Task<(IReadOnlyList<InstalledPluginRecord> Records, string Error)> UpdateAsync(InstalledPluginRecord record, bool recordIdentity)
+    {
+        return ChangeAsync(HttpMethod.Put, PluginInstallsContract.InstalledPathFor(record.Manifest.Id), new PluginInstallChange { Record = record, RecordIdentity = recordIdentity });
+    }
+
+    ///<summary>The state it should be in, not a flip: two administrators disabling it at once both get a disabled plugin.</summary>
+    public Task<(IReadOnlyList<InstalledPluginRecord> Records, string Error)> SetEnabledAsync(string id, bool enabled)
+    {
+        return ChangeAsync(HttpMethod.Post, PluginInstallsContract.EnabledPathFor(id), new PluginEnabledChange { Enabled = enabled });
+    }
+
+    ///<summary>Out of the list. Already gone answers the list too, so the cleanup after it runs either way.</summary>
+    public Task<(IReadOnlyList<InstalledPluginRecord> Records, string Error)> UninstallAsync(string id)
+    {
+        return ChangeAsync(HttpMethod.Delete, PluginInstallsContract.UninstallPathFor(id), null);
+    }
+
+    ///<summary>A bundled plugin removed or restored, answered with the ids removed as they now stand.</summary>
+    public async Task<(IReadOnlyList<string> Disabled, string Error)> SetBundledDisabledAsync(string id, bool disabled)
+    {
+        var (answer, error) = await SendAsync(HttpMethod.Post, PluginInstallsContract.BundledPathFor(id), new BundledPluginChange { Disabled = disabled });
+
+        if (error != null)
+            return (null, error);
+
+        try
+        {
+            return (System.Text.Json.JsonSerializer.Deserialize<string[]>(answer) ?? [], null);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return (null, "The server answered something other than the plugins it has removed.");
+        }
+    }
+
+    private async Task<(IReadOnlyList<InstalledPluginRecord> Records, string Error)> ChangeAsync(HttpMethod method, string path, object change)
+    {
+        var (answer, error) = await SendAsync(method, path, change);
+
+        if (error != null)
+            return (null, error);
+
+        return (InstalledPlugins.Parse(answer), null);
+    }
+
+    ///<summary>
+    ///The body goes as <see cref="System.Text.Json.JsonSerializer"/> writes it by default, which is how the
+    ///host reads it. A refusal comes back as the host's own sentence, which is what the page shows.
+    ///</summary>
+    private async Task<(string Answer, string Error)> SendAsync(HttpMethod method, string path, object change)
     {
         try
         {
-            var response = await _http.PutAsync(
-                InstanceStateContract.PathFor(InstanceStateContract.InstalledPluginsKey),
-                new StringContent(InstalledPlugins.Serialize(records), Encoding.UTF8, InstanceStateContract.ContentType));
+            using var request = new HttpRequestMessage(method, path);
 
-            if (!response.IsSuccessStatusCode)
-                return $"The server refused the save ({(int)response.StatusCode}).";
+            if (change != null)
+                request.Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(change, change.GetType()), Encoding.UTF8, "application/json");
 
-            return null;
+            var response = await _http.SendAsync(request);
+            var text = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+                return (text, null);
+
+            if (response.Content.Headers.ContentType?.MediaType == "text/plain" && !string.IsNullOrWhiteSpace(text))
+                return (null, text.Trim());
+
+            return (null, $"The server refused the change ({(int)response.StatusCode}).");
         }
         catch (Exception ex)
         {
-            return $"The save did not reach the server: {ex.Message}";
+            return (null, $"The change did not reach the server: {ex.Message}");
         }
     }
 }

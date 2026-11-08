@@ -34,7 +34,7 @@ public partial class Home
     private CancellationTokenSource textSaveCts;
 
     //Mirrors Monaco edits into the active tab immediately (so Run/tab-switch always see the latest text),
-    //but persists the editor text only after a short pause — writing localStorage on every keystroke
+    //but persists the editor text only after a short pause — writing the store on every keystroke
     //(two interop round-trips + serializing every tab's text) made typing feel sluggish.
     private void OnQueryTextChanged(string text)
     {
@@ -78,16 +78,18 @@ public partial class Home
             await SaveQueryAsync();
     }
 
-    private async Task LoadQueryAsync()
+    //A connect's tab in front, given the last query when it carries none; the connect's own connection's, which may have
+    //gone behind by the time it answers.
+    private async Task LoadQueryAsync(QueryTab tab)
     {
-        //Don't clobber a query the active tab already carries (e.g. restored from a saved tab).
-        if (!string.IsNullOrEmpty(queryText))
+        //Don't clobber a query the tab already carries (e.g. restored from a saved tab).
+        if (!string.IsNullOrEmpty(tab.QueryText))
             return;
 
         var saved = await Workspace.LoadLastQueryAsync();
 
         if (!string.IsNullOrEmpty(saved))
-            queryText = saved;
+            tab.QueryText = saved;
     }
 
     #endregion
@@ -95,10 +97,32 @@ public partial class Home
 
     #region Tabs
 
-    //Restores all open query tabs from the previous session. Returns true when something was
-    //restored. Closed tabs were dropped on close.
+    //Restores the open connections and their query tabs from the previous session (the multiple-connections spec, task 3),
+    //each disconnected, its form filled again from the saved connection it was picked from, password and all, or, with that
+    //saved connection deleted meanwhile, unsaved under its old name as the one typed (SelectConnection); or, from a browser
+    //that kept one list of tabs before there were several, those tabs as the one connection's. Returns true when something
+    //was restored. Closed tabs were dropped on close.
     private async Task<bool> LoadTabsAsync()
     {
+        var open = await Workspace.LoadConnectionsAsync();
+
+        if (open != null)
+        {
+            openConnections = open.Connections;
+
+            for (int i = 0; i < openConnections.Count; i++)
+            {
+                activeConnectionIndex = i;
+
+                if (!string.IsNullOrEmpty(selectedConnectionKey))
+                    SelectConnection(selectedConnectionKey);
+            }
+
+            activeConnectionIndex = open.Active;
+
+            return true;
+        }
+
         var restored = await Workspace.LoadTabsAsync();
 
         if (restored == null)
@@ -110,14 +134,15 @@ public partial class Home
         return true;
     }
 
+    //The editor text of every tab of every connection, so a tab behind keeps what was typed in it.
     private async Task PersistTabTextAsync()
     {
-        await Workspace.SaveTabTextAsync(tabs);
+        await Workspace.SaveTabTextAsync(openConnections.SelectMany(c => c.Tabs));
     }
 
     private async Task SaveTabsAsync()
     {
-        await Workspace.SaveTabsAsync(tabs);
+        await Workspace.SaveConnectionsAsync(openConnections, activeConnectionIndex);
     }
 
     #endregion

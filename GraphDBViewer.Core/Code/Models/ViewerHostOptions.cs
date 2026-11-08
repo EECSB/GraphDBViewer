@@ -6,8 +6,8 @@ namespace GraphDBViewerWeb.Code;
 ///The viewer is one codebase serving two very different deployments — a static build with no server
 ///behind it, and a full-stack one — and a handful of its decisions depend on which it is running in.
 ///Rather than let those leak in as build flags or #if, each host registers one of these and the viewer
-///reads it: the name it wears, whether a server route exists at all, and whether there is a showcase
-///page to offer.
+///reads it: the name it wears, whether a server route exists at all, whether there is a showcase page
+///to offer, and where it keeps the keys people give the AI models.
 ///
 ///Deliberately a plain registered instance rather than IOptions: there is no configuration binding,
 ///no reloading and no named variants here — a host states these once at startup and they never change.
@@ -19,6 +19,18 @@ public sealed class ViewerHostOptions
     ///neutral one, so a host that forgets to register anything still reads sensibly.
     ///</summary>
     public string AppName { get; set; } = "Graph DB Viewer";
+
+    ///<summary>
+    ///The mark drawn before the title in the top bar, a path under the host's wwwroot. The default is the
+    ///favicon every host has; one with a logo of its own drawn apart from its favicon names it (2026-10-24).
+    ///</summary>
+    public string LogoPath { get; set; } = "favicon.svg";
+
+    ///<summary>
+    ///The mark drawn instead of <see cref="LogoPath"/> on the dark theme, or null to keep the one mark on every
+    ///theme. Treeality's has brighter colors, which hold up on a dark bar (2026-10-25).
+    ///</summary>
+    public string? DarkLogoPath { get; set; }
 
     ///<summary>
     ///A small label under the title naming which build this is -- "Web edition" on the static one -- or
@@ -55,6 +67,41 @@ public sealed class ViewerHostOptions
     ///trace of a plugin system it does not have.
     ///</summary>
     public bool HasPlugins { get; set; }
+
+    ///<summary>
+    ///Whether the viewer offers its Share button, the dialog that writes a link to it and the code that embeds it in
+    ///another site's page. On unless a host says otherwise, as the standalone viewer does not; Treeality turns it off
+    ///(the user, 2026-10-31: Share is the standalone app's).
+    ///</summary>
+    public bool OffersShare { get; set; } = true;
+
+    ///<summary>
+    ///The theme someone who has chosen none starts with, one of <see cref="ShellState"/>'s: Dark green unless a host says
+    ///otherwise, as the standalone viewer does, Light blue 1 (the user, 2026-11-02). A theme once chosen is kept.
+    ///</summary>
+    public string DefaultTheme { get; set; } = ShellState.ThemeDark;
+
+    ///<summary>
+    ///Where the host serves its user documentation, which the settings menu links before About, or null when it serves
+    ///none. Treeality serves its wiki at /wiki on every instance (2026-10-30); the standalone viewer has no wiki.
+    ///</summary>
+    public string? WikiUrl { get; set; }
+
+    ///<summary>
+    ///Where this host keeps the AI models people add, keys and all, in its own words: what the AI settings
+    ///say under the models, and what the About box says after "You supply the key." The viewer cannot know
+    ///it, since where a workspace lives is the storage the host composes. Null for a host that keeps them in
+    ///the browser alone, as the web-only edition does, and then both say the browser, as they always have.
+    ///Treeality keeps them in each person's workspace on its server, and says so.
+    ///</summary>
+    public string WhereAiKeysAreKept { get; set; }
+
+    ///<summary>
+    ///Where this host keeps Ask AI's chats, in its own words after "Kept" at the foot of the window's chats list
+    ///(2026-11-02): they are kept where the models are, in the storage the host composes. Null for a host that keeps them in
+    ///the browser, as the web-only edition does, and then the list says this browser. Treeality keeps them with the account.
+    ///</summary>
+    public string WhereAiChatsAreKept { get; set; }
 
     ///<summary>
     ///Where to look for a developer's local credentials file, or null to not look at all. Only a

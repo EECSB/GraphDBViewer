@@ -8,16 +8,20 @@ const { test, expect } = require('@playwright/test');
 const { gotoApp, loadSampleGraph, switchTo3d, SAMPLE_NODE_COUNT, collectConsoleErrors } = require('./helpers');
 
 //The workspace is written to IndexedDB after the render settles; reloading before that would restore
-//nothing and prove the wrong thing. Waits until the persisted tab snapshot actually exists.
+//nothing and prove the wrong thing. Waits until the persisted connections and their tabs actually exist (one
+//list of tabs until the viewer had several connections, 2026-11-03).
 async function waitForPersistedWorkspace(page) {
     await expect.poll(async () => {
         return await page.evaluate(async () => {
             if (!window.gdbvIdb || !window.gdbvIdb.get)
                 return 0;
 
-            const raw = await window.gdbvIdb.get('graphdbviewer:tabs');
+            const raw = await window.gdbvIdb.get('graphdbviewer:openConnections');
 
-            return raw ? String(raw).length : 0;
+            if (raw)
+                return String(raw).length;
+            else
+                return 0;
         });
     }, { timeout: 20000 }).toBeGreaterThan(0);
 }
@@ -33,8 +37,10 @@ test('restores a 2D graph on reload — canvas renders, no container error', asy
     await page.reload();
     await expect(page.locator('#cyGraph canvas').first()).toBeVisible({ timeout: 60000 });
 
-    //Disconnected — the restore path, not a live query, is what draws.
-    await expect(page.getByRole('button', { name: /Disconnected/ })).toBeVisible();
+    //Not connected: the restore path, not a live query, is what draws. Drawing offline as it was before the reload, since
+    //each connection keeps its offline flag (the multiple-connections spec, 2026-11-03).
+    await expect(page.getByTestId('viewer-connection').first()).toContainText('Offline mode');
+    await expect(page.locator('[data-testid="viewer-connection"] .bi-plug-fill')).toHaveCount(0);
     expect(errors, errors.join('\n')).toEqual([]);
 });
 

@@ -64,7 +64,7 @@ public sealed class InstalledPlugins
         }
     }
 
-    ///<summary>Serializes the list the way <see cref="Parse"/> reads it — what the install flow PUTs.</summary>
+    ///<summary>Serializes the list the way <see cref="Parse"/> reads it: what the host stores, and answers every change to the list with.</summary>
     public static string Serialize(IReadOnlyList<InstalledPluginRecord> records)
     {
         return JsonSerializer.Serialize(records);
@@ -73,7 +73,8 @@ public sealed class InstalledPlugins
     ///<summary>
     ///Which bundled plugins an administrator removed — read at boot the way the installed list is,
     ///with the same manners: every failure answers "none disabled", and the fetch is best-effort
-    ///because a bundled plugin wrongly present beats a boot that broke.
+    ///because a bundled plugin wrongly present beats a boot that broke. What it answers is read by
+    ///<see cref="ParseDisabledBundled"/>, as the host reads it.
     ///</summary>
     public static async Task<IReadOnlyList<string>> DisabledBundledAsync(HttpClient http)
     {
@@ -89,9 +90,7 @@ public sealed class InstalledPlugins
             if (!response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.NoContent)
                 return [];
 
-            var ids = JsonSerializer.Deserialize<string[]>(await response.Content.ReadAsStringAsync(cts.Token));
-
-            return ids ?? [];
+            return ParseDisabledBundled(await response.Content.ReadAsStringAsync(cts.Token));
         }
         catch
         {
@@ -100,11 +99,38 @@ public sealed class InstalledPlugins
     }
 
     ///<summary>
-    ///The stored value is a JSON array of <see cref="InstalledPluginRecord"/>. Each record's manifest
-    ///is re-checked against the manifest rules on the way in — the namespace refusal included — so a
-    ///value edited behind the API's back gets no further than a refused install would have. Public
-    ///because the server reads the same value through its own store — the role editor listing a
-    ///plugin's declared permissions, the settings writes resolving their gate.
+    ///The removed bundled ids in the stored value, a JSON array of strings, blanks and repeats left out.
+    ///<strong>Anything else reads as none removed</strong>, deliberately: the set is written by the host,
+    ///and a garbled one is a fault in the host, so the safe reading is the one that leaves a working
+    ///plugin working rather than silently retiring every bundled plugin at once.
+    ///
+    ///The boot (<see cref="DisabledBundledAsync"/>), the server asking whether a bundled plugin is gone,
+    ///and the host changing the set all read it here. Until 2026-09-26 each of the three parsed it
+    ///itself (the 2026-09-24 audit), and the server's parse had once been written five times, one copy
+    ///for each perspective.
+    ///</summary>
+    public static IReadOnlyList<string> ParseDisabledBundled(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return [];
+
+        try
+        {
+            return (JsonSerializer.Deserialize<string[]>(json) ?? []).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    ///<summary>
+    ///The stored value is a JSON array of <see cref="InstalledPluginRecord"/>. Each record is checked on
+    ///the way in by <see cref="Refusal"/>, the check the host makes before it stores one — the manifest's
+    ///rules, the namespace refusal and the reserved prefix among them — so a value edited behind the
+    ///host's back gets no further than a refused install would have. Public because the server reads the
+    ///same value through its own store — its changes to the list, the role editor listing a plugin's
+    ///declared permissions, the settings writes resolving their gate.
     ///</summary>
     public static IReadOnlyList<InstalledPluginRecord> Parse(string json)
     {
@@ -132,28 +158,63 @@ public sealed class InstalledPlugins
 
         foreach (var element in document.RootElement.EnumerateArray())
         {
+            InstalledPluginRecord record;
+
             try
             {
-                var record = element.Deserialize<InstalledPluginRecord>();
-
-                if (record == null || record.Manifest == null || string.IsNullOrWhiteSpace(record.AssemblyUrl) || string.IsNullOrWhiteSpace(record.Hash))
-                    continue;
-
-                //The same gate an install passes through, applied again at read time.
-                PluginManifest.Parse(JsonSerializer.Serialize(record.Manifest));
-
-                records.Add(record);
-            }
-            catch (PluginManifestException)
-            {
-                //One bad entry must not cost the rest — the quarantine story is where a bad plugin
-                //gets surfaced and removed; the list reader just declines to trip over it.
+                record = element.Deserialize<InstalledPluginRecord>();
             }
             catch (JsonException)
             {
+                continue;
             }
+
+            //One bad entry must not cost the rest — the quarantine story is where a bad plugin gets
+            //surfaced and removed; the list reader just declines to trip over it.
+            if (Refusal(record) == null)
+                records.Add(record);
         }
 
         return records;
+    }
+
+    ///<summary>
+    ///Why this record cannot be in the list, or null: there is no plugin in it, it does not say where its
+    ///code is or what that code hashes to, its manifest breaks the manifest's rules, or its id is under
+    ///the reserved prefix, which belongs to the plugins that ship with Treeality (ADR 0012), and those
+    ///are build-time references that never pass through an install.
+    ///
+    ///<strong>One check, made at both ends of the list.</strong> The host refuses to store a record this
+    ///refuses, and <see cref="Parse"/> skips one it finds there anyway. Until 2026-09-26 the host made a
+    ///copy of these checks, and the two disagreed (the 2026-09-24 audit): the host refused a reserved id
+    ///and the reader took it, so a plugin under the prefix that reached the list another way loaded at
+    ///every boot, looking official in every list, where the host's own reads hold that no installed id is
+    ///reserved. The host's refusal of a "%" in an id is its own and not here: an id listed with one
+    ///before that refusal has to stay readable, so that it can still be uninstalled.
+    ///</summary>
+    public static string Refusal(InstalledPluginRecord record)
+    {
+        if (record?.Manifest == null || string.IsNullOrWhiteSpace(record.Manifest.Id))
+            return "There is no plugin in that. An install carries the record the page proved, manifest and all.";
+
+        if (string.IsNullOrWhiteSpace(record.AssemblyUrl) || string.IsNullOrWhiteSpace(record.Hash))
+            return "That record does not say where its code is, or what its code hashes to.";
+
+        try
+        {
+            PluginManifest.Parse(JsonSerializer.Serialize(record.Manifest));
+        }
+        catch (PluginManifestException ex)
+        {
+            return ex.Message;
+        }
+
+        if (PluginIds.IsReserved(record.Manifest.Id))
+            return PluginIds.ReservedRefusal(record.Manifest.Id);
+
+        if (!PluginManifest.RunsHere(record.Manifest.HostApiVersion))
+            return PluginManifest.HostApiRefusal(record.Manifest);
+
+        return null;
     }
 }

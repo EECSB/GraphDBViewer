@@ -91,6 +91,9 @@ public static class PluginPackage
                 return (null, $"The manifest could not be read out of the zip: {ex.Message}");
             }
 
+            if (!PluginManifest.RunsHere(manifest.HostApiVersion))
+                return (null, PluginManifest.HostApiRefusal(manifest));
+
             string assemblyFile;
 
             try
@@ -113,7 +116,7 @@ public static class PluginPackage
                 return (null, $@"The manifest's entry names ""{assemblyFile}"", and there is no such file beside the manifest in that zip. It holds {Listed(archive)}.");
 
             if (assemblyEntry.Length > MaxUnpackedBytes)
-                return (null, $@"""{assemblyFile}"" unpacks to {Megabytes(assemblyEntry.Length)}, past the {Megabytes(MaxUnpackedBytes)} a plugin assembly may be.");
+                return (null, $@"""{assemblyFile}"" unpacks to {ByteSizes.Human(assemblyEntry.Length)}, past the {ByteSizes.Human(MaxUnpackedBytes)} a plugin assembly may be.");
 
             byte[] assembly;
 
@@ -153,7 +156,7 @@ public static class PluginPackage
     private static string TextOf(ZipArchiveEntry entry)
     {
         if (entry.Length > MaxUnpackedBytes)
-            throw new InvalidDataException($"it unpacks to {Megabytes(entry.Length)}");
+            throw new InvalidDataException($"it unpacks to {ByteSizes.Human(entry.Length)}");
 
         using var stream = entry.Open();
         using var reader = new StreamReader(stream);
@@ -183,7 +186,7 @@ public static class PluginPackage
             total += got;
 
             if (total > MaxUnpackedBytes)
-                throw new InvalidDataException($"it unpacks to more than {Megabytes(MaxUnpackedBytes)}");
+                throw new InvalidDataException($"it unpacks to more than {ByteSizes.Human(MaxUnpackedBytes)}");
 
             buffer.Write(read, 0, got);
         }
@@ -200,10 +203,5 @@ public static class PluginPackage
             return "nothing at all";
 
         return string.Join(", ", names);
-    }
-
-    private static string Megabytes(long bytes)
-    {
-        return $"{bytes / 1024d / 1024d:0.#} MB";
     }
 }

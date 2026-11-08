@@ -49,7 +49,10 @@ window.gdbvIdb = {
                 const tx = db.transaction(store, 'readonly');
                 const req = tx.objectStore(store).get(key);
                 req.onsuccess = function () {
-                    resolve(req.result === undefined ? null : req.result);
+                    if (req.result === undefined)
+                        resolve(null);
+                    else
+                        resolve(req.result);
                 };
                 req.onerror = function () {
                     reject(req.error);
@@ -108,6 +111,40 @@ window.gdbvIdb = {
                     resolve();
                 };
                 tx.onerror = function () {
+                    resolve();
+                };
+            });
+        }
+        catch (e) { }
+    },
+
+    //Removes every key except the ones named — the caller's own bookkeeping. Best-effort, like remove().
+    clear: async function (keep) {
+        let kept = keep;
+
+        if (!Array.isArray(kept))
+            kept = [kept];
+
+        try {
+            const db = await this._open();
+            const store = this._store;
+
+            await new Promise(function (resolve) {
+                const tx = db.transaction(store, 'readwrite');
+                const objects = tx.objectStore(store);
+                const req = objects.getAllKeys();
+                req.onsuccess = function () {
+                    for (const key of req.result)
+                        if (!kept.includes(key))
+                            objects.delete(key);
+                };
+                tx.oncomplete = function () {
+                    resolve();
+                };
+                tx.onerror = function () {
+                    resolve();
+                };
+                tx.onabort = function () {
                     resolve();
                 };
             });

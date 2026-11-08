@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using GraphDBViewerWeb.Code;
 
@@ -31,6 +32,15 @@ public partial class Home
     private const string DefaultEdgeLabel = "edge label";
 
     //The picker can create an edge as soon as both endpoints are chosen; the label defaults if blank.
+    ///<summary>
+    ///Whether this page may stage an edit: not embedded, and a connection whose engine stages edits and that is not
+    ///the instance's read-only graph (<see cref="GraphDbCapabilities.StageEdits"/>, which the design makes the one flag
+    ///over every writing control). Until 2026-10-31 the add, delete and link modes, the property edits, Create Component
+    ///and the Delete key asked only that the viewer was not embedded: on the instance graph they staged queries no
+    ///Commit could run, and on a SPARQL connection, which has no query builder, they threw.
+    ///</summary>
+    private bool EditsAllowed => !Embedded && Caps.StageEdits;
+
     private bool CanCreatePickedEdge => !string.IsNullOrEmpty(pickFirstNodeId)
         && !string.IsNullOrEmpty(pickSecondNodeId);
 
@@ -83,6 +93,9 @@ public partial class Home
         var current = CurrentGraphData();
         bool hasCurrent = current.ValueKind != JsonValueKind.Undefined;
 
+        //An algorithm's result is of the graph before the expand, so it is left behind with it (Home.Algorithms.cs).
+        bool hadOverlay = ActiveOverlay() != null;
+
         if (hasCurrent)
             graphResultData = GraphDataConverter.MergeGraphResults(current, result.Data);
         else
@@ -98,9 +111,13 @@ public partial class Home
         }
 
         if (visualizationMode == 2)
-            await JS.InvokeVoidAsync("addToCytoscapeGraph", GraphDataConverter.ToCytoscapeJson(graphResultData, labelStyles, edgeColorMode, edgeColors));
+            await JS.InvokeVoidAsync("addToCytoscapeGraph", GraphDataConverter.ToCytoscapeJson(graphResultData, labelStyles, edgeColorMode, edgeColors, edgeDetails: edgeDetails));
         else
-            await JS.InvokeVoidAsync("graph3DInterop.addData", GraphDataConverter.ToForceGraphJson(graphResultData, labelStyles, edgeColorMode, edgeColors));
+            await JS.InvokeVoidAsync("graph3DInterop.addData", GraphDataConverter.ToForceGraphJson(graphResultData, labelStyles, edgeColorMode, edgeColors, edgeDetails: edgeDetails));
+
+        //The nodes that were there still wear the old graph's result: draw them as the new graph has them.
+        if (hadOverlay)
+            await RedrawOverlayAsync();
 
         await SaveTabsAsync();
         StateHasChanged();
@@ -179,6 +196,15 @@ public partial class Home
             return;
         }
 
+        await SelectAsync(root, type, id);
+    }
+
+    ///<summary>
+    ///Selects the element a click or the right-click menu's Style names, loading its card, past the modes a click on the
+    ///canvas answers first (adding, deleting, linking).
+    ///</summary>
+    private async Task SelectAsync(JsonElement root, string type, string id)
+    {
         string label;
         if (root.TryGetProperty("label", out var lbl))
             label = lbl.GetString();
@@ -207,10 +233,8 @@ public partial class Home
             info.Target = tgt.ToString();
 
         if (root.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
-        {
             foreach (var p in props.EnumerateObject())
                 info.EditableProperties[p.Name] = p.Value.ToString();
-        }
 
         selectedElement = info;
         originalProperties = new Dictionary<string, string>(info.EditableProperties);
@@ -275,6 +299,9 @@ public partial class Home
     [JSInvokable]
     public async Task OnDeleteKeyPressed()
     {
+        if (!EditsAllowed)
+            return;
+
         //The 2D canvas can hold several shift / box-selected components at once, while selectedElement only
         //tracks the last-clicked one. Delete everything Cytoscape currently has selected; each element is
         //staged exactly like a single delete (a node also drops its incident edges).
@@ -315,6 +342,7 @@ public partial class Home
         var selection = new List<(string Type, string Id)>();
 
         string json;
+
         try
         {
             json = await JS.InvokeAsync<string>("getCytoscapeSelectedElements");
@@ -470,10 +498,11 @@ public partial class Home
     //Opens or closes the node-linking picker popup over the canvas.
     private void ToggleTwoClickPickMode()
     {
+        if (!EditsAllowed)
+            return;
+
         if (connectionPickMode == "twoClick")
-        {
             ClosePickPopup();
-        }
         else
         {
             deleteMode = false;
@@ -485,6 +514,9 @@ public partial class Home
 
     private void ToggleDeleteMode()
     {
+        if (!EditsAllowed)
+            return;
+
         deleteMode = !deleteMode;
 
         //Delete mode, add-component mode and the node-linking picker all intercept graph clicks —
@@ -508,8 +540,54 @@ public partial class Home
         await JS.InvokeVoidAsync("setCytoscapeGridMode", gridMode);
     }
 
+    //Grid size (2026-11-06, the user): the spacing of the grid's lines and of its snapping, in the graph's units, set on a
+    //slider that opens beneath the grid button on hover. Like the grid itself it lasts the page, and a redraw re-applies it.
+    public const int GridSizeLeast = 10;
+    public const int GridSizeMost = 200;
+    public const int GridSizeDefault = 50;
+    private int gridSize = GridSizeDefault;
+    private bool showGridOptions;
+    private int closeTicketGrid;
+
+    private void ShowGridOptions()
+    {
+        closeTicketGrid++;
+        showGridOptions = true;
+    }
+
+    private void HideGridOptions()
+    {
+        closeTicketGrid++;
+        showGridOptions = false;
+    }
+
+    //As the 2D and 3D toggles do: focus moving within it does not close it, focus leaving does.
+    private async Task HideGridOptionsOnFocusOut()
+    {
+        var ticket = ++closeTicketGrid;
+        await Task.Delay(150);
+
+        if (ticket == closeTicketGrid)
+        {
+            showGridOptions = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnGridSizeChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var size))
+            return;
+
+        gridSize = Math.Clamp(size, GridSizeLeast, GridSizeMost);
+        await JS.InvokeVoidAsync("setCytoscapeGridSize", gridSize);
+    }
+
     private async Task ToggleAddNodeMode()
     {
+        if (!EditsAllowed)
+            return;
+
         addNodeMode = !addNodeMode;
 
         if (!addNodeMode)
@@ -546,6 +624,9 @@ public partial class Home
     //open picker) so successive edges can be linked without reopening it.
     private void CreatePickedEdge()
     {
+        if (!EditsAllowed)
+            return;
+
         if (!CanCreatePickedEdge)
             return;
 
@@ -587,6 +668,9 @@ public partial class Home
 
     private void OnPropertyChanged(string key, string newValue)
     {
+        if (!EditsAllowed)
+            return;
+
         if (selectedElement == null)
             return;
 
@@ -600,6 +684,9 @@ public partial class Home
 
     private void AddProperty()
     {
+        if (!EditsAllowed)
+            return;
+
         if (selectedElement == null || string.IsNullOrWhiteSpace(newPropertyName))
             return;
 
@@ -614,6 +701,9 @@ public partial class Home
 
     private void RemoveProperty(string key)
     {
+        if (!EditsAllowed)
+            return;
+
         if (selectedElement == null)
             return;
 
@@ -652,9 +742,7 @@ public partial class Home
                 keys.Add(key);
         }
         else
-        {
             keys.Remove(key);
-        }
 
         if (keys.Count == 0)
             RemovePropertyIfPresent(GdbvKeys.Show);
@@ -711,6 +799,9 @@ public partial class Home
     //green or red. kind is "image" or "model". Used by both the text input and the cloud picker.
     private async Task SetGdbvUrlAsync(string key, string kind, string url)
     {
+        if (!EditsAllowed)
+            return;
+
         OnPropertyChanged(key, url);
 
         //A fresh paste re-arms auto-show: if this new URL checks out, its "show" turns on even when the
@@ -826,6 +917,9 @@ public partial class Home
 
     private void RegenerateChangeQueries()
     {
+        if (!EditsAllowed)
+            return;
+
         if (selectedElement == null)
             return;
 
@@ -844,8 +938,15 @@ public partial class Home
         foreach (var key in removedProperties)
             lines.Add(Qb.DropProperty(selectedElement.Type, selectedElement.Id, key, selectedElement.IdType));
 
+        //Read back in the connection's own language, whose lines these are (2026-10-05).
         generatedQueryText = GremlinEditParser.MergePropertyEdits(
-            generatedQueryText, selectedElement.Type, selectedElement.Id, sessionEditedKeys, lines);
+            generatedQueryText,
+            selectedElement.Type,
+            selectedElement.Id,
+            sessionEditedKeys,
+            lines,
+            Qb.ParseEdits,
+            Provider.EditorLanguage);
 
         if (lines.Count > 0)
             queryEditorTab = 2;
@@ -858,39 +959,52 @@ public partial class Home
 
     private async Task CommitGeneratedQueriesAsync()
     {
-        if (!Caps.StageEdits || string.IsNullOrWhiteSpace(generatedQueryText))
+        var tab = activeTab;
+        var owner = activeConnection;
+
+        if (!Caps.StageEdits || string.IsNullOrWhiteSpace(tab.GeneratedQueryText))
             return;
+
+        //One run at a time on a connection, whose tabs share one live link.
+        if (tab.QueryCts != null || owner.RunningTab != null)
+            return;
+
+        var database = owner.Db;
 
         //Committing staged queries needs a live connection. Offline (db == null) mirror the Run/Load path:
         //surface the message in the stats bar and pulse the connect button rather than silently doing nothing.
-        if (db == null)
+        if (database == null)
         {
             WarnNoConnection();
             return;
         }
 
-        var ct = BeginQuery();
-        commitStatus = null;
+        var language = Provider.EditorLanguage;
+        var ct = BeginQuery(tab, owner);
+        tab.CommitStatus = null;
+
+        //Walked the way the edit parser walked it, because the stand-in ids below are named after
+        //positions in that walk. Blank entries are skipped, never renumbered.
+        var statements = StagedIds.Split(tab.GeneratedQueryText, language);
+
+        //An element created earlier in this same batch is referred to by a stand-in id, since it had
+        //no real one when the statement was written. Each id the database hands back is recorded
+        //here, and every later statement is substituted before it is sent.
+        var realIds = new Dictionary<string, ResolvedId>();
+
+        //The places of the statements that ran: what a commit cut short leaves staged is what did not (2026-10-05).
+        var ran = new HashSet<int>();
 
         try
         {
-            //Walked the way the edit parser walked it, because the stand-in ids below are named after
-            //positions in that walk. Blank entries are skipped, never renumbered.
-            var statements = StagedIds.Split(generatedQueryText, Provider.EditorLanguage);
-
             var errors = new List<string>();
-
-            //An element created earlier in this same batch is referred to by a stand-in id, since it had
-            //no real one when the statement was written. Each id the database hands back is recorded
-            //here, and every later statement is substituted before it is sent.
-            var realIds = new Dictionary<string, ResolvedId>();
 
             //Each query is its own round-trip (Cosmos rejects multi-statement scripts, so they can't be
             //batched), and a large commit can run for tens of seconds — so report live progress. Repaint
             //at most ~50 times regardless of count, since re-rendering this large page every query would
             //itself slow the commit.
             int step = Math.Max(1, statements.Count / 50);
-            int ran = 0;
+            int sent = 0;
 
             for (int i = 0; i < statements.Count; i++)
             {
@@ -908,68 +1022,97 @@ public partial class Home
                     continue;
                 }
 
-                var result = await db.ExecuteAsync(statement, ct);
-                ran++;
+                var result = await database.ExecuteAsync(statement, ct);
+                sent++;
 
                 if (result.IsError)
                     errors.Add($"{statement}: {result.Error}");
-                else if (StagedIds.TryReadCreatedId(result, out var newId, out var idType))
-                    StagedIds.Record(realIds, i, newId, idType, Provider.EditorLanguage);
+                else
+                {
+                    ran.Add(i);
+
+                    if (StagedIds.TryReadCreatedId(result, out var newId, out var idType))
+                        StagedIds.Record(realIds, i, newId, idType, language);
+                }
 
                 if ((i + 1) % step == 0 || i == statements.Count - 1)
                 {
-                    commitStatus = $"Committing… {i + 1} / {statements.Count}";
-                    commitStatusClass = "text-muted";
+                    tab.CommitStatus = $"Committing… {i + 1} / {statements.Count}";
+                    tab.CommitStatusClass = "text-muted";
                     StateHasChanged();
                 }
             }
 
             if (errors.Count > 0)
             {
-                commitStatus = string.Join("\n", errors);
-                commitStatusClass = "text-danger";
+                //What ran is committed and no longer staged, so a second Commit runs only what did not.
+                SetStaged(tab, StagedIds.Remaining(statements, ran, realIds));
+
+                var failed = string.Join("\n", errors);
+
+                tab.CommitStatus = $"{ran.Count} query(ies) committed; what did not stays staged:\n{failed}";
+                tab.CommitStatusClass = "text-danger";
             }
             else
             {
-                commitStatus = $"{ran} query(ies) committed.";
-                commitStatusClass = "text-success";
-                generatedQueryText = null;
+                tab.CommitStatus = $"{sent} query(ies) committed.";
+                tab.CommitStatusClass = "text-success";
+                SetStaged(tab, null);
 
-                if (selectedElement != null)
+                if (tab.SelectedElement != null)
                 {
-                    originalProperties = new Dictionary<string, string>(selectedElement.EditableProperties);
-                    removedProperties.Clear();
-                    sessionEditedKeys.Clear();
-                    hasPropertyChanges = false;
+                    tab.OriginalProperties = new Dictionary<string, string>(tab.SelectedElement.EditableProperties);
+                    tab.RemovedProperties.Clear();
+                    tab.SessionEditedKeys.Clear();
+                    tab.HasPropertyChanges = false;
                 }
 
                 //Committed edits may add new labels/keys — refresh autocomplete (still inside the query lock).
-                await RefreshSchemaVocabularyAsync();
+                await RefreshSchemaVocabularyAsync(owner);
             }
         }
         catch (OperationCanceledException)
         {
-            commitStatus = "Commit canceled.";
-            commitStatusClass = "text-muted";
+            tab.CommitStatus = "Commit canceled.";
+            tab.CommitStatusClass = "text-muted";
+
+            if (ran.Count > 0)
+                SetStaged(tab, StagedIds.Remaining(statements, ran, realIds));
         }
         catch (Exception ex)
         {
-            commitStatus = $"Error: {ex.Message}";
-            commitStatusClass = "text-danger";
+            tab.CommitStatus = $"Error: {ex.Message}";
+            tab.CommitStatusClass = "text-danger";
+
+            if (ran.Count > 0)
+                SetStaged(tab, StagedIds.Remaining(statements, ran, realIds));
         }
         finally
         {
-            EndQuery();
+            EndQuery(tab, owner);
         }
 
-        //Auto-reload the graph from DB if the user has opted in and the commit succeeded.
-        if (autoReloadAfterCommit && commitStatusClass == "text-success")
-            await LoadDbAsync();
+        //Auto-reload the graph from DB if the user has opted in and the commit succeeded, into the tab committed from.
+        if (tab.AutoReloadAfterCommit && tab.CommitStatusClass == "text-success")
+            await LoadDbAsync(tab, owner);
+        else if (!IsInFront(tab))
+            await ShowRunAsync(tab, false);
     }
 
-    //Discards every staged (uncommitted) edit: clears the Generated buffer and the pending property
-    //removals, then redraws the canvas back to the plain database state. Guarded by a confirm since
-    //the staged queries are lost. RenderGraphAsync clears the selection / property-change flags.
+    //A tab's staged buffer, set; the canvas's preview of it follows only while the tab is the one on the page (the
+    //generatedQueryText setter's refresh, which reads the tab in front).
+    private void SetStaged(QueryTab tab, string text)
+    {
+        if (IsInFront(tab))
+            generatedQueryText = text;
+        else
+            tab.GeneratedQueryText = text;
+    }
+
+    //Discards every staged (uncommitted) edit: clears the pending property removals and the Generated buffer, which
+    //brings the canvas back to the plain database state in place, as emptying the buffer by hand does, so nothing is laid
+    //out again (2026-11-04, the user; a full redraw here shuffled the graph). Guarded by a confirm since the staged
+    //queries are lost. The selection goes, as the redraw took it.
     private async Task DiscardGeneratedQueriesAsync()
     {
         if (string.IsNullOrWhiteSpace(generatedQueryText))
@@ -979,11 +1122,14 @@ public partial class Home
         if (!confirmed)
             return;
 
-        generatedQueryText = null;
         removedProperties.Clear();
+        generatedQueryText = null;
+        selectedElement = null;
+        hasPropertyChanges = false;
+        commitStatus = null;
 
         await PersistTabTextAsync();
-        await RenderGraphAsync();
+        await SyncOptimisticViewAsync();
     }
 
     //True when the exact query line is already staged (so repeated delete clicks don't duplicate it).
@@ -1055,6 +1201,9 @@ public partial class Home
 
     private void DeleteSelectedElement()
     {
+        if (!EditsAllowed)
+            return;
+
         if (selectedElement == null)
             return;
 
@@ -1075,6 +1224,9 @@ public partial class Home
     //that aren't on the canvas). Deduped by StageVertexDrop / IsQueryStaged; ids carry their GraphSON type.
     private void StageElementDrop(string type, string id)
     {
+        if (!EditsAllowed)
+            return;
+
         if (type == "node")
         {
             IEnumerable<(string Id, string IdType)> incident = LoadedIncidentEdges(id);
@@ -1099,6 +1251,9 @@ public partial class Home
 
     private void CreateComponent()
     {
+        if (!EditsAllowed)
+            return;
+
         if (string.IsNullOrWhiteSpace(newComponentLabel))
             return;
 
@@ -1113,6 +1268,9 @@ public partial class Home
     //place, so existing nodes keep their positions.
     private async Task PlaceComponentAsync(double? x, double? y)
     {
+        if (!EditsAllowed)
+            return;
+
         var name = NextComponentName();
 
         string query;
@@ -1159,6 +1317,9 @@ public partial class Home
 
     private void RemoveConnection(EdgeInfo edge)
     {
+        if (!EditsAllowed)
+            return;
+
         if (edge == null || string.IsNullOrWhiteSpace(edge.EdgeId) || edge.EdgeId == "?")
             return;
 
@@ -1168,6 +1329,9 @@ public partial class Home
 
     private void AddConnection()
     {
+        if (!EditsAllowed)
+            return;
+
         if (selectedElement == null || selectedElement.Type != "node" || string.IsNullOrWhiteSpace(newConnectionLabel) || string.IsNullOrWhiteSpace(newConnectionOtherId))
             return;
 

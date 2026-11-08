@@ -85,11 +85,14 @@ public static class KgGraphParser
     public const int MaxEdges = 200;
 
     ///<summary>
-    ///Property holding the sentence an entity or relationship was extracted from. A plain name rather than
-    ///a gdbv* one on purpose: this is data the user is keeping, not viewer bookkeeping that
-    ///"Database cleanup" should be free to strip.
+    ///Property holding the sentence an entity or relationship was extracted from, and the field the model is
+    ///asked to put it in. Not "source", which on an edge is the entity it starts at: until 2026-10-23 the
+    ///prompt asked for both under that one key, and the parser kept whichever came last. Nor is it kept as
+    ///"source", since the table view and the CSV and Excel exports already give an edge's start a column by
+    ///that name. A plain name rather than a gdbv* one on purpose: this is data the user is keeping, not
+    ///viewer bookkeeping that "Database cleanup" should be free to strip.
     ///</summary>
-    public const string SourceProperty = "source";
+    public const string SourceSentenceProperty = "sourceSentence";
 
     ///<summary>Property holding a 0–1 confidence, which the viewer grays the element by.</summary>
     public const string ConfidenceProperty = "confidence";
@@ -255,13 +258,11 @@ public static class KgGraphParser
             int backfilled = 0;
 
             foreach (var node in graph.Nodes)
-            {
                 if (!node.Properties.ContainsKey("name") && !node.Properties.ContainsKey("title"))
                 {
                     node.Properties["name"] = node.Id;
                     backfilled++;
                 }
-            }
 
             if (backfilled > 0)
                 warnings.Add($"Backfilled a display name from the id for {backfilled} node(s).");
@@ -315,9 +316,7 @@ public static class KgGraphParser
                 warnings.Add($"Merged '{DisplayName(node)}' into existing '{DisplayName(survivor)}' ({survivor.Label}).");
 
                 foreach (var kv in node.Properties)
-                {
                     if (!survivor.Properties.TryGetValue(kv.Key, out var existing))
-                    {
                         if (canvasNodes.Contains(survivor))
                         {
                             //The canvas node itself is not mutated — the gain is emitted as a staged
@@ -327,10 +326,8 @@ public static class KgGraphParser
                         }
                         else
                             survivor.Properties[kv.Key] = kv.Value;
-                    }
                     else if (existing != kv.Value)
                         warnings.Add($"Kept '{DisplayName(survivor)}' {kv.Key}='{existing}'; discarded conflicting '{kv.Value}'.");
-                }
             }
             else
             {
@@ -439,12 +436,10 @@ public static class KgGraphParser
         var sb = new StringBuilder(value.Length);
 
         foreach (var ch in value.ToLowerInvariant())
-        {
             if (char.IsLetterOrDigit(ch))
                 sb.Append(ch);
             else if (char.IsWhiteSpace(ch))
                 sb.Append(' ');
-        }
 
         var tokens = sb.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
 
@@ -477,12 +472,10 @@ public static class KgGraphParser
                 warnings.Add($"Merged '{DisplayName(node)}' into '{DisplayName(survivor)}' ({survivor.Label}).");
 
                 foreach (var kv in node.Properties)
-                {
                     if (!survivor.Properties.TryGetValue(kv.Key, out var existing))
                         survivor.Properties[kv.Key] = kv.Value;
                     else if (existing != kv.Value)
                         warnings.Add($"Kept '{DisplayName(survivor)}' {kv.Key}='{existing}'; discarded conflicting '{kv.Value}'.");
-                }
 
                 continue;
             }
@@ -600,8 +593,7 @@ public static class KgGraphParser
 
         if (value.ValueKind == JsonValueKind.String)
             return value.GetString();
-
-        if (value.ValueKind == JsonValueKind.Number)
+        else if (value.ValueKind == JsonValueKind.Number)
             return value.GetRawText();
 
         return null;
@@ -610,11 +602,12 @@ public static class KgGraphParser
     ///<summary>
     ///Lifts the annotations the model is asked for as top-level fields — the source sentence and the
     ///confidence — into properties. Read from the top level because that is where the prompt puts them,
-    ///and skipped when already present so a model that nests them inside "properties" also works.
+    ///and skipped when already present so a model that nests them inside "properties" also works. An
+    ///edge's "source" and "target" are never among them: those are its ends, read once, by Parse.
     ///</summary>
     private static void ReadAnnotations(JsonElement el, Dictionary<string, string> into)
     {
-        foreach (var field in new[] { SourceProperty, ConfidenceProperty })
+        foreach (var field in new[] { SourceSentenceProperty, ConfidenceProperty })
         {
             if (into.ContainsKey(field) || !el.TryGetProperty(field, out var value))
                 continue;
@@ -652,7 +645,7 @@ public static class KgGraphParser
 
         foreach (var properties in graph.Nodes.Select(n => n.Properties).Concat(graph.Edges.Select(e => e.Properties)))
         {
-            if (properties == null || !properties.TryGetValue(SourceProperty, out var quote) || string.IsNullOrWhiteSpace(quote))
+            if (properties == null || !properties.TryGetValue(SourceSentenceProperty, out var quote) || string.IsNullOrWhiteSpace(quote))
                 continue;
 
             int at = Locate(sourceText, flattened, offsets, quote);
@@ -731,73 +724,6 @@ public static class KgGraphParser
         }
 
         return sb.ToString();
-    }
-
-    ///<summary>
-    ///Splits text into pieces small enough to extract one at a time.
-    ///
-    ///A long document cannot be handed over whole: the answer would run past the model's output cap and
-    ///arrive as truncated JSON, which the parser can only reject. Splitting is the difference between
-    ///extracting a report and being told to shorten it. Pieces break at a paragraph where they can and a
-    ///sentence otherwise, because a chunk that ends mid-sentence takes the relationship in it with it.
-    ///</summary>
-    public static List<string> SplitIntoChunks(string text, int maxChars)
-    {
-        var chunks = new List<string>();
-
-        if (string.IsNullOrWhiteSpace(text))
-            return chunks;
-
-        var remaining = text.Trim();
-
-        if (maxChars <= 0 || remaining.Length <= maxChars)
-        {
-            chunks.Add(remaining);
-
-            return chunks;
-        }
-
-        while (remaining.Length > 0)
-        {
-            if (remaining.Length <= maxChars)
-            {
-                chunks.Add(remaining);
-
-                break;
-            }
-
-            int cut = BreakBefore(remaining, maxChars);
-            chunks.Add(remaining.Substring(0, cut).Trim());
-            remaining = remaining.Substring(cut).Trim();
-        }
-
-        return chunks;
-    }
-
-    //The last paragraph break within the limit, else the last sentence end, else the limit itself.
-    private static int BreakBefore(string text, int limit)
-    {
-        int paragraph = text.LastIndexOf("\n\n", limit, StringComparison.Ordinal);
-
-        //Not so early that a chunk is mostly empty — a document of one long paragraph would otherwise
-        //split every time at its only blank line.
-        if (paragraph > limit / 2)
-            return paragraph;
-
-        int sentence = -1;
-
-        foreach (var terminator in new[] { ". ", ".\n", "! ", "? " })
-        {
-            int at = text.LastIndexOf(terminator, limit - 1, StringComparison.Ordinal);
-
-            if (at > sentence)
-                sentence = at;
-        }
-
-        if (sentence > limit / 2)
-            return sentence + 1;
-
-        return limit;
     }
 
     ///<summary>
@@ -982,78 +908,18 @@ public static class KgGraphParser
         return sb.ToString();
     }
 
-    ///<summary>
-    ///Folds a gleaning answer into the first generation: entities the model already emitted keep what they
-    ///had, genuinely new ones are added, and a relationship already present is not repeated. Returns how
-    ///many nodes and edges the second pass actually contributed.
-    ///</summary>
-    public static (int Nodes, int Edges) MergeGeneration(GraphImport.Graph into, GraphImport.Graph addition)
-    {
-        if (into == null || addition == null)
-            return (0, 0);
-
-        var existingIds = new HashSet<string>(into.Nodes.Select(n => n.Id), StringComparer.Ordinal);
-        int newNodes = 0;
-
-        foreach (var node in addition.Nodes)
-        {
-            if (existingIds.Contains(node.Id))
-            {
-                //Already known: the first pass stands, and this one only fills gaps.
-                var existing = into.Nodes.First(n => n.Id == node.Id);
-
-                foreach (var pair in node.Properties)
-                    if (!existing.Properties.ContainsKey(pair.Key))
-                        existing.Properties[pair.Key] = pair.Value;
-
-                continue;
-            }
-
-            var added = into.GetOrAdd(node.Id);
-            added.Label = node.Label;
-
-            foreach (var pair in node.Properties)
-                added.Properties[pair.Key] = pair.Value;
-
-            existingIds.Add(node.Id);
-            newNodes++;
-        }
-
-        var existingEdges = new HashSet<string>(into.Edges.Select(EdgeKey), StringComparer.Ordinal);
-        int newEdges = 0;
-
-        foreach (var edge in addition.Edges)
-        {
-            if (!existingEdges.Add(EdgeKey(edge)))
-                continue;
-
-            into.Edges.Add(edge);
-            newEdges++;
-        }
-
-        return (newNodes, newEdges);
-    }
-
-    private static string EdgeKey(GraphImport.Edge edge)
-    {
-        return $"{edge.Source}{edge.Label}{edge.Target}";
-    }
-
     private static void ReadProperties(JsonElement el, Dictionary<string, string> into)
     {
         if (!el.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object)
             return;
 
         foreach (var p in props.EnumerateObject())
-        {
             if (p.Value.ValueKind == JsonValueKind.Null)
                 continue;
-
-            if (p.Value.ValueKind == JsonValueKind.String)
+            else if (p.Value.ValueKind == JsonValueKind.String)
                 into[p.Name] = p.Value.GetString();
             else
                 into[p.Name] = p.Value.GetRawText();
-        }
     }
 
     private static void MergeMissingProperties(GraphImport.Node node, JsonElement el)
@@ -1062,9 +928,7 @@ public static class KgGraphParser
         ReadProperties(el, extra);
 
         foreach (var kv in extra)
-        {
             if (!node.Properties.ContainsKey(kv.Key))
                 node.Properties[kv.Key] = kv.Value;
-        }
     }
 }

@@ -7,12 +7,15 @@ test-results/
 publish-test/
 .git/
 .github/
-.claude/
+**/.claude/
 .vs/
-.env
 *.ps1
 *.md
 !README.md
 
-# Real API keys and database credentials. Never in an image.
-dev-secrets.json
+# Real API keys and database credentials. Never in an image, and never sent to a daemon either.
+# The **/ matters: dev-secrets.json lives in GraphDBViewerWeb/wwwroot, and a bare name only matches at
+# the root of the context, where the file never is, so the bare name this used to be excluded nothing.
+**/dev-secrets.json
+**/.env
+**/.env.*

@@ -12,9 +12,10 @@ namespace GraphDBViewerWeb.Code;
 ///
 ///Everything else an engine might offer is an optional seam of its own, sitting beside this one:
 ///<see cref="IGraphQueryBuilder"/>, <see cref="IGraphSchemaSource"/>, <see cref="IGraphQueryDebugger"/>,
-///<see cref="ILiveGraphDb"/>, <see cref="IGraphImportPreparation"/>. Keeping them out of here is what
-///lets a backend implement only what it can actually do — six engines behind this interface, and not one
-///of them throws <c>NotSupportedException</c> for a feature the UI never offered it.
+///<see cref="ILiveGraphDb"/>, <see cref="IGraphImportPreparation"/>, <see cref="IReadOnlyCapableGraphDb"/>.
+///Keeping them out of here is what lets a backend implement only what it can actually do — six engines
+///behind this interface, and not one of them throws <c>NotSupportedException</c> for a feature the UI never
+///offered it.
 ///</summary>
 public interface IGraphDb : IAsyncDisposable
 {

@@ -1,0 +1,477 @@
+@using GraphDBViewerWeb.Code
+@inject ViewerHostOptions HostOptions
+@inject ShellState Shell
+
+@* Map settings. Where the Map and the Globe take their earth from (2026-11-05, the user): the images that ship with the viewer,
+   or a tile server's URL. Empty is the default and keeps the built-in earth; a saved URL makes both views draw tiles from it. The
+   key box never shows a kept key back: it says one is kept, and what is typed replaces it. Google's Map Tiles API is a choice
+   of its own beside the URL, a key and a kind of map (2026-11-07). And, in a card below, which geocoder
+   looks places up, for everything that does (2026-11-06, the user). *@
+
+<FloatingDialog Visible="Visible"
+                OnClose="CloseAsync"
+                Title="Map settings"
+                TitleGlyph="bi-map"
+                StorageKey="map-tiles"
+                Width="min(640px, 92vw)"
+                Height="min(780px, 90vh)">
+
+    <div class="border rounded p-3" data-testid="map-tiles-card">
+        <div class="fw-semibold mb-2 d-flex align-items-center gap-2"><i class="bi bi-map" aria-hidden="true"></i>Map tiles</div>
+        <p class="small mb-3">
+            The Map and the Globe draw the earth from the images that come with @HostOptions.AppName, which need no network.
+            Give a tile server's URL to draw it from that server's tiles instead: your own, a free one, or a commercial one
+            with your key; or draw Google's map, with your Google key.
+        </p>
+
+        @* Where the earth is drawn from, one choice of all of them, one pressed at a time (2026-11-08, the user: "those two should
+           both be possible options that are all mutually exclusive"): the built-in map; a free server, which fills the URL and
+           draws from it at a click (2026-11-05); a URL of one's own, with its key; or Google's map, with its key (2026-11-07).
+           Until then a URL of one's own and Google were a toggle in a row of their own that only chose the boxes under it, so
+           a free server and Tile server URL were pressed at once. Pressing one draws from it once it has what it needs; the
+           built-in map keeps a server set before for later. *@
+        <div class="mb-3" data-testid="map-tiles-sources">
+            <div class="d-flex flex-wrap gap-1">
+                <button type="button" class="btn btn-sm @(IsBuiltInChosen ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(IsBuiltInChosen ? "true" : "false")" @onclick="UseBuiltInAsync" disabled="@(!loaded)" title="The images that come with @HostOptions.AppName: they need no network and tell no server where anyone looks. A server set before is kept for later." data-testid="map-tiles-builtin">Built-in map</button>
+                @foreach (var preset in MapTilesPreference.FreeServers)
+                {
+                    var p = preset;
+                    var chosen = source == p.Url;
+                    <button type="button" class="btn btn-sm @(chosen ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(chosen ? "true" : "false")" @onclick="() => UsePresetAsync(p)" disabled="@(!loaded)" title="@p.About" data-testid="map-tiles-preset">@p.Name</button>
+                }
+                <button type="button" class="btn btn-sm @(IsCustomChosen ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(IsCustomChosen ? "true" : "false")" @onclick="UseCustomAsync" disabled="@(!loaded)" title="A tile server of your own, or a commercial one with your key, by its URL" data-testid="map-tiles-custom">Custom URL</button>
+                <button type="button" class="btn btn-sm @(IsGoogleChosen ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(IsGoogleChosen ? "true" : "false")" @onclick="UseGoogleAsync" disabled="@(!loaded)" title="Google's own map, from its Map Tiles API, with your Google key" data-testid="map-tiles-google">Google Maps</button>
+            </div>
+        </div>
+
+        @if (IsGoogleChosen)
+        {
+            <div class="gdbv-ai-settings-title d-flex"><i class="bi bi-layers" aria-hidden="true"></i>Kind of map</div>
+            <div class="d-flex flex-wrap gap-1" data-testid="map-tiles-google-types">
+                @foreach (var kind in GoogleMapTiles.MapTypes)
+                {
+                    var type = kind.Type;
+                    var chosen = mapType == type;
+                    <button type="button" class="btn btn-sm @(chosen ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(chosen ? "true" : "false")" @onclick="() => ChooseMapTypeAsync(type)" disabled="@(!loaded)" data-testid="map-tiles-google-type">@kind.Name</button>
+                }
+            </div>
+        }
+        else if (!IsBuiltInChosen)
+        {
+            @* A free server's URL is shown too, to start a URL of one's own from: edited, it is one. *@
+            <label class="gdbv-ai-settings-title d-flex" for="map-tiles-url"><i class="bi bi-link-45deg" aria-hidden="true"></i>Tile server URL</label>
+            <input id="map-tiles-url" class="form-control form-control-sm font-monospace" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="https://tile.example.org/{z}/{x}/{y}.png" value="@url" @oninput="UrlTyped" @onchange="e => SaveUrlAsync(e)" disabled="@(!loaded)" data-testid="map-tiles-url" />
+        }
+
+        @* The key right under the URL it goes into, and what both take explained below them (2026-11-06, the user), for a URL of
+           one's own and for Google: a free server needs none. What Key is for is said on hovering it (2026-11-05). No
+           Attribution box: the credit shows on the map, a free server's own or a server of one's own named by its address
+           (2026-11-06, the user). *@
+        @if (IsCustomChosen || IsGoogleChosen)
+        {
+            <label class="gdbv-ai-settings-title d-flex mt-3" for="map-tiles-key"><span class="d-inline-flex align-items-center" style="gap: 0.45rem; cursor: help;" title="@KeyHelp" data-testid="map-tiles-key-help"><i class="bi bi-key" aria-hidden="true"></i>Key</span></label>
+            <input id="map-tiles-key" class="form-control form-control-sm font-monospace" type="password" autocomplete="off" style="max-width: 28em;" title="@KeyHelp"
+                   placeholder="@KeyPlaceholder" value="@typedKey" @oninput="e => typedKey = e.Value?.ToString()" @onchange="e => SaveKeyAsync(e)" disabled="@(!loaded)" data-testid="map-tiles-key" />
+        }
+
+        @if (IsGoogleChosen)
+        {
+            @* What Google asks of whoever draws its tiles, read from its pages on 2026-11-07. *@
+            <div class="gdbv-text-xs form-text mt-2" data-testid="map-tiles-google-help">
+                Google's own map, from its Map Tiles API: the key comes from a Google Cloud project with billing and the Map Tiles
+                API turned on. Google bills by the tile, past its free monthly use, and asks that the key be restricted to this
+                site's address and to the Map Tiles API. Its logo and copyright show on the map while its tiles are drawn, as its
+                terms require.
+            </div>
+        }
+        else if (IsCustomChosen)
+        {
+            <div class="gdbv-text-xs form-text mt-2">
+                {z}, {x} and {y} stand for the tile's zoom, column and row ({-y} for a server that counts rows from the south),
+                {s} for a subdomain (a, b or c) and {key} for the key above. For example
+                <span class="font-monospace">https://tile.openstreetmap.org/{z}/{x}/{y}.png</span>, or
+                <span class="font-monospace">https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key={key}</span>.
+                The server has to allow other sites to read its tiles (CORS), as public tile servers do.
+            </div>
+
+            @if (MapTilesPreference.IsPlainHttp(url))
+            {
+                <div class="alert alert-warning small py-2 mt-2 mb-0" data-testid="map-tiles-http">
+                    <i class="bi bi-unlock me-1" aria-hidden="true"></i>Plain http: the tiles, and a key in them, travel unencrypted, and a
+                    browser showing this page over https may refuse them. Prefer https. A kept key is forgotten when the URL drops to
+                    http, unless you type it again.
+                </div>
+            }
+        }
+
+        @* Whether the views keep the tiles they have drawn (2026-11-07, the user): on by default; off, they keep only what is on
+           screen and let go of the rest at once. Kept as it is flipped, for every server and Google alike. *@
+        <div class="form-check form-switch mt-3 mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="map-tiles-keep" checked="@kept.KeepInMemory" @onchange="KeepInMemoryAsync" disabled="@(!loaded)" data-testid="map-tiles-keep" />
+            <label class="form-check-label small" for="map-tiles-keep">Keep tiles in memory</label>
+        </div>
+        <div class="gdbv-text-xs form-text mt-1">
+            The Map and the Globe keep up to 600 of the tiles they have drawn, so going back over the earth asks for none of
+            them again. Off, they keep only the tiles on screen and let go of the rest at once. The browser's own cache keeps
+            tiles as long as each server's headers allow, which this does not change.
+        </div>
+
+        @* No Save: each box is kept as it is left, or on Enter, and what is still unsaved on closing (2026-11-05, the user). *@
+        @if (problem != null)
+        {
+            <div class="alert alert-danger small py-2 mt-3 mb-0" role="alert" data-testid="map-tiles-problem">@problem</div>
+        }
+    </div>
+
+    @* Which geocoder finds a place from its words, for Find a place, Find coordinates and the address fields: set here and
+       nowhere else, and kept (2026-11-06, the user). Nothing is sent from here; a lookup is only ever someone pressing its button. *@
+    <div class="border rounded p-3 mt-3" data-testid="map-geocoder-card">
+        <div class="fw-semibold mb-2 d-flex align-items-center gap-2"><i class="bi bi-search" aria-hidden="true"></i>Address search</div>
+        <p class="small mb-3">
+            Find a place, Find coordinates and the address fields look places up from their words with a geocoder, only when
+            their button is pressed. OpenStreetMap's own is the default; a Nominatim of your own, or a Photon, keeps the words
+            off OpenStreetMap's servers.
+        </p>
+
+        <div class="mb-3" data-testid="map-geocoder-presets">
+            <div class="gdbv-text-xs form-text mt-0 mb-1">A free geocoder that needs no key:</div>
+            <div class="d-flex flex-wrap gap-1">
+                @foreach (var preset in GeocoderPreference.FreeServers)
+                {
+                    var p = preset;
+                    var chosen = keptGeocoder == p.Url;
+                    <button type="button" class="btn btn-sm @(chosen ? "btn-secondary" : "btn-outline-secondary")" aria-pressed="@(chosen ? "true" : "false")" @onclick="() => UseGeocoderAsync(p.Url)" disabled="@(!loaded)" title="@p.About" data-testid="map-geocoder-preset">@p.Name</button>
+                }
+            </div>
+        </div>
+
+        <label class="gdbv-ai-settings-title d-flex" for="map-geocoder-url"><i class="bi bi-link-45deg" aria-hidden="true"></i>Geocoder URL</label>
+        <input id="map-geocoder-url" class="form-control form-control-sm font-monospace" type="text" spellcheck="false" autocomplete="off"
+               placeholder="OpenStreetMap's own, the default" value="@geocoder" @oninput="e => geocoder = e.Value?.ToString()" @onchange="e => SaveGeocoderAsync(e)" disabled="@(!loaded)" data-testid="map-geocoder-url" />
+        <div class="gdbv-text-xs form-text">
+            A Nominatim search (its /search) or a Photon one (its /api). Empty puts OpenStreetMap's own back.
+        </div>
+
+        @if (geocoderProblem != null)
+        {
+            <div class="alert alert-danger small py-2 mt-2 mb-0" role="alert" data-testid="map-geocoder-problem">@geocoderProblem</div>
+        }
+    </div>
+
+</FloatingDialog>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    //What is kept, and what the boxes hold now. The key box starts empty whatever is kept: a kept key is never drawn back.
+    private MapTileSettings kept = new();
+    private string url = "";
+    private string typedKey = "";
+    private string problem;
+    private bool wasVisible;
+
+    //Which source is pressed: the built-in map, a free server by its URL, a URL of one's own, or Google; and Google's kind of
+    //map. What is drawn from when the dialog opens, until another is pressed.
+    private const string BuiltInSource = "builtin";
+    private const string CustomSource = "custom";
+    private string source = BuiltInSource;
+    private string mapType = GoogleMapTiles.DefaultMapType;
+
+    private bool IsBuiltInChosen => source == BuiltInSource;
+    private bool IsCustomChosen => source == CustomSource;
+    private bool IsGoogleChosen => source == MapTilesPreference.Google;
+
+    ///<summary>The source a setting draws from: the built-in map when it draws from none, Google, a free server, or a URL of one's own.</summary>
+    private static string SourceOf(MapTileSettings settings)
+    {
+        if (!settings.IsOn)
+            return BuiltInSource;
+        else if (settings.IsGoogle)
+            return MapTilesPreference.Google;
+
+        if (MapTilesPreference.FreeServers.Any(p => p.Url == settings.Url))
+            return settings.Url;
+
+        return CustomSource;
+    }
+
+    //Whether what is kept has been read. Until it has, nothing can be typed or saved: the read arriving would put the
+    //kept URL over what was typed meanwhile, and Save would then keep that instead (found by the walk, 2026-11-05).
+    private bool loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        //Each opening starts from what is kept, so a half-typed URL closed without saving is not what the next opening shows.
+        var opening = Visible && !wasVisible;
+
+        wasVisible = Visible;
+
+        if (opening)
+        {
+            loaded = false;
+            kept = await Shell.MapTiles.GetAsync();
+            url = kept.Url;
+            typedKey = "";
+            problem = null;
+            source = SourceOf(kept);
+            mapType = GoogleMapTiles.DefaultMapType;
+
+            if (kept.IsGoogle)
+                mapType = kept.MapType;
+
+            keptGeocoder = await Shell.Geocoder.GetAsync();
+            geocoder = GeocoderShown(keptGeocoder);
+            geocoderProblem = null;
+            loaded = true;
+        }
+    }
+
+    //The geocoder kept, and what its box holds: empty for OpenStreetMap's own, which the placeholder names.
+    private string keptGeocoder = Geocoding.DefaultEndpoint;
+    private string geocoder = "";
+    private string geocoderProblem;
+
+    private static string GeocoderShown(string endpoint)
+    {
+        if (endpoint == Geocoding.DefaultEndpoint)
+            return "";
+
+        return endpoint;
+    }
+
+    private Task SaveGeocoderAsync(ChangeEventArgs e)
+    {
+        return UseGeocoderAsync(e.Value?.ToString() ?? "");
+    }
+
+    //Kept as the box is left, or a free one chosen; a URL that cannot be asked stays as typed, to be put right.
+    private async Task UseGeocoderAsync(string endpoint)
+    {
+        if (!loaded)
+            return;
+
+        geocoder = endpoint;
+        geocoderProblem = await Shell.Geocoder.SetAsync(endpoint);
+
+        if (geocoderProblem != null)
+            return;
+
+        keptGeocoder = await Shell.Geocoder.GetAsync();
+        geocoder = GeocoderShown(keptGeocoder);
+    }
+
+    ///<summary>
+    ///Key's tooltip: what it is for, where it and the URL are kept, and the providers' terms, which stood in a note at the
+    ///dialog's foot until the user had it here (2026-11-05).
+    ///</summary>
+    private string KeyHelp
+    {
+        get
+        {
+            var where = "The URL and the key are kept in this browser, and the key is sent only to the tile server.";
+
+            if (!string.IsNullOrEmpty(HostOptions.WhereAiKeysAreKept))
+                where = "The URL and the key are kept in your account's workspace on this server, where the AI keys are, and the key is sent only to the tile server.";
+
+            return $@"Only for a provider that wants one; it goes where the URL says {{key}}.
+
+{where} Each provider's terms apply to its tiles: OpenStreetMap's own servers are for light use and ask for their credit to show, and commercial providers bill by the tile.";
+        }
+    }
+
+    private string KeyPlaceholder
+    {
+        get
+        {
+            if (KeyKeptHere)
+                return "A key is kept: type to replace it";
+            else if (IsGoogleChosen)
+                return "Your Google Maps Platform API key";
+
+            return "No key";
+        }
+    }
+
+    //Whether the key kept is the one the chosen kind of server would use: Google's is never sent to a URL, nor a URL's to Google.
+    private bool KeyKeptHere => !string.IsNullOrEmpty(kept.Key) && kept.IsGoogle == IsGoogleChosen;
+
+    //Whether a box holds something not yet kept. The built-in map shows none.
+    private bool Unsaved
+    {
+        get
+        {
+            if (IsGoogleChosen)
+                return !string.IsNullOrEmpty(typedKey);
+            else if (IsBuiltInChosen)
+                return false;
+
+            return url != kept.Url || !string.IsNullOrEmpty(typedKey);
+        }
+    }
+
+    private bool GeocoderUnsaved => geocoder != GeocoderShown(keptGeocoder);
+
+    private Task SaveUrlAsync(ChangeEventArgs e)
+    {
+        url = e.Value?.ToString() ?? "";
+
+        return SaveAsync();
+    }
+
+    private Task SaveKeyAsync(ChangeEventArgs e)
+    {
+        typedKey = e.Value?.ToString() ?? "";
+
+        return SaveChosenAsync();
+    }
+
+    private Task SaveChosenAsync()
+    {
+        if (IsGoogleChosen)
+            return SaveGoogleAsync();
+
+        return SaveAsync();
+    }
+
+    //A free server's URL edited is a URL of one's own.
+    private void UrlTyped(ChangeEventArgs e)
+    {
+        url = e.Value?.ToString();
+
+        if (url != source)
+            source = CustomSource;
+    }
+
+    //A URL of one's own pressed: its boxes, holding the URL kept, drawn from again if the built-in map was chosen over it.
+    //Google's setting has no URL, and its key is not a URL's, so the boxes start empty over it and nothing is drawn yet.
+    private async Task UseCustomAsync()
+    {
+        source = CustomSource;
+        typedKey = "";
+        problem = null;
+        url = kept.Url;
+
+        if (!kept.IsGoogle)
+            await DrawKeptAsync();
+    }
+
+    //Google pressed: its kind of map and key, and Google drawn from again if it is kept with its key behind the built-in map.
+    //A URL's server kept is not Google's, and is not drawn from for it.
+    private async Task UseGoogleAsync()
+    {
+        source = MapTilesPreference.Google;
+        typedKey = "";
+        problem = null;
+
+        if (kept.IsGoogle)
+            await DrawKeptAsync();
+    }
+
+    //The server kept drawn from, the built-in map chosen over it turned off (which does nothing with no server kept).
+    private async Task DrawKeptAsync()
+    {
+        await Shell.MapTiles.SetBuiltInAsync(false);
+        kept = await Shell.MapTiles.GetAsync();
+    }
+
+    private Task ChooseMapTypeAsync(string type)
+    {
+        mapType = type;
+
+        return SaveGoogleAsync();
+    }
+
+    ///<summary>
+    ///Keeps Google with the kind of map chosen and the key typed, or the one Google had, and draws from it, as choosing a free
+    ///server does; or says why it cannot, a key not given yet.
+    ///</summary>
+    private async Task SaveGoogleAsync()
+    {
+        if (!loaded)
+            return;
+
+        string key = null;
+
+        if (!string.IsNullOrEmpty(typedKey))
+            key = typedKey;
+
+        problem = await Shell.MapTiles.SetGoogleAsync(mapType, key);
+
+        if (problem != null)
+            return;
+
+        await Shell.MapTiles.SetBuiltInAsync(false);
+        kept = await Shell.MapTiles.GetAsync();
+        typedKey = "";
+    }
+
+    ///<summary>
+    ///Keeps the boxes as they stand and draws from them, or says why it cannot, leaving them as typed to be put right. A URL
+    ///that wants a key is refused until the key is given, and kept when it is. An empty URL forgets the server, and the
+    ///built-in map is drawn. Saved, the source pressed is the one drawn from: a free server's URL typed is that server.
+    ///</summary>
+    private async Task SaveAsync()
+    {
+        if (!loaded)
+            return;
+
+        string key = null;
+
+        if (!string.IsNullOrEmpty(typedKey))
+            key = typedKey;
+
+        problem = await Shell.MapTiles.SetAsync(url, key);
+
+        if (problem != null)
+            return;
+
+        kept = await Shell.MapTiles.GetAsync();
+        await DrawKeptAsync();
+        url = kept.Url;
+        typedKey = "";
+        source = SourceOf(kept);
+    }
+
+    //A free server pressed: its URL in the box, kept, and drawn from.
+    private Task UsePresetAsync(MapTilePreset preset)
+    {
+        url = preset.Url;
+        typedKey = "";
+
+        return SaveAsync();
+    }
+
+    private async Task KeepInMemoryAsync(ChangeEventArgs e)
+    {
+        if (!loaded)
+            return;
+
+        await Shell.MapTiles.SetKeepInMemoryAsync(e.Value is true);
+        kept = await Shell.MapTiles.GetAsync();
+    }
+
+    //The built-in map pressed: drawn, the server kept for later. What was typed and not kept is not saved on closing
+    //(Unsaved), and Custom URL shows the kept URL again.
+    private async Task UseBuiltInAsync()
+    {
+        source = BuiltInSource;
+        problem = null;
+
+        await Shell.MapTiles.SetBuiltInAsync(true);
+        kept = await Shell.MapTiles.GetAsync();
+    }
+
+    //Closed with a box still unsaved, by the cross or Escape before the box was left, it is kept as leaving it would.
+    private async Task CloseAsync()
+    {
+        if (loaded && Unsaved)
+            await SaveChosenAsync();
+
+        if (loaded && GeocoderUnsaved)
+            await UseGeocoderAsync(geocoder);
+
+        await OnClose.InvokeAsync();
+    }
+}

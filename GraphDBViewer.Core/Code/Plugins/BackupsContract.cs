@@ -11,11 +11,22 @@ public static class BackupsContract
     ///<summary>GET: the destination's state, the setting, and the backups it holds. Answers <see cref="BackupsState"/>.</summary>
     public const string StatePath = "api/backups/state";
 
-    ///<summary>POST: take one now. Answers <see cref="BackupResult"/> — the manifest, or the sentence saying why not.</summary>
+    ///<summary>
+    ///POST: take one now. <strong>Starts a run on the server and answers at once</strong> with the
+    ///<see cref="BackupJobState"/> that has begun — it does not wait for it. A backup of a real catalog
+    ///takes longer than a browser will hold a request open, which is what made this a job rather than an
+    ///answer (specs/research/backup-restore-2026-09-15.md, finding 3).
+    ///</summary>
     public const string TakePath = "api/backups/take";
 
-    ///<summary>POST: restore one, named in <see cref="BackupRestoreRequest"/>. Answers <see cref="BackupResult"/>.</summary>
+    ///<summary>POST: restore one, named in <see cref="BackupRestoreRequest"/>. Starts a run and answers the <see cref="BackupJobState"/>.</summary>
     public const string RestorePath = "api/backups/restore";
+
+    ///<summary>GET: what the run on this server is doing, or what the last one did. Answers <see cref="BackupJobState"/>.</summary>
+    public const string JobPath = "api/backups/job";
+
+    ///<summary>POST: ask the run to stop. It stops where it is and says so; nothing is undone.</summary>
+    public const string StopPath = "api/backups/stop";
 
     ///<summary>PUT: the destination and the schedule, as <see cref="BackupSettings"/>. GET is part of the state.</summary>
     public const string SettingsPath = "api/backups/settings";
@@ -25,6 +36,19 @@ public static class BackupsContract
 
     ///<summary>Where the last backup's fact lives — read by the page and by the purge, written only when one finished.</summary>
     public const string LatestKey = "instance:backups:latest";
+
+    ///<summary>
+    ///Where the last run's record lives — written when one starts and again when it ends, so a server that
+    ///stopped in the middle of a restore leaves the fact behind it rather than an unexplained graph.
+    ///</summary>
+    public const string JobKey = "instance:backups:job";
+
+    ///<summary>A run is taking a backup, or putting one back.</summary>
+    public const string JobTake = "take";
+    public const string JobRestore = "restore";
+
+    ///<summary>How often the page asks a running job what it is doing. A run is minutes long; a second is plenty.</summary>
+    public const int JobPollMs = 1000;
 
     ///<summary>Taking a backup, and restoring one: whoever may take one may need the other on the same day (question 5).</summary>
     public const string PermissionTake = "backups.take";
@@ -79,6 +103,29 @@ public static class BackupsContract
             return "The window is between an hour and a year.";
 
         return null;
+    }
+
+    ///<summary>
+    ///Whether an S3 endpoint is dialed with TLS: anything but an http address is, a bare host included, which the
+    ///client dials with https.
+    ///</summary>
+    public static bool IsEncrypted(string endpoint)
+    {
+        return !(endpoint ?? "").Trim().StartsWith("http:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    ///<summary>
+    ///Whether a save of <paramref name="given"/> over <paramref name="stored"/> forgets the secret key kept for it: when it
+    ///takes the endpoint from one with TLS to one without and gives no secret of its own. The user's rule of 2026-10-03:
+    ///a stored secret is never sent in plain text without somebody entering it again, and plain stays a choice, so a
+    ///save that types the secret keeps it for http too. The server forgets by this, and the page says so before the save.
+    ///</summary>
+    public static bool ForgetsSecret(BackupSettings stored, BackupSettings given)
+    {
+        if (stored == null || given == null || !string.IsNullOrEmpty(given.SecretKey))
+            return false;
+
+        return IsEncrypted(stored.Endpoint) && !IsEncrypted(given.Endpoint);
     }
 }
 
@@ -172,9 +219,83 @@ public sealed class BackupsState
 
     ///<summary>What the last scheduled run did, on this server. Null until one has.</summary>
     public string LastScheduled { get; set; }
+
+    ///<summary>The run going on now, or the last one there was. Null when this instance has never had one.</summary>
+    public BackupJobState Job { get; set; }
 }
 
-///<summary>Taking one or putting one back: what happened, or the sentence saying why nothing did.</summary>
+///<summary>
+///A run of the backup or the restore: what it is, who started it, and how far it has got. This is what
+///makes either of them possible on a real catalog — the work happens on the server and the page watches
+///it, rather than the work being a request the browser holds open and gives up on after 100 seconds.
+///
+///<strong>The counts are what has been done, not what is left.</strong> Neither a backup nor a restore
+///knows its own total until it has read the graph, and a percentage invented before then would be a
+///guess dressed as a measurement.
+///</summary>
+public sealed class BackupJobState
+{
+    ///<summary><see cref="BackupsContract.JobTake"/> or <see cref="BackupsContract.JobRestore"/>.</summary>
+    public string Kind { get; set; } = "";
+
+    ///<summary>The backup being put back, on a restore.</summary>
+    public string Stamp { get; set; }
+
+    ///<summary>Who started it, or "the schedule".</summary>
+    public string By { get; set; } = "";
+
+    public DateTimeOffset StartedAt { get; set; }
+
+    ///<summary>When it ended. Null while it is still going.</summary>
+    public DateTimeOffset? FinishedAt { get; set; }
+
+    public bool Running { get; set; }
+
+    ///<summary>
+    ///What it is doing, in the words the page shows: emptying the graph, writing vertices, reading it
+    ///back. The server writes the whole sentence — including the numbers an emptying has, which are its
+    ///rounds rather than its vertices, because counting the graph after every round was most of what
+    ///emptying cost until that was taken out (the restore research, finding 2).
+    ///</summary>
+    public string Phase { get; set; } = "";
+
+    public long Vertices { get; set; }
+
+    public long Edges { get; set; }
+
+    ///<summary>Elements the restore would not write, counted. The first few are named in <see cref="Refused"/>.</summary>
+    public long RefusedCount { get; set; }
+
+    public List<string> Refused { get; set; } = new();
+
+    ///<summary>True when it finished having done what it set out to do. Meaningless while <see cref="Running"/>.</summary>
+    public bool Ok { get; set; }
+
+    ///<summary>Why it did not, when it did not.</summary>
+    public string Error { get; set; }
+
+    ///<summary>True when somebody asked it to stop. It stopped where it was; nothing was undone.</summary>
+    public bool Stopped { get; set; }
+
+    ///<summary>
+    ///True when the record says a run was going and this server is not the one that was running it — so
+    ///the app was restarted or stopped in the middle of one. A restore interrupted this way leaves a graph
+    ///that is part of a backup, and this is the only thing that says so.
+    ///</summary>
+    public bool Interrupted { get; set; }
+
+    ///<summary>The stamp of the backup a take produced, once it has one.</summary>
+    public string Produced { get; set; }
+}
+
+///<summary>
+///Taking one or putting one back: what happened, or the sentence saying why nothing did.
+///
+///<strong>This one no longer crosses the wire.</strong> Since both became runs on the server (2026-09-16)
+///it is what the runner hands back to the run, and <see cref="BackupJobState"/> is what a browser sees.
+///It stays here beside the rest of the backups vocabulary rather than moving to the host, because it is
+///the shape the manifest and the counts are written in and those are the contract.
+///</summary>
 public sealed class BackupResult
 {
     public bool Ok { get; set; }

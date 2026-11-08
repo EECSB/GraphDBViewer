@@ -1,5 +1,5 @@
 //Browser-direct Bolt for Neo4j / Memgraph, over the vendored neo4j-driver (window.neo4j, Bolt over
-//WebSocket). Neo4jBrowserDb.cs drives this: run(handle, config, query) returns the same records envelope
+//WebSocket). Neo4jBrowserDb.cs drives this: run(handle, config, query, readOnly) returns the same records envelope
 //Neo4jServerDb builds on the host, so the record→graph mapping lives once, in C#'s Neo4jConverter. One
 //driver is kept per handle so a bulk commit reuses a single WebSocket instead of dialing per query.
 window.neo4jInterop = (function () {
@@ -61,11 +61,9 @@ window.neo4jInterop = (function () {
 
         if (neo4j.isNode(value))
             return nodeObject(value);
-
-        if (neo4j.isRelationship(value))
+        else if (neo4j.isRelationship(value))
             return relObject(value);
-
-        if (neo4j.isPath(value)) {
+        else if (neo4j.isPath(value)) {
             const nodes = [nodeObject(value.start)];
             const rels = [];
 
@@ -105,7 +103,11 @@ window.neo4jInterop = (function () {
         //Neo4j reports an operator's time in nanoseconds, under an argument whose casing varies by version.
         let timeMs = null;
         const args = plan.arguments || {};
-        const rawTime = args.Time !== undefined ? args.Time : args.time;
+        let rawTime;
+        if (args.Time !== undefined)
+            rawTime = args.Time;
+        else
+            rawTime = args.time;
 
         if (rawTime !== undefined && rawTime !== null && !isNaN(Number(rawTime)))
             timeMs = Number(rawTime) / 1000000;
@@ -118,9 +120,8 @@ window.neo4jInterop = (function () {
             'runtime-version', 'version', 'Memory', 'GlobalMemory', 'Id', 'string-representation', 'Cypher'];
 
         let detailText;
-        if (args.Details !== undefined && args.Details !== null) {
+        if (args.Details !== undefined && args.Details !== null)
             detailText = String(args.Details);
-        }
         else {
             const details = [];
 
@@ -136,15 +137,23 @@ window.neo4jInterop = (function () {
         if (detailText.length > 200)
             detailText = detailText.substring(0, 200) + '…';
 
-        //EXPLAIN never ran the query, so only a profiled plan has anything measured to report.
-        rows.push({
+        const row = {
             depth: depth,
             operator: plan.operatorType,
-            rows: profiled ? Number(plan.rows) : null,
-            dbHits: profiled ? Number(plan.dbHits) : null,
-            timeMs: profiled ? timeMs : null,
+            rows: null,
+            dbHits: null,
+            timeMs: null,
             details: detailText
-        });
+        };
+
+        //EXPLAIN never ran the query, so only a profiled plan has anything measured to report.
+        if (profiled) {
+            row.rows = Number(plan.rows);
+            row.dbHits = Number(plan.dbHits);
+            row.timeMs = timeMs;
+        }
+
+        rows.push(row);
 
         for (const child of plan.children || [])
             planRows(child, depth + 1, rows, profiled);
@@ -171,16 +180,22 @@ window.neo4jInterop = (function () {
         });
     }
 
-    async function run(handle, config, query) {
+    async function run(handle, config, query, readOnly) {
         let session;
 
         try {
             const entry = driverFor(handle, config);
+            const options = {};
 
             if (entry.database)
-                session = entry.driver.session({ database: entry.database });
-            else
-                session = entry.driver.session();
+                options.database = entry.database;
+
+            //Ask AI's read tool asks for a READ session, which Neo4j will not write in whatever the query says:
+            //the hold that is left where the guard in front of the tool misreads a query.
+            if (readOnly)
+                options.defaultAccessMode = 'READ';
+
+            session = entry.driver.session(options);
 
             const result = await session.run(query);
 
@@ -213,12 +228,11 @@ window.neo4jInterop = (function () {
             return JSON.stringify({ error: message });
         }
         finally {
-            if (session) {
+            if (session)
                 try {
                     await session.close();
                 }
                 catch (e) { }
-            }
         }
     }
 

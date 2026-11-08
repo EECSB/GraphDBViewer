@@ -12,8 +12,8 @@
     <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);" @onmousedown="() => backdropMouseDown = true" @onclick="CloseFromBackdrop" data-testid="asset-picker">
         <div class="modal-dialog modal-xl" style="margin-top: 3rem;" @onmousedown="() => backdropMouseDown = false" @onmousedown:stopPropagation="true" @onclick:stopPropagation="true">
             <div class="modal-content">
-                <div class="modal-header py-2">
-                    <h5 class="modal-title" style="font-size: 1rem;">Choose @KindNoun() from the @source.Name</h5>
+                <div class="modal-header gdbv-popup-bar">
+                    <h5 class="modal-title gdbv-popup-title"><i class="bi bi-images gdbv-title-icon" aria-hidden="true"></i>Choose @KindNoun() from the @source.Name</h5>
                     <button type="button" class="btn-close" aria-label="Close" @onclick="CloseAsync"></button>
                 </div>
 
@@ -94,7 +94,7 @@
                                     <div class="d-flex flex-wrap gap-2">
                                         @foreach (var item in result.Items)
                                         {
-                                            <button type="button" class="asset-pick @(selected?.Url == item.Url ? "asset-pick-selected" : "")" title="@item.Name — @item.MediaType, @Human(item.Size)" @onclick="() => selected = item" @ondblclick="() => UseAsync(item)" data-testid="asset-picker-item" data-url="@item.Url">
+                                            <button type="button" class="asset-pick @(selected?.Url == item.Url ? "asset-pick-selected" : "")" title="@item.Name — @item.MediaType, @ByteSizes.Human(item.Size)" @onclick="() => selected = item" @ondblclick="() => UseAsync(item)" data-testid="asset-picker-item" data-url="@item.Url">
                                                 <div class="asset-pick-thumb">
                                                     @if (item.IsImage)
                                                     {
@@ -121,8 +121,20 @@
                 </div>
 
                 <div class="modal-footer py-2">
+                    @if (Offered)
+                    {
+                        <label class="btn btn-outline-secondary btn-sm mb-0 @(uploading ? "disabled" : "")" title="Send a file from this computer into @WhereUploadsGo()" data-testid="asset-picker-upload">
+                            @(uploading ? "Uploading…" : "Upload a file")
+                            <InputFile class="d-none" accept="@Accept()" OnChange="UploadAsync" disabled="@uploading" />
+                        </label>
+                    }
+
                     <span class="me-auto text-body-secondary text-truncate" style="font-size: .8rem;" data-testid="asset-picker-selected">
-                        @if (selected != null)
+                        @if (!string.IsNullOrEmpty(uploadProblem))
+                        {
+                            <span class="text-danger" data-testid="asset-picker-upload-problem">@uploadProblem</span>
+                        }
+                        else if (selected != null)
                         {
                             <text>@selected.Name</text>
                         }
@@ -157,6 +169,24 @@
 
     [Parameter] public EventCallback OnClose { get; set; }
 
+    ///<summary>Where to open when the field holds nothing of the source's, and where an upload lands from Everything (2026-09-30).</summary>
+    [Parameter] public string Folder { get; set; }
+
+    ///<summary>Whether the picker offers Upload, as the field that opens it says; a private field names a private folder instead of turning it off.</summary>
+    [Parameter] public bool Uploads { get; set; } = true;
+
+    ///<summary>
+    ///Whether the field is private: the folder it names is one the source keeps private, and an upload goes nowhere
+    ///outside it, wherever the picker is looking (2026-10-03).
+    ///</summary>
+    [Parameter] public bool Private { get; set; }
+
+    ///<summary>Who is signed in, cascaded by the layout: whether they may upload.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private bool uploading;
+    private string uploadProblem;
+
     private IAssetSource source;
     private AssetBrowseResult result;
     private AssetLookup lookup;
@@ -187,9 +217,7 @@
             await OpenAsync();
         }
         else if (!Visible)
-        {
             wasVisible = false;
-        }
     }
 
     private async Task OpenAsync()
@@ -203,11 +231,15 @@
         folder = null;
         filter = "";
         tag = "";
+        uploadProblem = null;
+
+        //A field that names a folder opens there, unless what it holds is somewhere else (below).
+        if (!string.IsNullOrEmpty(Folder))
+            folder = Folder;
 
         //The URL already in the field first: found means its folder is where to start, and it is
         //selected; an empty field has nothing to say.
         if (!string.IsNullOrWhiteSpace(CurrentUrl))
-        {
             try
             {
                 lookup = await source.LookupAsync(CurrentUrl, CancellationToken.None);
@@ -216,7 +248,6 @@
             {
                 lookup = new AssetLookup { State = AssetLookupState.Unavailable, Message = ex.Message };
             }
-        }
 
         if (lookup != null && lookup.State == AssetLookupState.Found && lookup.Item != null)
         {
@@ -304,12 +335,95 @@
         backdropMouseDown = false;
     }
 
+    private bool Offered
+    {
+        get
+        {
+            if (!Uploads)
+                return false;
+
+            return AssetUploads.MayUpload(source, Account);
+        }
+    }
+
+    ///<summary>
+    ///The folder being looked at, or the field's own when that is Everything. A private field's file goes into its
+    ///own folder, or the one being looked at when that is inside it and so as private, and never anywhere else: until
+    ///2026-10-03 it went wherever the picker was looking, the top level included, out of reach of the permission the
+    ///field's files are kept behind.
+    ///</summary>
+    private string UploadFolder()
+    {
+        var own = Folder ?? "";
+
+        if (Private && !IsInside(folder, own))
+            return own;
+
+        if (folder != null)
+            return folder;
+
+        return own;
+    }
+
+    ///<summary>Whether a folder is <paramref name="parent"/> itself or one inside it; Everything, null, is inside none.</summary>
+    private static bool IsInside(string path, string parent)
+    {
+        if (path == null)
+            return false;
+
+        return path == parent || path.StartsWith(parent + "/", StringComparison.Ordinal);
+    }
+
+    private string WhereUploadsGo()
+    {
+        var into = UploadFolder();
+
+        if (into.Length == 0)
+            return "the top level";
+
+        return into;
+    }
+
+    private string Accept()
+    {
+        if (Kind == AssetKinds.Image)
+            return "image/*";
+
+        return null;
+    }
+
+    ///<summary>A file from this computer, into the folder being looked at (UploadFolder), and then selected there to be used.</summary>
+    private async Task UploadAsync(InputFileChangeEventArgs e)
+    {
+        uploading = true;
+        uploadProblem = null;
+
+        try
+        {
+            var into = UploadFolder();
+
+            uploadProblem = await AssetUploads.SendAsync(source, e.File, into, async item =>
+            {
+                folder = item.Folder ?? into;
+                filter = "";
+                tag = "";
+
+                await BrowseAsync();
+
+                selected = result?.Items.FirstOrDefault(i => i.Url == item.Url) ?? item;
+            });
+        }
+        finally
+        {
+            uploading = false;
+        }
+    }
+
     private string KindNoun()
     {
         if (Kind == "image")
             return "an image";
-
-        if (Kind == "model")
+        else if (Kind == "model")
             return "a 3D model";
 
         return "an asset";
@@ -324,16 +438,5 @@
             return "file";
 
         return name.Substring(dot + 1);
-    }
-
-    private static string Human(long bytes)
-    {
-        if (bytes < 1024)
-            return bytes + " B";
-
-        if (bytes < 1024 * 1024)
-            return (bytes / 1024.0).ToString("0.#", CultureInfo.InvariantCulture) + " KB";
-
-        return (bytes / (1024.0 * 1024)).ToString("0.#", CultureInfo.InvariantCulture) + " MB";
     }
 }

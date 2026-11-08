@@ -1,0 +1,191 @@
+@using System.Text.Json
+@using GraphDBViewerWeb.Code
+@inject IAppStorage Storage
+
+@* A graph the model proposed in Ask AI (2026-11-02), as its card: what using it would do in the mode chosen, every repair and
+   fold said, the script it stages, and Use. It never draws, stages or commits anything itself: the page does what Use
+   means, and committing stays the Commit button's. What the generation window was between the answer and Use. *@
+
+<div class="gdbv-ai-graph" data-testid="kg-proposal">
+    @if (read.IsError)
+    {
+        <div class="gdbv-ai-card-note">@read.Error</div>
+    }
+    else
+    {
+        <div class="gdbv-ai-graph-counts">
+            <span class="fw-semibold" data-testid="kg-counts">@preview.Counts</span>
+
+            @if (!string.IsNullOrEmpty(preview.Labels))
+            {
+                <span class="text-body-secondary small" data-testid="kg-labels">@preview.Labels</span>
+            }
+        </div>
+
+        @if (preview.Warnings.Count > 0)
+        {
+            <div class="gdbv-ai-graph-warnings" data-testid="kg-warnings">
+                @foreach (var warning in preview.Warnings)
+                {
+                    <div>@warning</div>
+                }
+            </div>
+        }
+
+        @if (preview.Error != null)
+        {
+            <div class="gdbv-ai-code-refused small" data-testid="kg-error">@preview.Error</div>
+        }
+        else if (preview.Script.Length == 0)
+        {
+            <div class="gdbv-ai-card-note" data-testid="kg-nothing-new">Nothing new: everything in it is already on the canvas.</div>
+        }
+        else
+        {
+            <pre class="gdbv-ai-code gdbv-ai-graph-script" data-testid="kg-script">@preview.Script</pre>
+        }
+
+        <div class="gdbv-ai-card-buttons">
+            @if (CanMerge)
+            {
+                <div class="btn-group btn-group-sm" role="group" aria-label="Merge or replace">
+                    <button type="button" class="btn @(Merging ? "btn-outline-danger" : "btn-danger")" data-testid="kg-replace" @onclick="() => SetModeAsync(false)" title="Using it wipes the drawing and puts this in its place. It asks first when you have staged changes.">Replace drawing</button>
+                    <button type="button" class="btn @(Merging ? "btn-primary" : "btn-outline-primary")" data-testid="kg-merge" @onclick="() => SetModeAsync(true)" title="Using it adds this onto the drawing, folding in entities that are already there.">Merge into drawing</button>
+                </div>
+            }
+
+            <label class="form-check form-check-inline small mb-0" title="Drop entities that ended up with no relationships at all, usually mentioned once in passing.">
+                <input class="form-check-input" type="checkbox" data-testid="kg-orphans" @bind="dropOrphans" @bind:after="Recompute" />
+                <span class="form-check-label">Drop unconnected entities</span>
+            </label>
+
+            @* Merge only: it points new relationships at entities the database already holds, and a replaced drawing would then
+               be missing the entities it points at. *@
+            @if (Merging && GraphProposal.CanMatchDatabase(QueryBuilder, RunQuery))
+            {
+                <label class="form-check form-check-inline small mb-0" title="Ask the database whether it already holds each generated entity, by exact name, and merge into the ones it does instead of writing them again. One read per label; relationships are not checked.">
+                    <input class="form-check-input" type="checkbox" data-testid="kg-match-db" @bind="matchDatabase" @bind:after="MatchDatabaseAsync" />
+                    <span class="form-check-label">Match entities already in the database</span>
+                </label>
+            }
+
+            <button class="btn btn-sm btn-success ms-auto" data-testid="kg-use" @onclick="UseAsync" disabled="@(string.IsNullOrEmpty(preview.Script))" title="Draw it and stage its queries in the Generated tab. Nothing is written to the database until you press Commit.">Use this graph →</button>
+        </div>
+    }
+</div>
+
+@code {
+    ///<summary>The call that proposed it, whose arguments are the graph.</summary>
+    [Parameter] public ChatTurn Turn { get; set; }
+
+    ///<summary>The connected schema's vocabulary, whose edge labels relationship names are made consistent with, or null.</summary>
+    [Parameter] public SchemaVocabulary Schema { get; set; }
+
+    ///<summary>What the conversation holds as text, which a quote is looked for in.</summary>
+    [Parameter] public string SourceText { get; set; }
+
+    ///<summary>Whether the conversation sent a PDF or a picture, whose words are not in <see cref="SourceText"/>.</summary>
+    [Parameter] public bool FilesNotRead { get; set; }
+
+    ///<summary>The drawing as its render JSON, asked for each time the card is drawn, so Merge never folds against a stale one.</summary>
+    [Parameter] public Func<JsonElement> CurrentGraph { get; set; }
+
+    ///<summary>The connected database's language, which the script is written in. Null means Gremlin.</summary>
+    [Parameter] public IGraphQueryBuilder QueryBuilder { get; set; }
+
+    ///<summary>Runs a read against the connected database, for Match the database, or null where there is none to ask.</summary>
+    [Parameter] public Func<string, CancellationToken, Task<GraphDbResult>> RunQuery { get; set; }
+
+    ///<summary>Whether Merge, which stages its delta as edits, may be offered: not where nothing can be staged.</summary>
+    [Parameter] public bool CanMerge { get; set; } = true;
+
+    ///<summary>Raised by Use with the script and the mode. Replace goes through the page's guarded import, Merge appends the delta.</summary>
+    [Parameter] public EventCallback<(string Gremlin, bool Merge)> OnUseGraph { get; set; }
+
+    ///<summary>Merge or Replace, remembered across sessions, and Replace on first use; the same choice the generation window kept.</summary>
+    public const string MergeModeKey = "graphdbviewer:kgMergeMode";
+
+    private bool mergeMode;
+    private bool modeLoaded;
+    private bool dropOrphans;
+    private bool matchDatabase;
+
+    //Looked up once per card when asked for: it does not change as the other choices do, and each is a read of somebody's database.
+    private GraphImport.Graph databaseMatches;
+    private readonly List<string> lookupWarnings = new();
+
+    private ChatTurn readFor;
+    private KgParseResult read;
+    private GraphProposalPreview preview;
+
+    private bool Merging => mergeMode && CanMerge;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        //The same reading the call answered the model with, from the same arguments, so the card and the answer agree. Before
+        //the remembered mode is read, since the card is drawn once while that is awaited.
+        if (!ReferenceEquals(readFor, Turn))
+        {
+            readFor = Turn;
+            read = GraphProposal.Read(Turn.ArgumentsJson, Schema?.EdgeLabels, SourceText, FilesNotRead);
+            databaseMatches = null;
+        }
+
+        Recompute();
+
+        if (modeLoaded)
+            return;
+
+        modeLoaded = true;
+        mergeMode = await Storage.GetAsync<bool>(MergeModeKey);
+
+        Recompute();
+    }
+
+    //The preview for the mode chosen, against the drawing as it is now: after a Merge, the same graph folds onto what it added.
+    private void Recompute()
+    {
+        if (read.IsError)
+            return;
+
+        var canvas = new GraphImport.Graph();
+
+        if (CurrentGraph != null)
+            canvas = KgGraphParser.FromRenderJson(CurrentGraph());
+
+        var matches = databaseMatches;
+
+        if (!matchDatabase)
+            matches = null;
+
+        preview = GraphProposal.Preview(read.Graph, read.Warnings.Concat(lookupWarnings).ToList(), Merging, dropOrphans, canvas, matches, QueryBuilder);
+    }
+
+    private async Task SetModeAsync(bool merge)
+    {
+        if (mergeMode == merge)
+            return;
+
+        mergeMode = merge;
+
+        Recompute();
+
+        await Storage.SetAsync(MergeModeKey, merge);
+    }
+
+    private async Task MatchDatabaseAsync()
+    {
+        if (matchDatabase && databaseMatches == null && GraphProposal.CanMatchDatabase(QueryBuilder, RunQuery))
+            databaseMatches = await GraphProposal.DatabaseMatchesAsync(read.Graph, QueryBuilder, RunQuery, lookupWarnings, CancellationToken.None);
+
+        Recompute();
+    }
+
+    private async Task UseAsync()
+    {
+        if (string.IsNullOrEmpty(preview?.Script))
+            return;
+
+        await OnUseGraph.InvokeAsync((preview.Script, Merging));
+    }
+}

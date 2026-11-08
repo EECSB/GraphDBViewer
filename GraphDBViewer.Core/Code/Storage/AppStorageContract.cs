@@ -12,16 +12,21 @@ namespace GraphDBViewerWeb.Code;
 ///</summary>
 public static class AppStorageContract
 {
-    ///<summary>
-    ///Base path for a single key's value. The key is appended as a catch-all segment, so it may contain
-    ///the <c>graphdbviewer:</c> colon without any escaping games.
-    ///</summary>
+    ///<summary>The address of every key's value, which names its key in the query string (<see cref="PathFor"/>).</summary>
     public const string BasePath = "api/storage";
 
-    ///<summary>The full relative path for one key.</summary>
+    ///<summary>The query string's name for the key.</summary>
+    public const string KeyParameter = "key";
+
+    ///<summary>
+    ///The full relative address for one key: the key in the query string, where it is decoded once and exactly, its
+    ///<c>graphdbviewer:</c> colon and anything else. Until 2026-09-29 it was a catch-all segment of the path, where
+    ///routing leaves an escaped "/" escaped so that it cannot split the path, which makes a key's own "%2F" the same
+    ///text as a "/": two keys that differed only so were one key to the host. The host reads the query string alone.
+    ///</summary>
     public static string PathFor(string key)
     {
-        return $"{BasePath}/{Uri.EscapeDataString(key)}";
+        return $"{BasePath}?{KeyParameter}={Uri.EscapeDataString(key)}";
     }
 
     ///<summary>
@@ -36,4 +41,12 @@ public static class AppStorageContract
     ///large even deflated, and the framework's default cap would reject it well before the store minded.
     ///</summary>
     public const long MaxValueBytes = 64L * 1024 * 1024;
+
+    ///<summary>
+    ///The account a request is for, named by the client that booted as it. The host refuses a request
+    ///whose session is somebody else's, so a tab still open as one account cannot write its workspace into
+    ///whoever signed in after it in another tab. Absent when the client could not learn who it is, and
+    ///then the session alone decides.
+    ///</summary>
+    public const string AccountHeader = "X-Gdbv-Account";
 }

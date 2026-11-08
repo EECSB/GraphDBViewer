@@ -157,7 +157,7 @@ window.gunInterop = (function () {
             for (let hop = 0; hop < parsed.depth; hop++) {
                 const next = [];
 
-                for (const current of frontier) {
+                for (const current of frontier)
                     for (const key of Object.keys(current.node)) {
                         if (key === '_')
                             continue;
@@ -180,7 +180,6 @@ window.gunInterop = (function () {
                             next.push({ soul: link, node: node });
                         }
                     }
-                }
 
                 if (!next.length)
                     break;
@@ -316,15 +315,12 @@ window.gunInterop = (function () {
             if (op.kind === 'clear')
                 //GUN has no delete: null is the tombstone, and it syncs like any other write.
                 return await acknowledged(chain, null);
-
-            if (op.kind === 'link') {
+            else if (op.kind === 'link') {
                 if (!op.target)
                     return "A GUN link needs a node to link to.";
 
                 return await acknowledged(chain, gun.get(op.target));
-            }
-
-            if (op.kind === 'put') {
+            } else if (op.kind === 'put') {
                 const values = JSON.parse(op.values || '{}');
 
                 //GUN rejects an empty put, and a write of nothing is not an error worth reporting either.
@@ -400,9 +396,8 @@ window.gunInterop = (function () {
             //The same starting set the read resolves, so Live watches exactly what is on screen.
             let start = [];
 
-            if (parsed.map) {
+            if (parsed.map)
                 start = await readChildren(gun, parsed.keys);
-            }
             else {
                 const resolved = await resolvePath(gun, parsed.keys);
 

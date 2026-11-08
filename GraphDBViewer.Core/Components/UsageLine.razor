@@ -1,0 +1,25 @@
+@using GraphDBViewerWeb.Code
+
+@* What the run a turn ended was billed for, under it: the requests, the tokens each way and, where the model has a rate,
+   the cost (2026-11-01, from GDS Viewer's AI assistant). Nothing where the provider said nothing, as a server of one's
+   own may, rather than a zero. *@
+
+@if (Turn?.Usage != null)
+{
+    <div class="small text-body-secondary mb-2" data-testid="ai-usage" title="@Title">@AiChat.UsageLine(Turn)</div>
+}
+
+@code {
+    [Parameter] public ChatTurn Turn { get; set; }
+
+    private string Title
+    {
+        get
+        {
+            if (Turn.Cost == null)
+                return $"What {Turn.Model} was billed for. There is no known rate for it, so no cost is shown; give it its rates in its settings.";
+
+            return $"What {Turn.Model} was billed for, at its rates.";
+        }
+    }
+}

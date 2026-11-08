@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace GraphDBViewerWeb.Code;
 
@@ -37,6 +39,100 @@ public static class StagedIds
     public static string ForEdge(int index)
     {
         return EdgePrefix + index;
+    }
+
+    ///<summary>
+    ///<paramref name="after"/>, a merge of <paramref name="before"/>, with every stand-in it names following the
+    ///statement that mints it (2026-10-05). A merge takes property lines out and puts their new ones at the end, and a
+    ///stand-in is its statement's position, so left as it was a link staged against a new vertex named another
+    ///statement, or none, and was lost at commit. A merge moves adds but never makes or drops one, so the k-th add
+    ///before is the k-th after; when the counts differ nothing is guessed and the buffer is answered as it is.
+    ///</summary>
+    public static string Renumbered(string before, string after, string language, Func<string, List<GraphEdit>> parse)
+    {
+        var was = Adds(Split(before, language), parse);
+        var now = Adds(Split(after, language), parse);
+
+        if (was.Count != now.Count)
+            return after;
+
+        var moved = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        for (var k = 0; k < was.Count; k++)
+            if (was[k] != now[k])
+                moved[was[k]] = now[k];
+
+        if (moved.Count == 0)
+            return after;
+
+        return Placeholder.Replace(after, match => Moved(moved, match.Value));
+    }
+
+    ///<summary>
+    ///What a commit that did not finish leaves staged (2026-10-05): every statement that did not run, the stand-ins of adds
+    ///that ran swapped for the ids they came back with, and the stand-ins of adds still staged renumbered to the places
+    ///those adds now have. Until then the whole buffer stayed, and the next Commit ran again what had run, a vertex or an
+    ///edge made twice. <paramref name="statements"/> are the buffer as <see cref="Split"/> walked it, and
+    ///<paramref name="ran"/> the places of those that ran.
+    ///</summary>
+    public static string Remaining(List<string> statements, ISet<int> ran, IReadOnlyDictionary<string, ResolvedId> realIds)
+    {
+        var kept = new List<string>();
+        var moved = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        for (var i = 0; i < statements.Count; i++)
+        {
+            if (ran.Contains(i) || string.IsNullOrWhiteSpace(statements[i]))
+                continue;
+
+            moved[ForVertex(i)] = ForVertex(kept.Count);
+            moved[ForEdge(i)] = ForEdge(kept.Count);
+            kept.Add(Resolve(statements[i], realIds));
+        }
+
+        return string.Join("\n", kept.Select(statement => Placeholder.Replace(statement, match => Moved(moved, match.Value))));
+    }
+
+    ///<summary>A stand-in, its digits whole, so <c>__opt_v_1</c> is never read inside <c>__opt_v_10</c>.</summary>
+    private static readonly Regex Placeholder = new(@"__opt_[ve]_\d+", RegexOptions.Compiled);
+
+    private static string Moved(Dictionary<string, string> moved, string placeholder)
+    {
+        if (moved.TryGetValue(placeholder, out var to))
+            return to;
+
+        return placeholder;
+    }
+
+    ///<summary>The stand-in each statement that adds an element mints, in the order the statements come.</summary>
+    private static List<string> Adds(List<string> statements, Func<string, List<GraphEdit>> parse)
+    {
+        var adds = new List<string>();
+
+        for (var i = 0; i < statements.Count; i++)
+        {
+            if (string.IsNullOrWhiteSpace(statements[i]))
+                continue;
+
+            List<GraphEdit> edits;
+
+            try
+            {
+                edits = parse(statements[i]);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (edits.Any(edit => edit.Kind == GraphEditKind.AddNode))
+                adds.Add(ForVertex(i));
+
+            if (edits.Any(edit => edit.Kind == GraphEditKind.AddEdge))
+                adds.Add(ForEdge(i));
+        }
+
+        return adds;
     }
 
     ///<summary>Whether an id is a stand-in rather than something the database knows about.</summary>
@@ -89,11 +185,44 @@ public static class StagedIds
 
             statement = statement
                 .Replace("'" + pair.Key + "'", pair.Value.Literal, StringComparison.Ordinal)
-                .Replace("\"" + pair.Key + "\"", pair.Value.Literal, StringComparison.Ordinal)
-                .Replace(pair.Key, pair.Value.Id, StringComparison.Ordinal);
+                .Replace("\"" + pair.Key + "\"", pair.Value.Literal, StringComparison.Ordinal);
+
+            statement = ReplaceBare(statement, pair.Key, pair.Value.Id);
         }
 
         return statement;
+    }
+
+    ///<summary>
+    ///The unquoted form, replaced only where the stand-in ends there. <c>__opt_v_1</c> is the first nine
+    ///characters of <c>__opt_v_10</c>, and a plain Replace rewrote the tenth vertex's stand-in into the
+    ///first vertex's id with a 0 on the end — an id that names nothing, so an edge staged to it was
+    ///created for no vertex and nothing said so. Any batch creating eleven or more elements could lose
+    ///edges that way. Found by the 2026-09-17 audit.
+    ///</summary>
+    private static string ReplaceBare(string statement, string key, string id)
+    {
+        var sb = new StringBuilder(statement.Length);
+        var at = 0;
+
+        for (var found = statement.IndexOf(key, StringComparison.Ordinal); found >= 0; found = statement.IndexOf(key, at, StringComparison.Ordinal))
+        {
+            var end = found + key.Length;
+
+            sb.Append(statement, at, found - at);
+
+            //A digit right after it means this is the beginning of a longer stand-in, which has its own turn.
+            if (end < statement.Length && char.IsDigit(statement[end]))
+                sb.Append(key);
+            else
+                sb.Append(id);
+
+            at = end;
+        }
+
+        sb.Append(statement, at, statement.Length - at);
+
+        return sb.ToString();
     }
 
     ///<summary>Records what the statement at <paramref name="index"/> created, under both stand-in shapes:
@@ -115,10 +244,12 @@ public static class StagedIds
         if (language == "gremlin" || language == null)
             return GremlinQueryBuilder.FormatId(id, idType);
 
-        if (long.TryParse(id, out _))
+        //Bare only in a number's own form: digits with a leading zero are a string id here too.
+        if (GremlinQueryBuilder.IsPlainNumber(id))
             return id;
 
-        return "'" + id.Replace("'", "\\'") + "'";
+        //Escaped the way every builder's Escape does, backslash first, so an id holding either survives.
+        return "'" + id.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
     }
 
     ///<summary>
@@ -163,10 +294,8 @@ public static class StagedIds
         if (unwrapped.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in unwrapped.EnumerateArray())
-            {
                 if (TryReadId(item, depth + 1, out id, out idType))
                     return true;
-            }
 
             return false;
         }
@@ -187,10 +316,11 @@ public static class StagedIds
         if (idProp.TryGetProperty("@type", out var typeEl))
             idType = typeEl.GetString();
 
-        if (!idProp.TryGetProperty("@value", out var valueEl))
+        if (!idProp.TryGetProperty("@value", out _))
             return false;
 
-        id = valueEl.ToString();
+        //A JanusGraph edge's RelationIdentifier as its relationId, as every other reader of an id has it.
+        id = GraphDataConverter.IdText(idProp);
 
         return !string.IsNullOrEmpty(id);
     }

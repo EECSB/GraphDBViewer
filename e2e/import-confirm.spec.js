@@ -16,7 +16,7 @@ const SECOND_DOT = `digraph {
 }`;
 
 //Pastes DOT into the Import panel and clicks Visualize, without waiting for a render — the caller
-//decides what should happen next, which for a cancelled import is "nothing".
+//decides what should happen next, which for a canceled import is "nothing".
 async function pasteAndVisualize(page, dot) {
     await openImportPanel(page);
     await page.getByPlaceholder(/GraphSON array/).fill(dot);
@@ -39,7 +39,7 @@ test('the first import does not ask — there is nothing staged to lose', async 
     expect((await cyPositions(page)).length).toBe(SAMPLE_NODE_COUNT);
 });
 
-test('importing over a drawing asks first, and cancelling keeps the drawing', async ({ page }) => {
+test('importing over a drawing asks first, and canceling keeps the drawing', async ({ page }) => {
     await gotoApp(page);
     await loadSampleGraph(page);
 
@@ -53,7 +53,7 @@ test('importing over a drawing asks first, and cancelling keeps the drawing', as
 
     await expect.poll(() => message).toContain('Generated tab');
 
-    //Cancelled: the original five nodes are still there, and the staged queries with them.
+    //Canceled: the original five nodes are still there, and the staged queries with them.
     await expect.poll(async () => (await cyPositions(page)).length).toBe(SAMPLE_NODE_COUNT);
 });
 

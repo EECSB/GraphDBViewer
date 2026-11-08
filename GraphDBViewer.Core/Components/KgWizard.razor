@@ -1,0 +1,287 @@
+@using System.IO
+@using GraphDBViewerWeb.Code
+@using Microsoft.AspNetCore.Components.Forms
+@inject HttpClient Http
+@inject IServiceProvider Services
+
+@* Generate with AI's wizard (2026-11-05, the user: a template with defined steps and inputs, as the knowledge-graph window had,
+   not words in the box), in the shared frame, AiChatWizard: the text, what to look for and a last look, then the model is asked
+   as if the person had typed it. The graph comes back on its card in the conversation, where Merge or Replace, Drop unconnected
+   entities and Use are, so none of those is asked here. *@
+
+<AiChatWizard Title="Generate a knowledge graph" Steps="StepNames" CanContinue="CanContinue" FinishText="Generate graph" FinishIcon="bi-stars" OnFinish="GenerateAsync" OnClose="OnClose" TestId="kg-wizard" Context="step">
+    @if (step == StepSource)
+    {
+        <label class="form-label" for="kgWizardText">The text to draw the graph from</label>
+        <textarea id="kgWizardText" class="form-control gdbv-kg-wizard-text" placeholder="Paste notes, an article or a document" data-testid="kg-source-text" @bind="sourceText" @bind:event="oninput"></textarea>
+
+        <div class="gdbv-kg-wizard-sources">
+            <div class="gdbv-kg-wizard-source">
+                <label class="form-label">Or load a file</label>
+                <InputFile class="form-control form-control-sm" OnChange="LoadFileAsync" data-testid="kg-source-file" title="PDF, .docx, .xlsx, .csv, .txt, .md or another text format" />
+            </div>
+
+            <div class="gdbv-kg-wizard-source">
+                <label class="form-label" for="kgWizardArticle">Or fetch a Wikipedia article</label>
+                <div class="input-group input-group-sm">
+                    <input id="kgWizardArticle" class="form-control" placeholder="Title or link" data-testid="kg-source-article" @bind="article" @bind:event="oninput" @onkeydown="ArticleKeyDownAsync" />
+                    <button type="button" class="btn btn-outline-secondary" data-testid="kg-source-fetch" disabled="@(string.IsNullOrWhiteSpace(article) || fetching)" @onclick="FetchArticleAsync">@(fetching ? "Fetching…" : "Fetch")</button>
+                </div>
+            </div>
+        </div>
+
+        @if (loadedFrom != null)
+        {
+            <div class="gdbv-text-sm text-body-secondary mt-2" data-testid="kg-source-loaded">Loaded from @loadedFrom. You can edit it above.</div>
+        }
+
+        @if (error != null)
+        {
+            <div class="gdbv-text-sm text-danger mt-2" data-testid="kg-source-error">@error</div>
+        }
+    }
+    else if (step == StepOptions)
+    {
+        <label class="form-label" for="kgWizardFocus">What to look for <span class="text-body-secondary">(optional)</span></label>
+        <input id="kgWizardFocus" class="form-control form-control-sm mb-3" placeholder="e.g. people and organizations" data-testid="kg-focus" @bind="focus" @bind:event="oninput" />
+
+        <div class="form-label">Options</div>
+
+        @if (CanGround)
+        {
+            <div class="form-check mb-1" title="Ask the model to reuse the connected database's vertex/edge labels and property keys instead of inventing its own.">
+                <input class="form-check-input" type="checkbox" id="kgWizardGround" data-testid="kg-wizard-ground" @bind="ground" />
+                <label class="form-check-label" for="kgWizardGround">Ground labels in the connected schema</label>
+            </div>
+        }
+
+        @* What each option does, on hovering it, as Ask AI's tool picker says it (2026-11-05, the user). *@
+        <div class="form-check mb-1" title="Ask the model for the sentence each entity and relationship came from, kept as a '@(KgGraphParser.SourceSentenceProperty)' property, so you can see why it claimed something.">
+            <input class="form-check-input" type="checkbox" id="kgWizardProvenance" data-testid="kg-wizard-provenance" @bind="sourceSentence" />
+            <label class="form-check-label" for="kgWizardProvenance">Record the source sentence</label>
+        </div>
+
+        <div class="form-check mb-1" title="Ask the model how sure it is of each entity and relationship. Anything under 50% is drawn in gray, so a guess looks like a guess.">
+            <input class="form-check-input" type="checkbox" id="kgWizardConfidence" data-testid="kg-wizard-confidence" @bind="confidence" />
+            <label class="form-check-label" for="kgWizardConfidence">Rate confidence</label>
+        </div>
+
+        @if (LongEnoughToSplit)
+        {
+            <div class="form-check mb-1" title="Have a text longer than about @(KgPrompt.PartChars.ToString("N0")) characters extracted in pieces and merged. A long document otherwise runs past the model's output limit and comes back cut off mid-graph.">
+                <input class="form-check-input" type="checkbox" id="kgWizardSplit" data-testid="kg-wizard-split" @bind="split" />
+                <label class="form-check-label" for="kgWizardSplit">Split the @sourceText.Length.ToString("N0") characters into pieces</label>
+            </div>
+        }
+
+        <div class="form-check mb-1" title="After extracting, ask the model once more what it missed and merge the answer in. Costs a second request.">
+            <input class="form-check-input" type="checkbox" id="kgWizardAgain" data-testid="kg-wizard-again" @bind="askAgain" />
+            <label class="form-check-label" for="kgWizardAgain">Ask once more for anything missed</label>
+        </div>
+    }
+    else
+    {
+        <dl class="gdbv-kg-wizard-review" data-testid="kg-review">
+            <dt>Text</dt>
+            <dd>@sourceText.Trim().Length.ToString("N0") characters@(loadedFrom != null ? $", from {loadedFrom}" : "")</dd>
+
+            <dt>Look for</dt>
+            <dd>@(string.IsNullOrWhiteSpace(focus) ? "Everything in the text" : focus.Trim())</dd>
+
+            <dt>Options</dt>
+            <dd>@ChosenOptions()</dd>
+
+            <dt>Model</dt>
+            <dd data-testid="kg-review-model">@(Chat.ModelName ?? "None")</dd>
+        </dl>
+
+        @if (Chat.ModelName == null)
+        {
+            <div class="gdbv-text-sm text-danger mb-2" data-testid="kg-no-model">
+                Pick a model below, or add one under AI settings, to generate a graph.
+
+                @if (OnOpenSettings.HasDelegate)
+                {
+                    <button type="button" class="gdbv-ai-link" @onclick="OnOpenSettings">Open AI settings</button>
+                }
+            </div>
+        }
+
+        <div class="gdbv-text-sm text-body-secondary">The text, what to look for and, when labels are grounded in it, the connected graph's schema are sent to the model's provider. You review the graph before anything is drawn.</div>
+    }
+</AiChatWizard>
+
+@code {
+    private const int StepSource = 0;
+    private const int StepOptions = 1;
+    private const int StepReview = 2;
+
+    private static readonly string[] StepNames = { "Text", "Options", "Generate" };
+
+    //As the knowledge-graph window held it: a file much past this is an excerpt's job, and the model's output limit goes first.
+    private const long MostFileBytes = 1024 * 1024;
+
+    ///<summary>The options to begin with: what was last chosen while the page is open.</summary>
+    [Parameter] public KgExtractionOptions Options { get; set; } = new();
+
+    ///<summary>Whether a schema was read, which grounding needs.</summary>
+    [Parameter] public bool CanGround { get; set; }
+
+    ///<summary>The chat window as it stands: the model picked and whether an answer is coming.</summary>
+    [Parameter] public AiChatPanelState Chat { get; set; } = new(null, false);
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    [Parameter] public EventCallback OnOpenSettings { get; set; }
+
+    ///<summary>Generate graph: the question to send, and the options it goes with.</summary>
+    [Parameter] public EventCallback<(string Question, KgExtractionOptions Options)> OnGenerate { get; set; }
+
+    private string sourceText = "";
+    private string focus = "";
+    private string article = "";
+    private string loadedFrom;
+    private string error;
+    private bool fetching;
+    private bool ground;
+    private bool sourceSentence;
+    private bool confidence;
+    private bool split;
+    private bool askAgain;
+
+    private bool LongEnoughToSplit => sourceText.Length > KgPrompt.PartChars;
+
+    protected override void OnInitialized()
+    {
+        ground = Options.GroundInSchema;
+        sourceSentence = Options.SourceSentence;
+        confidence = Options.Confidence;
+        split = Options.SplitLongText;
+        askAgain = Options.AskAgain;
+    }
+
+    private bool CanContinue(int step)
+    {
+        if (step == StepReview)
+            return Chat.ModelName != null && !Chat.Generating;
+
+        return !string.IsNullOrWhiteSpace(sourceText);
+    }
+
+    ///<summary>The question a finished wizard sends: what to look for, when something was said, then the text, as a graph typed into the box asks for one.</summary>
+    public static string Question(string text, string focus)
+    {
+        var asked = NlQueryModal.GraphStart + text.Trim();
+
+        if (string.IsNullOrWhiteSpace(focus))
+            return asked;
+
+        return $"Look for {focus.Trim()}.\n\n{asked}";
+    }
+
+    private string ChosenOptions()
+    {
+        var chosen = new List<string>();
+
+        if (ground && CanGround)
+            chosen.Add("Ground labels in the connected schema");
+
+        if (sourceSentence)
+            chosen.Add("Record the source sentence");
+
+        if (confidence)
+            chosen.Add("Rate confidence");
+
+        if (split && LongEnoughToSplit)
+            chosen.Add("Split into pieces");
+
+        if (askAgain)
+            chosen.Add("Ask once more for anything missed");
+
+        if (chosen.Count == 0)
+            return "None";
+
+        return string.Join(", ", chosen);
+    }
+
+    private async Task GenerateAsync()
+    {
+        var options = new KgExtractionOptions(ground && CanGround, sourceSentence, confidence, split && LongEnoughToSplit, askAgain);
+
+        await OnGenerate.InvokeAsync((Question(sourceText, focus), options));
+    }
+
+    private async Task LoadFileAsync(InputFileChangeEventArgs e)
+    {
+        error = null;
+
+        var file = e.File;
+
+        if (file == null)
+            return;
+
+        if (file.Size > MostFileBytes)
+        {
+            error = $"\"{file.Name}\" is {ByteSizes.Human(file.Size)}; the cap is {ByteSizes.Human(MostFileBytes)}. Paste an excerpt instead.";
+            return;
+        }
+
+        //The PDF reader is fetched on first use where the host loads it on demand.
+        if (Path.GetExtension(file.Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase)
+            && Services.GetService(typeof(IPdfReaderLoader)) is IPdfReaderLoader loader
+            && await loader.EnsureLoadedAsync() is string failed)
+        {
+            error = failed;
+            return;
+        }
+
+        //Buffered first: the extractor needs a seekable stream, for the ZIP-based formats, and InputFile's is async only.
+        using var buffer = new MemoryStream();
+
+        await file.OpenReadStream(MostFileBytes).CopyToAsync(buffer);
+        buffer.Position = 0;
+
+        var (text, extractError) = SourceTextExtractor.Extract(file.Name, buffer);
+
+        if (extractError != null)
+        {
+            error = extractError;
+            return;
+        }
+
+        sourceText = text;
+        loadedFrom = file.Name;
+    }
+
+    private async Task ArticleKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await FetchArticleAsync();
+    }
+
+    private async Task FetchArticleAsync()
+    {
+        if (string.IsNullOrWhiteSpace(article) || fetching)
+            return;
+
+        error = null;
+        fetching = true;
+
+        try
+        {
+            var (text, fetchError) = await WikipediaSource.FetchExtractAsync(Http, article, CancellationToken.None);
+
+            if (fetchError != null)
+                error = fetchError;
+            else
+            {
+                sourceText = text;
+                loadedFrom = $"Wikipedia: {article.Trim()}";
+            }
+        }
+        finally
+        {
+            fetching = false;
+        }
+    }
+}

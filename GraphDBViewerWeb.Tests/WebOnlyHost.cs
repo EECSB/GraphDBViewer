@@ -17,7 +17,7 @@ internal static class WebOnlyHost
             AppName = "Graph DB Viewer",
             EditionLabel = "Web edition",
             HasServerRoute = false,
-            ShowcaseUrl = "showcase/index.html",
+            ShowcaseUrl = ViewerPlugin.ShowcasePath,
             ServerEditionUrl = "https://github.com/EECSB/GraphDBViewer#the-server-edition-docker"
         };
     }

@@ -22,6 +22,25 @@ public interface IGraphQueryBuilder
     ///<summary>Vertices with their edges, capped at <paramref name="limit"/> (null for uncapped).</summary>
     string FullGraph(int? limit);
 
+    ///<summary>
+    ///Vertices of one label whose <c>name</c> is exactly one of these, capped at <paramref name="limit"/> —
+    ///how a generated entity is matched against what the database already holds, without loading the graph
+    ///to find out. <c>name</c> and not some other key because that is what the generator writes and what the
+    ///viewer displays; a graph that names its entities otherwise matches nothing, which is the honest
+    ///answer rather than a guess at which key meant a name.
+    ///
+    ///<strong>Exactly</strong>, where the fold that follows normalizes: a generated "Acme Inc." finds a
+    ///stored "Acme Inc." and not a stored "Acme". Normalizing would have to happen in the database, in each
+    ///language, over an unindexed expression — a scan of somebody's graph per generated name. What this
+    ///catches is the common case, a model naming an entity the way the graph already does.
+    ///
+    ///Null where the language cannot ask it, and the knowledge-graph modal then does not offer the match.
+    ///</summary>
+    string VerticesByName(string label, IReadOnlyList<string> names, int limit)
+    {
+        return null;
+    }
+
     //── Traverse (GraphDbCapabilities.Traverse) ─────────────────────────
 
     ///<summary>The neighborhood of one vertex — expand-on-double-click.</summary>
@@ -55,6 +74,15 @@ public interface IGraphQueryBuilder
     string AddEdge(string sourceId, string label, string targetId);
     string AddEdgeWithProperties(string sourceId, string label, string targetId, IReadOnlyDictionary<string, string> properties);
 
+    ///<summary>
+    ///False where the language cannot hold a property on a relationship: an RDF triple carries none, and a
+    ///GUN link is a key holding a node rather than a thing of its own. Both drop them rather than writing
+    ///them somewhere they would not be found again, and what the generated-graph preview does with this is
+    ///say so — the generator can put a confidence and a source on every relationship it finds, and losing
+    ///those without a word is the kind of quiet the rest of that preview exists to prevent.
+    ///</summary>
+    bool WritesEdgeProperties => true;
+
     ///<summary>Deletes a vertex and its incident edges. <paramref name="idType"/> is the engine's id type, or null.</summary>
     string DropVertex(string id, string idType);
     string DropEdge(string id, string idType);
@@ -70,9 +98,23 @@ public interface IGraphQueryBuilder
 
     ///<summary>
     ///True when the query would change the graph. Guards the read-only query tool handed to the AI
-    ///(<see cref="GraphDbCapabilities.AiTools"/>) and the step debugger.
+    ///(<see cref="GraphDbCapabilities.AiTools"/>) and the step debugger, and marks a query Ask AI proposes in this
+    ///engine's language as one that modifies the graph.
     ///</summary>
     bool IsMutating(string query);
+
+    ///<summary>
+    ///Why the query is not run as a read, or null when it is one: what the read-only query tool tells the model, and the
+    ///debugger the user, so either can put the query right. An engine whose guard can say no more than
+    ///<see cref="IsMutating"/> says that it writes.
+    ///</summary>
+    string ReadRefusal(string query)
+    {
+        if (IsMutating(query))
+            return "That query mutates the graph, which is not allowed here. Only read-only queries can be run.";
+
+        return null;
+    }
 
     ///<summary>
     ///Reads the staged-edit buffer back into structured edits, so the canvas can preview uncommitted

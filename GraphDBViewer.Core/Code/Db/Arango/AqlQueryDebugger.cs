@@ -73,10 +73,8 @@ public sealed class AqlQueryDebugger : IGraphQueryDebugger
         //(parsing, optimizing) are in the raw response rather than folded in here, where they would make
         //the percentages describe something other than the rows above them.
         foreach (var row in rows)
-        {
             if (total > 0)
                 row.PercentDur = row.DurationMs / total * 100;
-        }
 
         return (total, rows);
     }

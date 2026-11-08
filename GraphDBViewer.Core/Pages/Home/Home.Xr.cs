@@ -43,9 +43,7 @@ public partial class Home
         var result = await JS.InvokeAsync<XrOpenResult>("xrViewerInterop.open", XrContainerId);
 
         if (result == null || !result.Ok)
-        {
             xrStatus = result?.Error ?? "Could not open the viewer.";
-        }
         else
         {
             xrHasWebXR = result.HasXR;
@@ -77,13 +75,9 @@ public partial class Home
         sb.Append($"<rect x=\"{-border}\" y=\"{-border}\" width=\"{dim}\" height=\"{dim}\" fill=\"#ffffff\"/>");
 
         for (int y = 0; y < n; y++)
-        {
             for (int x = 0; x < n; x++)
-            {
                 if (qr.GetModule(x, y))
                     sb.Append($"<rect x=\"{x}\" y=\"{y}\" width=\"1\" height=\"1\" fill=\"#000000\"/>");
-            }
-        }
 
         sb.Append("</svg>");
         xrQrSvg = sb.ToString();

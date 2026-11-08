@@ -8,11 +8,23 @@ namespace GraphDBViewerWeb.Pages;
 public partial class Home
 {
 
+    #region Connections
+
+    //The viewer's connections, each with its own query tabs, one in front (the multiple-connections spec, 2026-11-03).
+    //The page reads the one in front's members through the delegating fields below and in Home.Connections.cs.
+    private List<ViewerConnection> openConnections = new() { new ViewerConnection() };
+    private int activeConnectionIndex;
+    private ViewerConnection activeConnection => openConnections[activeConnectionIndex];
+
+    #endregion
+
+
     #region Query tabs
 
-    //Each tab is an independent query workspace (query text + its own results, view mode and selection).
-    private List<QueryTab> tabs = new() { new QueryTab { Name = "Query 1" } };
-    private int activeTabIndex;
+    //Each tab is an independent query workspace (query text + its own results, view mode and selection), the connection
+    //in front's.
+    private List<QueryTab> tabs { get => activeConnection.Tabs; set => activeConnection.Tabs = value; }
+    private int activeTabIndex { get => activeConnection.ActiveTabIndex; set => activeConnection.ActiveTabIndex = value; }
     private QueryTab activeTab => tabs[activeTabIndex];
 
     #endregion
@@ -38,6 +50,7 @@ public partial class Home
     private int queryEditorTab { get => activeTab.QueryEditorTab; set => activeTab.QueryEditorTab = value; }//1 = Query, 2 = Generated, 3 = Examples
     private string queryResults { get => activeTab.QueryResults; set => activeTab.QueryResults = value; }
     private string queryError { get => activeTab.QueryError; set => activeTab.QueryError = value; }//last-run error, shown as a red bar over the stats
+    private GraphDbTable tableResult { get => activeTab.TableResult; set => activeTab.TableResult = value; }//last row/boolean result (a graph answer flows through lastResultData instead)
     private bool jsonCopied { get => activeTab.JsonCopied; set => activeTab.JsonCopied = value; }
     private int visualizationMode { get => activeTab.VisualizationMode; set => activeTab.VisualizationMode = value; }
     private string searchTerm { get => activeTab.SearchTerm; set => activeTab.SearchTerm = value; }//graph search box
@@ -96,12 +109,14 @@ public partial class Home
     private bool show3dProps { get => activeTab.Show3dProps; set => activeTab.Show3dProps = value; }//3D: show the "show"-marked properties beneath each node
     private int draw3dLabelDistance { get => activeTab.Draw3dLabelDistance; set => activeTab.Draw3dLabelDistance = value; }//3D: label draw distance 0–100 (100 = show all)
     private int draw3dNodeDistance { get => activeTab.Draw3dNodeDistance; set => activeTab.Draw3dNodeDistance = value; }//3D: node draw distance 0–100 (100 = show all)
+    private int mapNodeSize { get => activeTab.MapNodeSize; set => activeTab.MapNodeSize = value; }//Map and Globe: node size, percent of the size kept at every zoom
     private string g3dExportFormat { get => activeTab.G3dExportFormat; set => activeTab.G3dExportFormat = value; }//selected 3D export format (obj/ply/stl)
     private string imageExportFormat { get => activeTab.ImageExportFormat; set => activeTab.ImageExportFormat = value; }//selected image export format (png/jpeg/svg)
     private string tableExportFormat { get => activeTab.TableExportFormat; set => activeTab.TableExportFormat = value; }//selected table export format (csv/xlsx)
     private Dictionary<string, LabelStyle> labelStyles { get => activeTab.LabelStyles; set => activeTab.LabelStyles = value; }//per-vertex-label color/size/display/icon
     private int edgeColorMode { get => activeTab.EdgeColorMode; set => activeTab.EdgeColorMode = value; }//edge coloring: 0=auto, 1=off, 2=custom
     private Dictionary<string, string> edgeColors { get => activeTab.EdgeColors; set => activeTab.EdgeColors = value; }//per-edge-label custom colors (custom mode)
+    private List<string> edgeDetails { get => activeTab.EdgeDetails; set => activeTab.EdgeDetails = value; }//edge labels drawn as cards (Detailed view)
 
     #endregion
 
@@ -153,20 +168,58 @@ public partial class Home
     //(e.g. on reload while disconnected: HasGraphData was true so the draw fired, but isConnected /
     //offlineMode were false so the pane — and the container — never rendered).
     private bool ShowGraphCanvas =>
-        (isConnected || offlineMode || HasGraphData)
+        ShowWorkspace
         && !showDebug
         && tableResult == null
         && (visualizationMode == 2 || visualizationMode == 3)
         && !string.IsNullOrEmpty(queryResults)
         && CurrentGraphData().ValueKind != JsonValueKind.Undefined;
 
-    //The graph data backing the current view: the live graph result when present, else the last one.
-    private JsonElement CurrentGraphData()
+    //The result the tab holds, as it came back: the live graph result when present, else the last one.
+    private JsonElement HeldResult()
     {
         if (graphResultData.ValueKind != JsonValueKind.Undefined)
             return graphResultData;
 
         return lastResultData;
+    }
+
+    //The graph data backing the current view: the result the tab holds, when the viewer can read it as a graph. One it
+    //cannot is no graph data at all, so nothing that draws, tabulates or counts it walks into it, and ResultProblem
+    //says why. Until 2026-10-31 such a result went to every reader as it was, and the first to read it threw out of a
+    //render. Kept with its tab, it threw again on every reload, and the page could not be got back without deleting the
+    //stored tabs from the browser's storage by hand.
+    private JsonElement CurrentGraphData()
+    {
+        if (ResultProblem() != null)
+            return default;
+
+        return HeldResult();
+    }
+
+    //Memo for ResultProblem: the result last read, and what reading it found.
+    private JsonElement problemResult;
+    private bool problemRead;
+    private string problemValue;
+
+    //Why the viewer cannot read the result the tab holds as a graph, or null when it can or there is none. Read once per
+    //result, since it walks the whole of it and the page asks on every render: a JsonElement that is the same document at
+    //the same index is the same result, as GraphStats keeps it.
+    private string ResultProblem()
+    {
+        var held = HeldResult();
+
+        if (held.ValueKind == JsonValueKind.Undefined)
+            return null;
+
+        if (!problemRead || !held.Equals(problemResult))
+        {
+            problemValue = GraphDataConverter.WhyUnreadable(held);
+            problemResult = held;
+            problemRead = true;
+        }
+
+        return problemValue;
     }
 
     //Memo for ResultsHaveNoRenderableGraph so the result set isn't walked on every render.

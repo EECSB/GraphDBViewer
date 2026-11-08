@@ -124,10 +124,8 @@ public class GraphExpansionTests
 
         string label288 = null;
         foreach (var n in fg.GetProperty("nodes").EnumerateArray())
-        {
             if (n.GetProperty("id").GetString() == "288")
                 label288 = n.GetProperty("label").GetString();
-        }
 
         Assert.Equal("Table Top", label288);
     }

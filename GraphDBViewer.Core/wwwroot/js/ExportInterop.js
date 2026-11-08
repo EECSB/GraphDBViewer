@@ -16,5 +16,20 @@ window.exportInterop = {
         const url = URL.createObjectURL(blob);
         this.download(filename, url);
         URL.revokeObjectURL(url);
+    },
+
+    //Triggers a browser download of binary content handed over as base64 (a .glb), via a Blob rather than a data URL,
+    //which a large model would make enormous.
+    downloadBase64: function (filename, base64, mime) {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+
+        for (let i = 0; i < binary.length; i++)
+            bytes[i] = binary.charCodeAt(i);
+
+        const blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        this.download(filename, url);
+        URL.revokeObjectURL(url);
     }
 };

@@ -44,7 +44,12 @@ public static class StorageCompression
         return CompressedMarker + Convert.ToBase64String(output.ToArray());
     }
 
-    ///<summary>Inverse of <see cref="Encode"/>. An unmarked string is returned as-is (defensive).</summary>
+    ///<summary>
+    ///Inverse of <see cref="Encode"/>. An unmarked string is returned as-is (defensive). A compressed payload that cannot
+    ///be read, its base64 or its deflate damaged in storage or by hand, is null, as an absent value is: nothing can be done
+    ///with it, and the next write replaces it. Thrown instead, it reached the page's first render through every store at
+    ///once, and every reload failed the same way until the key was deleted by hand (2026-11-07).
+    ///</summary>
     public static string Decode(string stored)
     {
         if (string.IsNullOrEmpty(stored))
@@ -55,17 +60,23 @@ public static class StorageCompression
 
         if (marker == RawMarker)
             return payload;
-
-        if (marker == CompressedMarker)
+        else if (marker == CompressedMarker)
         {
-            var data = Convert.FromBase64String(payload);
+            try
+            {
+                var data = Convert.FromBase64String(payload);
 
-            using var input = new MemoryStream(data);
-            using var deflate = new DeflateStream(input, CompressionMode.Decompress);
-            using var output = new MemoryStream();
-            deflate.CopyTo(output);
+                using var input = new MemoryStream(data);
+                using var deflate = new DeflateStream(input, CompressionMode.Decompress);
+                using var output = new MemoryStream();
+                deflate.CopyTo(output);
 
-            return Encoding.UTF8.GetString(output.ToArray());
+                return Encoding.UTF8.GetString(output.ToArray());
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         return stored;

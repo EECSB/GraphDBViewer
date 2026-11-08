@@ -10,11 +10,17 @@ window.xrViewerInterop = {
         let vr = false, ar = false;
         const hasXR = !!navigator.xr;
         if (hasXR) {
-            try { vr = await navigator.xr.isSessionSupported('immersive-vr'); }
+            try {
+                vr = await navigator.xr.isSessionSupported('immersive-vr');
+            }
             catch (e) { }
-            try { ar = await navigator.xr.isSessionSupported('immersive-ar'); }
+
+            try {
+                ar = await navigator.xr.isSessionSupported('immersive-ar');
+            }
             catch (e) { }
         }
+
         return { hasXR: hasXR, vr: vr, ar: ar, secure: window.isSecureContext === true };
     },
 
@@ -89,7 +95,10 @@ window.xrViewerInterop = {
         const nodeMeshes = {};
         nodes.forEach(n => {
             let col = 0x4c8bf5;
-            try { col = new THREE.Color(n.bgColor || n.color || '#4c8bf5').getHex(); }
+
+            try {
+                col = new THREE.Color(n.bgColor || n.color || '#4c8bf5').getHex();
+            }
             catch (e) { }
 
             const mesh = new THREE.Mesh(
@@ -105,8 +114,10 @@ window.xrViewerInterop = {
             let s = l.source, t = l.target;
             if (typeof s !== 'object')
                 s = nodes.find(n => n.id === s);
+
             if (typeof t !== 'object')
                 t = nodes.find(n => n.id === t);
+
             if (!s || !t)
                 return;
 
@@ -151,7 +162,7 @@ window.xrViewerInterop = {
     },
 
     //Fetches + builds each node's linked model and swaps it in for the placeholder sphere (async, so the
-    //graph shows immediately and models pop in). Reuses modelPreviewInterop.buildMesh and loadObjModel.
+    //graph shows immediately and models pop in). Reuses modelPreviewInterop.buildMesh and loadModel.
     loadModels: async function (nodes, nodeMeshes, nodeR) {
         const gi = window.graph3DInterop;
         const mpi = window.modelPreviewInterop;
@@ -164,7 +175,10 @@ window.xrViewerInterop = {
                 continue;
 
             let parsed = null;
-            try { parsed = await gi.loadObjModel(n.model, cache); }
+
+            try {
+                parsed = await gi.loadModel(n.model, cache);
+            }
             catch (e) { }
 
             if (!this.state || this.state.disposed)
@@ -224,7 +238,13 @@ window.xrViewerInterop = {
         };
         const onWheel = e => {
             e.preventDefault();
-            radius = Math.max(0.4, Math.min(8, radius + (e.deltaY > 0 ? 0.25 : -0.25)));
+            let step;
+            if (e.deltaY > 0)
+                step = 0.25;
+            else
+                step = -0.25;
+
+            radius = Math.max(0.4, Math.min(8, radius + step));
             apply();
         };
 
@@ -261,7 +281,10 @@ window.xrViewerInterop = {
             return { ok: true };
         }
         catch (e) {
-            return { ok: false, error: e && e.message ? e.message : String(e) };
+            if (e && e.message)
+                return { ok: false, error: e.message };
+
+            return { ok: false, error: String(e) };
         }
     },
 
@@ -272,10 +295,11 @@ window.xrViewerInterop = {
 
         st.disposed = true;
 
-        if (st.session) {
-            try { st.session.end(); }
+        if (st.session)
+            try {
+                st.session.end();
+            }
             catch (e) { }
-        }
 
         if (st.orbitHandlers) {
             window.removeEventListener('mouseup', st.orbitHandlers.onUp);
@@ -283,9 +307,14 @@ window.xrViewerInterop = {
         }
 
         if (st.renderer) {
-            try { st.renderer.setAnimationLoop(null); }
+            try {
+                st.renderer.setAnimationLoop(null);
+            }
             catch (e) { }
-            try { st.renderer.dispose(); }
+
+            try {
+                st.renderer.dispose();
+            }
             catch (e) { }
         }
 

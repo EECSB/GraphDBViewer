@@ -146,10 +146,8 @@ public static class SchemaBuilder
             var val = GraphDataConverter.UnwrapElement(p.Value);
 
             if (val.ValueKind == JsonValueKind.Array)
-            {
                 foreach (var item in val.EnumerateArray())
                     keys.Add(GraphDataConverter.UnwrapElement(item).ToString());
-            }
 
             map[p.Name] = keys;
         }

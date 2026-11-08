@@ -73,8 +73,7 @@ public static class AqlPlan
 
         if (text.StartsWith(ProfileMarker, StringComparison.Ordinal))
             return (PlanKind.Profile, text.Substring(ProfileMarker.Length).TrimStart());
-
-        if (text.StartsWith(ExplainMarker, StringComparison.Ordinal))
+        else if (text.StartsWith(ExplainMarker, StringComparison.Ordinal))
             return (PlanKind.Explain, text.Substring(ExplainMarker.Length).TrimStart());
 
         return (PlanKind.None, query);
@@ -277,13 +276,10 @@ public static class AqlPlan
     private static string Direction(JsonElement node)
     {
         if (node.TryGetProperty("defaultDirection", out var value) && value.TryGetInt64(out var direction))
-        {
             if (direction == 1)
                 return "INBOUND";
-
-            if (direction == 2)
+            else if (direction == 2)
                 return "OUTBOUND";
-        }
 
         return "ANY";
     }

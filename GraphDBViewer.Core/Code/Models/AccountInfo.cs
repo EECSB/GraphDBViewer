@@ -49,6 +49,13 @@ public class AccountInfo
     public string Email { get; set; }
 
     ///<summary>
+    ///The account's id — what the host keys a workspace on. The browser's mirror of that workspace is
+    ///stamped with it, and every storage request names it, so that a second account on the same browser
+    ///neither inherits the first one's copy nor receives its writes.
+    ///</summary>
+    public string Id { get; set; }
+
+    ///<summary>
     ///An antiforgery token for the sign-out form. Handed over here because a form rendered by WebAssembly
     ///has no server-side render to get one from, and signing out is a POST — a link would let any page on
     ///the internet sign you out of this one.

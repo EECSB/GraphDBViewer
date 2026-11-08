@@ -1,0 +1,171 @@
+@using GraphDBViewerWeb.Code
+@using Microsoft.AspNetCore.Components.Forms
+@inject IServiceProvider Services
+
+@*A field that holds one file, the same everywhere in the app (2026-09-30): its link, and, when a source that
+  keeps files is there, Choose, which opens the picker, and Upload, which sends a file from this computer into
+  the folder the field names and fills the link in. A picture shows as one. Upload is offered only to an account
+  that may give the source a file, and not where the caller turns it off; a private file goes into a folder the
+  source keeps private, which the caller names, saying the field is private so that its picker uploads nowhere
+  else (2026-10-03). Without a source it is the link and nothing more, which is how
+  the web-only edition stays as it was. The input carries the data-testid the caller gives and a data-field
+  naming the property, as a generic field would.*@
+<div class="mb-2">
+    @if (!string.IsNullOrEmpty(Label))
+    {
+        <label class="form-label mb-0" style="font-size: .85rem;">@Label</label>
+    }
+
+    <div class="d-flex gap-2 align-items-start">
+        @if (Kind == AssetKinds.Image && !string.IsNullOrWhiteSpace(Value))
+        {
+            <img src="@Value" alt="" class="asset-field-thumb" data-testid="@($"{TestId}-thumb")" />
+        }
+
+        <div class="flex-grow-1">
+            <div class="input-group input-group-sm">
+                <input class="form-control" value="@Value" placeholder="@Placeholder" disabled="@Disabled" @onchange="LinkChangedAsync" data-testid="@TestId" data-field="@FieldName" />
+
+                @if (!Disabled && source != null)
+                {
+                    <button type="button" class="btn btn-outline-secondary" @onclick="() => picking = true" data-testid="@($"{TestId}-choose")">Choose</button>
+                }
+
+                @if (Offered)
+                {
+                    <label class="btn btn-outline-secondary mb-0 @(uploading ? "disabled" : "")" data-testid="@($"{TestId}-upload")">
+                        @(uploading ? "Uploading…" : "Upload")
+                        <InputFile class="d-none" accept="@Accept" OnChange="UploadAsync" disabled="@uploading" />
+                    </label>
+                }
+
+                @if (!Disabled && !string.IsNullOrWhiteSpace(Value))
+                {
+                    <button type="button" class="btn btn-outline-secondary" title="Empty the field" @onclick="ClearAsync" data-testid="@($"{TestId}-clear")">✕</button>
+                }
+            </div>
+
+            @if (!string.IsNullOrEmpty(problem))
+            {
+                <div class="text-danger mt-1" style="font-size: .8rem;" data-testid="@($"{TestId}-problem")">@problem</div>
+            }
+        </div>
+    </div>
+
+    @if (source != null)
+    {
+        <AssetPicker Visible="picking" Kind="@Kind" CurrentUrl="@Value" Folder="@Folder" Uploads="@AllowUpload" Private="@Private" OnPicked="PickedAsync" OnClose="() => picking = false" />
+    }
+</div>
+
+<style>
+    .asset-field-thumb { width: 4rem; height: 4rem; object-fit: cover; border-radius: .25rem; border: 1px solid var(--bs-border-color); flex-shrink: 0; }
+</style>
+
+@code {
+    [Parameter] public string Label { get; set; }
+
+    [Parameter] public string Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    ///<summary>image or any: what Choose shows, and what Upload offers to pick from this computer.</summary>
+    [Parameter] public string Kind { get; set; } = AssetKinds.Any;
+
+    [Parameter] public bool Disabled { get; set; }
+
+    ///<summary>Whether Upload is offered at all; a private file's caller names a private folder instead of turning it off.</summary>
+    [Parameter] public bool AllowUpload { get; set; } = true;
+
+    ///<summary>Whether the field's file is private: the folder it names is one the source keeps private, and its picker uploads nowhere else.</summary>
+    [Parameter] public bool Private { get; set; }
+
+    ///<summary>The folder an upload lands in and Choose opens at; the top level when empty.</summary>
+    [Parameter] public string Folder { get; set; }
+
+    [Parameter] public string TestId { get; set; } = "asset-field";
+
+    ///<summary>The property the field is, as the input's data-field says it.</summary>
+    [Parameter] public string FieldName { get; set; }
+
+    ///<summary>Who is signed in, cascaded by the layout: whether they may upload.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private IAssetSource source;
+    private bool picking;
+    private bool uploading;
+    private string problem;
+
+    protected override void OnInitialized()
+    {
+        source = Services.GetService(typeof(IAssetSource)) as IAssetSource;
+    }
+
+    private bool Offered
+    {
+        get
+        {
+            if (Disabled || !AllowUpload)
+                return false;
+
+            return AssetUploads.MayUpload(source, Account);
+        }
+    }
+
+    private string Placeholder
+    {
+        get
+        {
+            if (source == null || Disabled)
+                return "A link";
+
+            return "A link, or choose or upload a file";
+        }
+    }
+
+    private string Accept
+    {
+        get
+        {
+            if (Kind == AssetKinds.Image)
+                return "image/*";
+
+            return null;
+        }
+    }
+
+    private async Task LinkChangedAsync(ChangeEventArgs e)
+    {
+        problem = null;
+
+        await ValueChanged.InvokeAsync((e.Value?.ToString() ?? "").Trim());
+    }
+
+    private async Task PickedAsync(string url)
+    {
+        problem = null;
+
+        await ValueChanged.InvokeAsync(url);
+    }
+
+    private async Task ClearAsync()
+    {
+        problem = null;
+
+        await ValueChanged.InvokeAsync("");
+    }
+
+    private async Task UploadAsync(InputFileChangeEventArgs e)
+    {
+        uploading = true;
+        problem = null;
+
+        try
+        {
+            problem = await AssetUploads.SendAsync(source, e.File, Folder, item => ValueChanged.InvokeAsync(item.Url));
+        }
+        finally
+        {
+            uploading = false;
+        }
+    }
+}

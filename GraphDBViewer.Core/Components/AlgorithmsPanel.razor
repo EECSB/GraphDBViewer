@@ -1,0 +1,744 @@
+@using System.Globalization
+@using System.Text.Json
+@using GraphDBViewerWeb.Code
+
+@* Algorithms over the loaded graph (DESIGN.md Part 2, Graph algorithms). Tier B computes in this browser on the vertices
+   and edges the canvas holds, so it works on every engine, on an imported file and on a pasted graph alike. Tier A runs
+   the database's own library over the whole database graph, where the connection has one (DatabaseAlgorithms): a Gremlin
+   server's graph computer, Neo4j's Graph Data Science or Memgraph's MAGE, looked for when the panel opens on the
+   connection. Either way what one finds is handed to the page as an AlgorithmOverlay, which the canvas draws and the
+   table lists beside the graph; nothing is written to the graph or to the database. *@
+
+<FloatingDialog Visible="Visible"
+                OnClose="OnClose"
+                Title="Graph algorithms"
+                TitleGlyph="bi-graph-up"
+                StorageKey="algorithms-1"
+                Width="min(620px, 94vw)"
+                Height="min(700px, 90vh)">
+
+    <ChildContent>
+        @if (rows.Count == 0)
+        {
+            <p class="text-body-secondary mb-0" data-testid="algorithms-empty">Load a graph first: these run on the vertices and edges the canvas holds.</p>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap align-items-end gap-2 mb-2">
+                @if (library != null)
+                {
+                    <div>
+                        <label class="form-label small fw-semibold mb-1 d-block">Runs</label>
+                        <select class="form-select form-select-sm" value="@runsIn" @onchange="RunsInChanged" data-testid="algorithms-runs-in" title="In this browser, on the graph as it is drawn; or in the database, by its own library, over the whole of it.">
+                            <option value="@InBrowser">In this browser</option>
+                            <option value="@InDatabase">In the database (@library.Name)</option>
+                        </select>
+                    </div>
+                }
+
+                <div>
+                    <label class="form-label small fw-semibold mb-1 d-block">Algorithm</label>
+                    <select class="form-select form-select-sm" value="@algorithm" @onchange="AlgorithmChanged" data-testid="algorithms-choice">
+                        @foreach (var choice in Choices())
+                        {
+                            <option value="@choice">@ChoiceCaption(choice)</option>
+                        }
+                    </select>
+                </div>
+
+                @if (UsesDirection)
+                {
+                    <div>
+                        <label class="form-label small fw-semibold mb-1 d-block">Edges followed</label>
+                        <select class="form-select form-select-sm" value="@direction" @onchange="DirectionChanged" data-testid="algorithms-direction">
+                            <option value="@GraphAlgorithms.Direction.Both">Either way</option>
+                            <option value="@GraphAlgorithms.Direction.Out">Along their direction</option>
+                            <option value="@GraphAlgorithms.Direction.In">Against their direction</option>
+                        </select>
+                    </div>
+                }
+
+                @if (algorithm == PageRank)
+                {
+                    <div style="width: 7rem;">
+                        <label class="form-label small fw-semibold mb-1 d-block">Damping</label>
+                        <input class="form-control form-control-sm" value="@damping.ToString("0.###", CultureInfo.InvariantCulture)" @onchange="DampingChanged" data-testid="algorithms-damping" title="The chance a random walk follows an edge rather than jumping anywhere: 0.85 in the original paper." />
+                    </div>
+                }
+
+                @if (UsesWeights && edgeColumns.Count > 0)
+                {
+                    <div>
+                        <label class="form-label small fw-semibold mb-1 d-block">Edge weight</label>
+                        <select class="form-select form-select-sm" value="@weightProperty" @onchange="WeightChanged" data-testid="algorithms-weight">
+                            <option value="">Every edge counts one</option>
+                            @foreach (var column in edgeColumns)
+                            {
+                                <option value="@column">@column</option>
+                            }
+                        </select>
+                    </div>
+                }
+
+                <button class="btn btn-primary btn-sm" @onclick="RunAsync" disabled="@running" data-testid="algorithms-run"><i class="bi bi-play-fill me-1" aria-hidden="true"></i>Run</button>
+            </div>
+
+            @if (looking)
+            {
+                <p class="text-body-secondary small mb-2" data-testid="algorithms-looking">Looking for the database's own algorithms…</p>
+            }
+
+            @if (algorithm == Path)
+            {
+                <div class="d-flex flex-wrap align-items-end gap-2 mb-2">
+                    @EndPicker("From", from, v => from = v, "algorithms-from")
+                    @EndPicker("To", to, v => to = v, "algorithms-to")
+                </div>
+
+                <datalist id="algorithms-vertices">
+                    @foreach (var row in rows.Values.OrderBy(r => r.Caption, StringComparer.OrdinalIgnoreCase).Take(MaxListed))
+                    {
+                        <option value="@row.Id">@row.Caption</option>
+                    }
+                </datalist>
+            }
+
+            <p class="text-body-secondary small mb-2" data-testid="algorithms-about">@About</p>
+
+            @if (running && InTheDatabase)
+            {
+                <p class="small mb-2" data-testid="algorithms-running">Running in the database, over the whole of it: a big graph takes a while.</p>
+            }
+
+            @if (error != null)
+            {
+                <div class="alert alert-warning py-1 px-2 small mb-2" data-testid="algorithms-error">@error</div>
+            }
+
+            @if (Overlay != null)
+            {
+                <div class="border rounded p-2" data-testid="algorithms-result">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <strong>@Overlay.Name</strong>
+                        <span class="text-body-secondary small">@Summary()</span>
+                        <button class="btn btn-link btn-sm p-0 ms-auto" @onclick="OnClear" data-testid="algorithms-clear" title="Draw the graph as it was, and take the column out of the table.">Clear</button>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(Overlay.Where))
+                    {
+                        <div class="text-body-secondary small mb-1" data-testid="algorithms-where">@Overlay.Where</div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(Overlay.Note))
+                    {
+                        <div class="text-body-secondary small mb-1" data-testid="algorithms-note">@Overlay.Note</div>
+                    }
+
+                    @if (Overlay.Kind == AlgorithmOverlay.Kinds.Score)
+                    {
+                        <div class="d-flex gap-3 small mb-1">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="algorithms-size" checked="@Overlay.SizeByScore" @onchange="e => RestyleAsync(() => Overlay.SizeByScore = e.Value is true)" data-testid="algorithms-size" />
+                                <label class="form-check-label" for="algorithms-size">Size vertices by it</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="algorithms-color" checked="@Overlay.ColorByScore" @onchange="e => RestyleAsync(() => Overlay.ColorByScore = e.Value is true)" data-testid="algorithms-color" />
+                                <label class="form-check-label" for="algorithms-color">Color them by it, blue low to red high</label>
+                            </div>
+                        </div>
+
+                        <table class="table table-sm table-hover mb-0 small">
+                            <thead><tr><th style="width: 3rem;">#</th><th>Vertex</th><th class="text-end">@Overlay.Name</th></tr></thead>
+                            <tbody>
+                                @foreach (var (id, score, place) in Top())
+                                {
+                                    <tr class="gdbv-pointer" @onclick="() => OnFocus.InvokeAsync(new[] { id })" data-testid="algorithms-top" title="Find it on the canvas">
+                                        <td>@place</td>
+                                        <td>@CaptionOf(id)</td>
+                                        <td class="text-end font-monospace">@AlgorithmOverlay.Formatted(score)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else if (Overlay.Kind == AlgorithmOverlay.Kinds.Group)
+                    {
+                        <div class="form-check small mb-1">
+                            <input class="form-check-input" type="checkbox" id="algorithms-groups" checked="@Overlay.ColorByGroup" @onchange="e => RestyleAsync(() => Overlay.ColorByGroup = e.Value is true)" data-testid="algorithms-group-color" />
+                            <label class="form-check-label" for="algorithms-groups">Color vertices by their group</label>
+                        </div>
+
+                        <table class="table table-sm table-hover mb-0 small">
+                            <thead><tr><th style="width: 4rem;">Group</th><th>Vertices</th><th class="text-end">Size</th></tr></thead>
+                            <tbody>
+                                @foreach (var group in Groups().Take(MaxShown))
+                                {
+                                    var members = group.Members;
+                                    <tr class="gdbv-pointer" @onclick="() => OnFocus.InvokeAsync(members)" data-testid="algorithms-group" title="Find them on the canvas">
+                                        <td><span class="d-inline-block rounded-circle me-1" style="width: .7rem; height: .7rem; vertical-align: -1px; background: @GraphPalette.Colors[group.Number % GraphPalette.Colors.Length];"></span>@(group.Number + 1)</td>
+                                        <td class="text-truncate" style="max-width: 22rem;">@string.Join(", ", members.Take(5).Select(CaptionOf))@(members.Count > 5 ? ", …" : "")</td>
+                                        <td class="text-end">@members.Count</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <ol class="small mb-0 ps-3" data-testid="algorithms-path">
+                            @foreach (var id in Overlay.PathNodes)
+                            {
+                                <li>@CaptionOf(id)</li>
+                            }
+                        </ol>
+
+                        <button class="btn btn-outline-secondary btn-sm mt-1" @onclick="() => OnFocus.InvokeAsync(Overlay.PathNodes)" data-testid="algorithms-path-show">Find it on the canvas</button>
+                    }
+                </div>
+            }
+        }
+    </ChildContent>
+
+    <FooterContent>
+        @* No Close button: the × in the title bar closes it, and the button sat under the resize grip (the user, 2026-10-29). *@
+        <span class="text-body-secondary small me-auto" data-testid="algorithms-footer">@Footer</span>
+    </FooterContent>
+</FloatingDialog>
+
+@code {
+    public const string Degree = AlgorithmNames.Degree;
+    public const string PageRank = AlgorithmNames.PageRank;
+    public const string Betweenness = AlgorithmNames.Betweenness;
+    public const string Components = AlgorithmNames.Components;
+    public const string Communities = AlgorithmNames.Communities;
+    public const string PeerPressure = AlgorithmNames.PeerPressure;
+    public const string Path = AlgorithmNames.Path;
+
+    ///<summary>Where an algorithm runs: in this browser, on the graph drawn, or in the database by its own library, over the whole of it.</summary>
+    public const string InBrowser = "browser";
+    public const string InDatabase = "database";
+
+    ///<summary>How many vertices the betweenness walks from at most before it estimates (GraphAlgorithms.Betweenness).</summary>
+    public const int BetweennessSources = GraphAlgorithms.BetweennessSources;
+
+    ///<summary>How many top vertices and groups are listed, and how many vertices a picker offers by name.</summary>
+    private const int MaxShown = 10;
+    private const int MaxListed = 2000;
+
+    ///<summary>What the browser runs, every one of them on every engine.</summary>
+    private static readonly IReadOnlyList<string> HereAlgorithms = [Degree, PageRank, Betweenness, Components, Communities, Path];
+
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    ///<summary>The drawn graph, staged edits and all, which is what the algorithms run on.</summary>
+    [Parameter] public JsonElement CurrentGraph { get; set; }
+
+    ///<summary>The per-label styles, so a vertex is named here as the canvas names it.</summary>
+    [Parameter] public IReadOnlyDictionary<string, LabelStyle> LabelStyles { get; set; }
+
+    ///<summary>The vertex selected on the canvas, which a path's ends can be set to.</summary>
+    [Parameter] public string SelectedNodeId { get; set; }
+
+    ///<summary>The connected database, or null with none: what an algorithm runs in when it runs there.</summary>
+    [Parameter] public IGraphDb Database { get; set; }
+
+    ///<summary>Its engine, a GraphDbProviders id, which says whether it could have algorithms of its own at all.</summary>
+    [Parameter] public string DatabaseType { get; set; }
+
+    ///<summary>What the page draws now, when it was computed on this graph; the summary is of it.</summary>
+    [Parameter] public AlgorithmOverlay Overlay { get; set; }
+
+    ///<summary>A new result, for the page to draw.</summary>
+    [Parameter] public EventCallback<AlgorithmOverlay> OnApply { get; set; }
+
+    ///<summary>The result's look changed (a checkbox), for the page to draw again.</summary>
+    [Parameter] public EventCallback OnRestyle { get; set; }
+
+    [Parameter] public EventCallback OnClear { get; set; }
+
+    ///<summary>Vertices to find on the canvas.</summary>
+    [Parameter] public EventCallback<IReadOnlyList<string>> OnFocus { get; set; }
+
+    private sealed record Vertex(string Id, string Caption);
+
+    private sealed record Group(int Number, List<string> Members);
+
+    private Dictionary<string, Vertex> rows = new(StringComparer.Ordinal);
+    private List<DrawnVertex> drawn = [];
+    private List<string> edgeColumns = [];
+    private GraphDataConverter.GraphTable table;
+    private JsonElement readFrom;
+
+    private string algorithm = Degree;
+    private GraphAlgorithms.Direction direction = GraphAlgorithms.Direction.Both;
+    private double damping = 0.85;
+    private string weightProperty = "";
+    private string from = "";
+    private string to = "";
+    private bool running;
+    private string error;
+
+    ///<summary>Where the next run is made, and the database's own library when it has one, looked for once per connection.</summary>
+    private string runsIn = InBrowser;
+    private IDatabaseAlgorithms library;
+    private IGraphDb lookedIn;
+    private bool looking;
+
+    private bool InTheDatabase => runsIn == InDatabase && library != null;
+
+    private bool UsesDirection
+    {
+        get
+        {
+            if (InTheDatabase)
+                return library.Directs(algorithm);
+
+            return algorithm == Degree || algorithm == Betweenness || algorithm == Path;
+        }
+    }
+
+    private bool UsesWeights
+    {
+        get
+        {
+            if (InTheDatabase)
+                return library.Weighs(algorithm);
+
+            return algorithm == Communities || algorithm == Path;
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        //Read while open alone, and once per graph: a table of a big result costs a walk of it, and the panel, mounted
+        //all the while, renders whenever the page does.
+        if (!Visible)
+            return;
+
+        if (readFrom.ValueKind == CurrentGraph.ValueKind && readFrom.Equals(CurrentGraph) && table != null)
+            return;
+
+        readFrom = CurrentGraph;
+        rows = new Dictionary<string, Vertex>(StringComparer.Ordinal);
+        drawn = [];
+        edgeColumns = [];
+        table = null;
+
+        if (CurrentGraph.ValueKind == JsonValueKind.Undefined)
+            return;
+
+        table = GraphDataConverter.ToTable(CurrentGraph);
+
+        foreach (var row in table.Nodes)
+            if (rows.TryAdd(row.Id, new Vertex(row.Id, GraphDataConverter.CaptionOf(row, LabelStyles))))
+                drawn.Add(new DrawnVertex(row.Id, row.IdType));
+
+        //An edge's end the result does not hold is drawn, and counted, as its id.
+        foreach (var row in table.Edges)
+        {
+            if (row.Source != null && rows.TryAdd(row.Source, new Vertex(row.Source, row.Source)))
+                drawn.Add(new DrawnVertex(row.Source));
+
+            if (row.Target != null && rows.TryAdd(row.Target, new Vertex(row.Target, row.Target)))
+                drawn.Add(new DrawnVertex(row.Target));
+        }
+
+        edgeColumns = table.EdgePropertyColumns.Where(c => !c.StartsWith("gdbv", StringComparison.Ordinal)).ToList();
+
+        if (!edgeColumns.Contains(weightProperty))
+            weightProperty = "";
+    }
+
+    ///<summary>
+    ///Looks for the database's own library the first time the panel opens on a connection, by a cheap read
+    ///(DatabaseAlgorithms.FindAsync), so a connection that never opens it is never asked. A new connection is asked
+    ///again, and its answer alone is kept.
+    ///</summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!Visible || ReferenceEquals(Database, lookedIn))
+            return;
+
+        var asked = Database;
+
+        lookedIn = asked;
+        library = null;
+        runsIn = InBrowser;
+        KeepAnOfferedAlgorithm();
+
+        if (asked == null || !DatabaseAlgorithms.MayHaveLibrary(DatabaseType))
+            return;
+
+        looking = true;
+
+        try
+        {
+            var found = await DatabaseAlgorithms.FindAsync(DatabaseType, DatabaseAlgorithms.ReaderOf(asked), CancellationToken.None);
+
+            if (ReferenceEquals(asked, lookedIn))
+                library = found;
+        }
+        catch (OperationCanceledException)
+        {
+            //The read gave up: no library offered, and the browser's algorithms are still there.
+        }
+        finally
+        {
+            if (ReferenceEquals(asked, lookedIn))
+                looking = false;
+        }
+    }
+
+    private IReadOnlyList<string> Choices()
+    {
+        if (InTheDatabase)
+            return library.Algorithms;
+
+        return HereAlgorithms;
+    }
+
+    private string ChoiceCaption(string choice)
+    {
+        if (InTheDatabase)
+            return library.Caption(choice);
+
+        if (choice == Degree)
+            return "Degree";
+        else if (choice == PageRank)
+            return "PageRank";
+        else if (choice == Betweenness)
+            return "Betweenness";
+        else if (choice == Components)
+            return "Connected components";
+        else if (choice == Communities)
+            return "Communities (Louvain)";
+
+        return "Shortest path";
+    }
+
+    ///<summary>The algorithm chosen, kept when where it runs has it, else the first that does.</summary>
+    private void KeepAnOfferedAlgorithm()
+    {
+        var choices = Choices();
+
+        if (!choices.Contains(algorithm))
+            algorithm = choices[0];
+    }
+
+    private string About
+    {
+        get
+        {
+            if (InTheDatabase)
+                return library.About(algorithm);
+
+            if (algorithm == Degree)
+                return "How many edges each vertex has. Vertices are drawn by it, the busiest biggest.";
+            else if (algorithm == PageRank)
+                return "How important each vertex is by what points at it, and how important those are in turn, along the edges' direction. The scores add up to one.";
+            else if (algorithm == Betweenness)
+                return "How many shortest paths between other vertices pass through each: the brokers, where the graph would come apart.";
+            else if (algorithm == Components)
+                return "The pieces the graph falls into, the edges' direction ignored. Each piece is drawn in a color of its own.";
+            else if (algorithm == Communities)
+                return "Groups more tightly linked among themselves than to the rest, by the Louvain method, the edges' direction ignored.";
+
+            return "The shortest way from one vertex to another: the fewest edges, or the least total weight. The rest of the graph is dimmed.";
+        }
+    }
+
+    private string Footer
+    {
+        get
+        {
+            if (InTheDatabase)
+                return "Computed in the database, over the whole of its graph, and shown for the vertices drawn. Nothing is written to the graph or the database.";
+
+            return "Computed in this browser, on the graph as it is drawn. Nothing is written to the graph or the database.";
+        }
+    }
+
+    private void RunsInChanged(ChangeEventArgs e)
+    {
+        runsIn = e.Value?.ToString() ?? InBrowser;
+        error = null;
+        KeepAnOfferedAlgorithm();
+    }
+
+    private void AlgorithmChanged(ChangeEventArgs e)
+    {
+        algorithm = e.Value?.ToString() ?? Degree;
+        error = null;
+    }
+
+    private void DirectionChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<GraphAlgorithms.Direction>(e.Value?.ToString(), out var chosen))
+            direction = chosen;
+    }
+
+    private void DampingChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value > 0 && value < 1)
+            damping = value;
+    }
+
+    private void WeightChanged(ChangeEventArgs e)
+    {
+        weightProperty = e.Value?.ToString() ?? "";
+    }
+
+    private RenderFragment EndPicker(string caption, string value, Action<string> set, string testId)
+    {
+        return @<div>
+            <label class="form-label small fw-semibold mb-1 d-block">@caption</label>
+            <div class="input-group input-group-sm" style="width: 16rem;">
+                <input class="form-control" list="algorithms-vertices" value="@value" @onchange="e => set(e.Value?.ToString() ?? string.Empty)" placeholder="A vertex's id" data-testid="@testId" />
+                <button class="btn btn-outline-secondary" type="button" disabled="@(string.IsNullOrEmpty(SelectedNodeId))" @onclick="() => set(SelectedNodeId)" title="The vertex selected on the canvas" data-testid="@(testId + "-selected")">Selected</button>
+            </div>
+        </div>;
+    }
+
+    private async Task RunAsync()
+    {
+        error = null;
+
+        if (table == null)
+            return;
+
+        running = true;
+
+        try
+        {
+            AlgorithmOverlay overlay;
+
+            if (InTheDatabase)
+                overlay = await RunInDatabaseAsync();
+            else
+                overlay = ComputeHere();
+
+            if (overlay != null)
+                await OnApply.InvokeAsync(overlay);
+        }
+        finally
+        {
+            running = false;
+        }
+    }
+
+    ///<summary>The chosen algorithm computed in this browser, on the graph as it is drawn, or null with the reason in <see cref="error"/>.</summary>
+    private AlgorithmOverlay ComputeHere()
+    {
+        var graph = GraphAlgorithms.FromTable(table, weightProperty, out var unweighed);
+        var overlay = Compute(graph, unweighed);
+
+        if (overlay != null)
+            overlay.Where = DatabaseAlgorithms.ComputedHere(graph.Count);
+
+        return overlay;
+    }
+
+    ///<summary>
+    ///The chosen algorithm run in the database by its own library, over the whole database graph, and mapped onto the
+    ///vertices drawn; or null with the reason in <see cref="error"/>. Its queries go down the engine's read-only path where
+    ///the driver has one.
+    ///</summary>
+    private async Task<AlgorithmOverlay> RunInDatabaseAsync()
+    {
+        var start = "";
+        var end = "";
+
+        if (algorithm == Path && !PathEnds(out start, out end))
+            return null;
+
+        var weight = "";
+
+        if (library.Weighs(algorithm))
+            weight = weightProperty;
+
+        var request = new AlgorithmRequest
+        {
+            Algorithm = algorithm,
+            Direction = direction,
+            Damping = damping,
+            WeightProperty = weight,
+            From = start,
+            To = end,
+            Vertices = drawn
+        };
+
+        DatabaseAlgorithmOutcome outcome;
+
+        try
+        {
+            outcome = await library.RunAsync(request, DatabaseAlgorithms.ReaderOf(Database), CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            error = "The database did not answer in the time a request is given, so the wait for it was given up: it may still be working on it.";
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            error = $"The database could not run it: {ex.Message}";
+
+            return null;
+        }
+
+        if (outcome.NoPath)
+        {
+            error = $"No path leads from {CaptionOf(start)} to {CaptionOf(end)}{DirectionPhrase()} in the database.";
+
+            return null;
+        }
+
+        if (outcome.Error != null)
+        {
+            error = outcome.Error;
+
+            return null;
+        }
+
+        return outcome.Overlay;
+    }
+
+    ///<summary>The chosen algorithm's result, or null with the reason in <see cref="error"/>.</summary>
+    private AlgorithmOverlay Compute(GraphAlgorithms.Graph graph, int unweighed)
+    {
+        var weighed = !string.IsNullOrEmpty(weightProperty) && UsesWeights;
+        string note = null;
+
+        if (weighed && unweighed > 0)
+            note = $"{DatabaseAlgorithms.Count(unweighed, "edge has", "edges have")} no number in {weightProperty} and {DatabaseAlgorithms.Plural(unweighed, "counts", "count")} one.";
+
+        if (algorithm == Degree)
+            return new AlgorithmOverlay { Name = $"Degree{DatabaseAlgorithms.DirectionSuffix(direction)}", Kind = AlgorithmOverlay.Kinds.Score, Scores = GraphAlgorithms.Degree(graph, direction) };
+        else if (algorithm == PageRank)
+            return new AlgorithmOverlay { Name = "PageRank", Kind = AlgorithmOverlay.Kinds.Score, Scores = GraphAlgorithms.PageRank(graph, damping) };
+        else if (algorithm == Betweenness)
+        {
+            if (graph.Count > BetweennessSources)
+                note = $"Estimated from walks out of {BetweennessSources.ToString("N0", CultureInfo.InvariantCulture)} of the {graph.Count.ToString("N0", CultureInfo.InvariantCulture)} vertices, spread evenly.";
+
+            return new AlgorithmOverlay { Name = $"Betweenness{DatabaseAlgorithms.DirectionSuffix(direction)}", Kind = AlgorithmOverlay.Kinds.Score, Scores = GraphAlgorithms.Betweenness(graph, direction, BetweennessSources), Note = note };
+        }
+        else if (algorithm == Components)
+            return new AlgorithmOverlay { Name = "Component", Kind = AlgorithmOverlay.Kinds.Group, Groups = GraphAlgorithms.ConnectedComponents(graph) };
+        else if (algorithm == Communities)
+            return new AlgorithmOverlay { Name = "Community", Kind = AlgorithmOverlay.Kinds.Group, Groups = GraphAlgorithms.Communities(graph), Note = note };
+
+        return ShortestPath(graph, weighed, note);
+    }
+
+    ///<summary>A path's two ends as typed, when both are and both are drawn, or false with the reason in <see cref="error"/>.</summary>
+    private bool PathEnds(out string start, out string end)
+    {
+        start = (from ?? "").Trim();
+        end = (to ?? "").Trim();
+
+        if (start.Length == 0 || end.Length == 0)
+        {
+            error = "Say which vertex the path is from and which it is to: type an id, or select one on the canvas and press Selected.";
+
+            return false;
+        }
+
+        if (!rows.ContainsKey(start) || !rows.ContainsKey(end))
+        {
+            var missing = start;
+
+            if (rows.ContainsKey(start))
+                missing = end;
+
+            error = $"There is no vertex {missing} in the graph as it is drawn.";
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private AlgorithmOverlay ShortestPath(GraphAlgorithms.Graph graph, bool weighed, string note)
+    {
+        if (!PathEnds(out var start, out var end))
+            return null;
+
+        if (weighed && graph.Edges.Any(e => e.Weight < 0))
+        {
+            error = $"Some edges weigh less than nothing in {weightProperty}, and a shortest path has no answer when a way round can cost less each time.";
+
+            return null;
+        }
+
+        var path = GraphAlgorithms.ShortestPath(graph, start, end, direction, weighed);
+
+        if (path == null)
+        {
+            error = $"No path leads from {CaptionOf(start)} to {CaptionOf(end)}{DirectionPhrase()}.";
+
+            return null;
+        }
+
+        var cost = $"{DatabaseAlgorithms.Count(path.Edges.Count, "edge", "edges")}";
+
+        if (weighed)
+            cost += $", {AlgorithmOverlay.Formatted(path.Cost)} in {weightProperty}";
+
+        return new AlgorithmOverlay { Name = "Path", Kind = AlgorithmOverlay.Kinds.Path, PathNodes = path.Nodes, PathCost = path.Cost, Note = DatabaseAlgorithms.Join(cost, note) };
+    }
+
+    private string DirectionPhrase()
+    {
+        if (direction == GraphAlgorithms.Direction.Out)
+            return " along the edges' direction";
+        else if (direction == GraphAlgorithms.Direction.In)
+            return " against the edges' direction";
+
+        return " at all";
+    }
+
+    private async Task RestyleAsync(Action change)
+    {
+        change();
+
+        await OnRestyle.InvokeAsync();
+    }
+
+    private string Summary()
+    {
+        if (Overlay.Kind == AlgorithmOverlay.Kinds.Score)
+            return $"of {DatabaseAlgorithms.Count(Overlay.Scores.Count, "vertex", "vertices")}";
+        else if (Overlay.Kind == AlgorithmOverlay.Kinds.Group)
+            return DatabaseAlgorithms.Count(Overlay.Groups.Values.Distinct().Count(), "group", "groups");
+
+        return $"{DatabaseAlgorithms.Count(Overlay.PathNodes.Count, "vertex", "vertices")} long";
+    }
+
+    private IEnumerable<(string Id, double Score, int Place)> Top()
+    {
+        return Overlay.Scores
+            .OrderByDescending(s => s.Value)
+            .ThenBy(s => CaptionOf(s.Key), StringComparer.OrdinalIgnoreCase)
+            .Take(MaxShown)
+            .Select((s, i) => (s.Key, s.Value, i + 1));
+    }
+
+    private List<Group> Groups()
+    {
+        return Overlay.Groups
+            .GroupBy(g => g.Value)
+            .OrderBy(g => g.Key)
+            .Select(g => new Group(g.Key, g.Select(m => m.Key).ToList()))
+            .ToList();
+    }
+
+    private string CaptionOf(string id)
+    {
+        if (id != null && rows.TryGetValue(id, out var vertex))
+            return vertex.Caption;
+
+        return id ?? "";
+    }
+}

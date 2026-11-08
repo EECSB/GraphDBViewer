@@ -52,6 +52,88 @@ public class WorkspaceStoreTests
         return new WorkspaceStore(new InMemoryStorage());
     }
 
+    //── Open connections (the multiple-connections spec, task 3) ──────────
+
+    //Nothing stored as open connections reads back as nothing, though a browser from before there were several keeps
+    //its one list of tabs: the page brings those back from their own key as the first connection's.
+    [Fact]
+    public async Task LoadConnections_ReturnsNull_WhenNoneStored_EvenWithTheOldTabs()
+    {
+        var store = NewStore();
+
+        await store.SaveTabsAsync(new[] { new QueryTab { Name = "Kept" } });
+
+        Assert.Null(await store.LoadConnectionsAsync());
+        Assert.Equal("Kept", Assert.Single(await store.LoadTabsAsync()).Name);
+    }
+
+    //Each connection comes back with its form, the saved connection it was picked from, whether it was drawing offline,
+    //its tabs and the tab in front, disconnected, and the connection that was in front is in front again. Its key does
+    //not: a form nobody saved does not keep a password in a second place, and a saved one fills it again on the way back.
+    [Fact]
+    public async Task SaveConnections_LoadConnections_RoundTripsEachConnectionAndItsTabs()
+    {
+        var store = NewStore();
+        var a = new ViewerConnection
+        {
+            Connection = new GremlinDB.GremlinConnection("WebSocket", 8182, false, "a.example", "secret", "", ""),
+            SelectedConnectionKey = "Saved A",
+            Tabs = new List<QueryTab> { new QueryTab { Name = "A1" }, new QueryTab { Name = "A2" } },
+            ActiveTabIndex = 1,
+            IsConnected = true
+        };
+        var b = new ViewerConnection
+        {
+            Connection = new GremlinDB.GremlinConnection("HTTP", 8529, true, "b.example", "other", "", ""),
+            OfflineMode = true,
+            Tabs = new List<QueryTab> { new QueryTab { Name = "B1" } }
+        };
+
+        await store.SaveConnectionsAsync(new[] { a, b }, 1);
+
+        var open = await store.LoadConnectionsAsync();
+
+        Assert.Equal(1, open.Active);
+        Assert.Equal(new[] { a.Id, b.Id }, open.Connections.Select(c => c.Id));
+
+        var ra = open.Connections[0];
+        var rb = open.Connections[1];
+
+        Assert.Equal("a.example", ra.Connection.Hostname);
+        Assert.Equal(8182, ra.Connection.Port);
+        Assert.Equal("Saved A", ra.SelectedConnectionKey);
+        Assert.Equal(new[] { "A1", "A2" }, ra.Tabs.Select(t => t.Name));
+        Assert.Equal(1, ra.ActiveTabIndex);
+        Assert.False(ra.IsConnected);
+        Assert.Null(ra.Db);
+        Assert.Equal("b.example", rb.Connection.Hostname);
+        Assert.Null(rb.SelectedConnectionKey);
+        Assert.True(rb.OfflineMode);
+        Assert.Equal("B1", Assert.Single(rb.Tabs).Name);
+        Assert.Empty(ra.Connection.AuthKey ?? "");
+        Assert.Empty(rb.Connection.AuthKey ?? "");
+        Assert.Equal("secret", a.Connection.AuthKey);
+    }
+
+    //The editor text typed since the last heavy save comes back on the tab it was typed in, whichever connection's.
+    [Fact]
+    public async Task LoadConnections_OverlaysTheEditorTextOnEveryConnectionsTabs()
+    {
+        var store = NewStore();
+        var a = new ViewerConnection { Tabs = new List<QueryTab> { new QueryTab { Name = "A1", QueryText = "old a" } } };
+        var b = new ViewerConnection { Tabs = new List<QueryTab> { new QueryTab { Name = "B1", QueryText = "old b" } } };
+
+        await store.SaveConnectionsAsync(new[] { a, b }, 0);
+
+        b.Tabs[0].QueryText = "typed in b";
+        await store.SaveTabTextAsync(new[] { a, b }.SelectMany(c => c.Tabs));
+
+        var open = await store.LoadConnectionsAsync();
+
+        Assert.Equal("old a", open.Connections[0].Tabs[0].QueryText);
+        Assert.Equal("typed in b", open.Connections[1].Tabs[0].QueryText);
+    }
+
     //── Tabs ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -97,7 +179,8 @@ public class WorkspaceStoreTests
             TableExportFormat = "xlsx",
             LabelStyles = new Dictionary<string, LabelStyle> { ["person"] = new LabelStyle { Color = "#ff0000", Size = 40, Shape = "circle", Shape3d = "cube" } },
             EdgeColorMode = 2,
-            EdgeColors = new Dictionary<string, string> { ["knows"] = "#00ff00" }
+            EdgeColors = new Dictionary<string, string> { ["knows"] = "#00ff00" },
+            EdgeDetails = ["knows"]
         };
 
         await store.SaveTabsAsync(new[] { tab });
@@ -137,6 +220,7 @@ public class WorkspaceStoreTests
         Assert.Equal("cube", r.LabelStyles["person"].Shape3d);
         Assert.Equal(2, r.EdgeColorMode);
         Assert.Equal("#00ff00", r.EdgeColors["knows"]);
+        Assert.Equal(["knows"], r.EdgeDetails);
     }
 
     [Fact]
@@ -156,6 +240,24 @@ public class WorkspaceStoreTests
         var r = Assert.Single(restored);
         Assert.Equal("new query", r.QueryText);
         Assert.Equal("new generated", r.GeneratedQueryText);
+    }
+
+    //The 3D draw-distance sliders and Node size on map are view preferences of the tab like its layout and its map
+    //style, and come back as they were set, a slider's end, 0, among them (the audit of 2026-11-07: ToSnapshot never
+    //wrote them, so every reload put all three back at 100).
+    [Fact]
+    public async Task TheDrawDistances_AndTheMapNodeSize_SurviveAReload()
+    {
+        var store = NewStore();
+        var tab = new QueryTab { Name = "Q", Draw3dLabelDistance = 40, Draw3dNodeDistance = 0, MapNodeSize = 150 };
+
+        await store.SaveTabsAsync(new[] { tab });
+        var restored = await store.LoadTabsAsync();
+
+        var r = Assert.Single(restored);
+        Assert.Equal(40, r.Draw3dLabelDistance);
+        Assert.Equal(0, r.Draw3dNodeDistance);
+        Assert.Equal(150, r.MapNodeSize);
     }
 
     [Fact]
@@ -181,12 +283,18 @@ public class WorkspaceStoreTests
         //A tab saved before edge coloring existed restores in the default Auto mode with an empty color map.
         Assert.Equal(0, tab.EdgeColorMode);
         Assert.NotNull(tab.EdgeColors);
+        Assert.NotNull(tab.EdgeDetails);
         //A tab saved before the 3D "Properties" toggle existed restores with it ON (the default).
         Assert.True(tab.Show3dProps);
         //And one saved before the earth had two sizes restores on the standard one: the detailed image is
         //3.7 MB, and only a choice made since fetches it.
         Assert.Equal("satellite", tab.MapStyle);
         Assert.Equal("standard", tab.MapDetail);
+        //A tab saved before the draw-distance sliders and Node size on map were kept restores with all three at 100,
+        //the sliders' "Full".
+        Assert.Equal(100, tab.Draw3dLabelDistance);
+        Assert.Equal(100, tab.Draw3dNodeDistance);
+        Assert.Equal(100, tab.MapNodeSize);
     }
 
     [Fact]
@@ -197,12 +305,12 @@ public class WorkspaceStoreTests
         Assert.Equal("png", tab.ImageExportFormat);
     }
 
+    //Each language an engine with AI tools runs is kept by GraphDbProvidersTests.EveryEngineWithAiTools_NamesTheLanguageItRuns;
+    //SPARQL, which none of them runs, is kept here, and nothing, or a word no editor offers, is Gremlin.
     [Theory]
-    [InlineData("gremlin", "gremlin")]
     [InlineData("sparql", "sparql")]
-    [InlineData("cypher", "cypher")]
-    [InlineData("", "gremlin")]
     [InlineData(null, "gremlin")]
+    [InlineData("cobol", "gremlin")]
     public void NormalizeEditorLanguage_KeepsKnownLanguagesElseFallsBackToGremlin(string input, string expected)
     {
         Assert.Equal(expected, WorkspaceStore.NormalizeEditorLanguage(input));

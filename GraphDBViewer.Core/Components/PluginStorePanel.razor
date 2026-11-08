@@ -107,6 +107,14 @@
                                         <button type="button" class="btn btn-outline-primary btn-sm" disabled="@busy" @onclick="() => OnInstall.InvokeAsync((entry, newest))" data-testid="store-card-install">Install @newest.Version</button>
                                     }
                                 </div>
+
+                                @*Said on the card before its button is pressed, and never a refusal (decided with the user on
+                                   2026-10-04): the version the button would fetch comes over plain http with nothing to check
+                                   its code by.*@
+                                @if (PlainWarning(entry, ActsOn(installed, newest, update)) is string plain)
+                                {
+                                    <div class="text-warning-emphasis mt-1" style="font-size: .75rem;" data-testid="store-card-plain">@plain</div>
+                                }
                             </div>
                         </div>
 
@@ -252,6 +260,30 @@
     private InstalledPluginRecord InstalledOf(string id)
     {
         return Installed?.FirstOrDefault(r => string.Equals(r.Manifest?.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    ///<summary>The version a card's button would fetch: the update when there is one, else the newest when it is not installed; else none.</summary>
+    private static StoreVersion ActsOn(InstalledPluginRecord installed, StoreVersion newest, StoreVersion update)
+    {
+        if (update != null)
+            return update;
+
+        if (installed == null)
+            return newest;
+
+        return null;
+    }
+
+    ///<summary>
+    ///What a card says of a version that would come over plain http with nothing to check its code by, or null: the
+    ///sentence the page then does not ask again before the code is fetched (2026-10-04).
+    ///</summary>
+    public static string PlainWarning(StoreEntry entry, StoreVersion version)
+    {
+        if (entry == null || version == null)
+            return null;
+
+        return PluginInstaller.PlainWarning(version.Manifest, null, version.Sha256, entry.Source);
     }
 
     private List<StoreEntry> Shown()

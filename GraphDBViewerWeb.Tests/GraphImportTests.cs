@@ -86,6 +86,95 @@ public class GraphImportTests
         Assert.DoesNotContain(g.Nodes, n => n.Id == "rankdir" || n.Id == "node");
     }
 
+    [Fact]
+    public void Parse_Dot_StripsCommentsOutsideStrings()
+    {
+        var dot = "digraph {\n# a preprocessor line\n    a -> b // to the end of the line\n    c /* not d */ [label=\"C\"]\n}";
+
+        var g = GraphImport.Parse(dot);
+
+        Assert.Equal(3, g.Nodes.Count);
+        Assert.Single(g.Edges);
+        Assert.Equal("C", g.Nodes.Single(n => n.Id == "c").Properties["name"]);
+    }
+
+    private static GraphDataConverter.GraphTable TableWithNode(string id, string name)
+    {
+        var json = JsonSerializer.Serialize(new object[]
+        {
+            new { id, label = "Item", properties = new { name } }
+        });
+
+        return GraphDataConverter.ToTable(JsonDocument.Parse(json).RootElement);
+    }
+
+    //What ToDot writes for one node, read back in: the one node it was.
+    private static GraphImport.Node RoundTrip(string id, string name)
+    {
+        var dot = GraphDataConverter.ToDot(TableWithNode(id, name));
+        var graph = GraphImport.Parse(dot);
+
+        Assert.NotNull(graph);
+
+        return Assert.Single(graph.Nodes);
+    }
+
+    //The DOT export quotes every name, and a comment marker inside the quotes is part of the name: a part number's
+    //hash, a URL's double slash, a C-style /* in a note, and a SPARQL vertex's IRI with a fragment as its id.
+    [Theory]
+    [InlineData("n1", "Item #3")]
+    [InlineData("n1", "see https://example.com/x")]
+    [InlineData("n1", "a /* b */ c")]
+    [InlineData("http://example.org/doc#alice", "Alice")]
+    public void ACommentMarkerInAQuotedName_IsPartOfTheName(string id, string name)
+    {
+        var node = RoundTrip(id, name);
+
+        Assert.Equal(id, node.Id);
+        Assert.Equal(name, node.Properties["name"]);
+    }
+
+    [Fact]
+    public void ASemicolonInAQuotedName_DoesNotEndTheStatement()
+    {
+        var node = RoundTrip("n1", "a; b");
+
+        Assert.Equal("n1", node.Id);
+        Assert.Equal("a; b", node.Properties["name"]);
+    }
+
+    [Theory]
+    [InlineData("x -> y")]
+    [InlineData("a -- b")]
+    public void AnEdgeOperatorInAQuotedName_DoesNotMakeTheNodeAnEdge(string name)
+    {
+        var node = RoundTrip("n1", name);
+
+        Assert.Equal("n1", node.Id);
+        Assert.Equal(name, node.Properties["name"]);
+    }
+
+    [Fact]
+    public void ALineBreakInAName_ReadsBackAsALineBreak()
+    {
+        //DotQuote writes a line break as \n. The escapes are read back in one pass, so a backslash before an n, which
+        //DotQuote writes as \\n, is still a backslash and an n, and a quote is still a quote.
+        Assert.Equal("two\nlines", RoundTrip("n1", "two\nlines").Properties["name"]);
+        Assert.Equal(@"C:\new", RoundTrip("n1", @"C:\new").Properties["name"]);
+        Assert.Equal("a \"quoted\" name", RoundTrip("n1", "a \"quoted\" name").Properties["name"]);
+    }
+
+    [Fact]
+    public void AnEdgeOperatorInAQuotedEndId_IsPartOfTheId()
+    {
+        var g = GraphImport.Parse("digraph { \"x -> y\" -> \"a -- b\" [label=knows] }");
+
+        var edge = Assert.Single(g.Edges);
+        Assert.Equal("x -> y", edge.Source);
+        Assert.Equal("a -- b", edge.Target);
+        Assert.Equal(2, g.Nodes.Count);
+    }
+
     #endregion
 
     #region Mermaid

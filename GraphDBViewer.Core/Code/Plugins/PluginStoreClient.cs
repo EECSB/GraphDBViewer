@@ -103,10 +103,8 @@ public sealed class PluginStoreClient
         var states = new List<StoreSourceState>();
 
         foreach (var source in sources ?? [])
-        {
             if (!string.IsNullOrWhiteSpace(source))
                 states.Add(await OneAsync(source, refresh));
-        }
 
         return states;
     }

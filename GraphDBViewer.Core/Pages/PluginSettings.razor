@@ -1,5 +1,5 @@
 @page "/plugins/settings/{PluginId}"
-@layout MainLayout
+@layout CardLayout
 @using System.Net.Http.Json
 @using GraphDBViewerWeb.Code
 @inject ViewerHostOptions HostOptions
@@ -88,13 +88,10 @@ else
         var installed = await InstalledPlugins.LoadAsync(Http);
 
         foreach (var candidate in installed.Records)
-        {
             if (candidate.Manifest.Id == PluginId)
                 record = candidate;
-        }
 
         if (record != null)
-        {
             try
             {
                 var response = await Http.GetAsync(InstanceStateContract.PathFor(InstanceStateContract.SettingsKeyFor(PluginId)));
@@ -109,7 +106,6 @@ else
             {
                 //Unreachable host reads as "nothing stored"; saving will say so properly.
             }
-        }
 
         loading = false;
     }

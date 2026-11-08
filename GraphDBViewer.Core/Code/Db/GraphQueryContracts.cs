@@ -10,6 +10,12 @@ public sealed class GraphQueryRequest
 {
     public GremlinDB.GremlinConnection Connection { get; set; }
     public string Query { get; set; }
+
+    ///<summary>
+    ///Run it on the engine's own read-only path where the driver has one (<see cref="IReadOnlyCapableGraphDb"/>):
+    ///Ask AI's read tool. A host that predates this ignores it, and the query runs as it always did.
+    ///</summary>
+    public bool ReadOnly { get; set; }
 }
 
 ///<summary>

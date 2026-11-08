@@ -12,124 +12,191 @@ namespace GraphDBViewerWeb.Code;
 ///</summary>
 public static class CypherStatementParser
 {
-    //The writing clauses. A read-only query contains none of them; FOREACH and CALL are not listed because
-    //what they do is decided by what is written inside them, and a write there is caught by these anyway.
+    //The writing clauses, and the commands that change the database itself: users, roles, privileges, databases,
+    //transactions. A read-only query contains none of them. FOREACH is not listed because what it does is decided
+    //by what is written inside it, and a write there is caught by these anyway; a CALL is judged by the procedure
+    //it names.
     private static readonly HashSet<string> WriteKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "CREATE", "MERGE", "SET", "DELETE", "DETACH", "REMOVE", "DROP", "LOAD"
+        "CREATE", "MERGE", "SET", "DELETE", "DETACH", "REMOVE", "DROP", "LOAD",
+        "ALTER", "GRANT", "DENY", "REVOKE", "RENAME", "START", "STOP", "TERMINATE"
     };
 
+    //The procedures known to read and nothing more, on Neo4j and on Memgraph: the schema and the server describing
+    //themselves, and full-text search. A name ending in a dot stands for every procedure under it. Any other is
+    //taken for a write, since a guard cannot see into a procedure and a writing one need not say so in its name:
+    //db.createLabel does not, and apoc.periodic.iterate carries its writes in strings.
+    private static readonly string[] ReadingProcedures =
+    [
+        "db.labels", "db.relationshiptypes", "db.propertykeys", "db.schema.", "db.indexes", "db.constraints",
+        "db.info", "db.ping", "db.index.fulltext.querynodes", "db.index.fulltext.queryrelationships",
+        "dbms.components", "dbms.procedures", "dbms.functions", "apoc.meta.", "apoc.help",
+        "mg.procedures", "mg.functions", "schema.node_type_properties", "schema.rel_type_properties"
+    ];
+
     ///<summary>
-    ///True when the query contains a writing clause outside a string, a backticked identifier or a comment
-    ///— so a node literally named 'DELETE' or a property key <c>`set`</c> doesn't read as a mutation.
+    ///True when the query contains a writing clause, or calls a procedure not known to read. A word counts only
+    ///where a clause can stand: not inside a string, a backticked identifier or a comment, and not as a property
+    ///(after a dot), a label or relationship type (after a colon), a parameter (after a dollar sign), a map key
+    ///(before a colon) or part of a longer name. So a node literally named 'DELETE', a property <c>n.set</c>, a
+    ///label <c>:Load</c> or a key <c>{remove: 1}</c> doesn't read as a mutation. Until 2026-10-03 every one of
+    ///those but the first did, and a CALL of <c>db.createLabel</c> did not.
     ///</summary>
     public static bool IsMutating(string query)
     {
         if (string.IsNullOrEmpty(query))
             return false;
 
-        foreach (var word in Words(query))
-            if (WriteKeywords.Contains(word))
+        var tokens = Tokens(query);
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (!IsClauseWord(tokens, i))
+                continue;
+
+            if (WriteKeywords.Contains(tokens[i].Text))
                 return true;
+
+            if (string.Equals(tokens[i].Text, "CALL", StringComparison.OrdinalIgnoreCase) && CallsAWrite(tokens, i + 1))
+                return true;
+        }
 
         return false;
     }
 
-    //Walks the query, skipping string literals, backticked identifiers and comments, and yields the bare
-    //words in between.
-    private static IEnumerable<string> Words(string query)
+    //Whether the word at i stands where a clause can, rather than naming a property, a label or relationship type,
+    //a parameter or a map key.
+    private static bool IsClauseWord(List<Token> tokens, int i)
     {
-        var word = new StringBuilder();
+        if (tokens[i].Kind != TokenKind.Word)
+            return false;
 
-        for (int i = 0; i < query.Length; i++)
+        if (i > 0 && tokens[i - 1].Kind == TokenKind.Symbol && tokens[i - 1].Text is "." or ":" or "$")
+            return false;
+
+        if (i + 1 < tokens.Count && tokens[i + 1].Kind == TokenKind.Symbol && tokens[i + 1].Text == ":")
+            return false;
+
+        return true;
+    }
+
+    //Whether the CALL whose procedure name starts at the given token calls one not known to read. A CALL that opens
+    //a subquery names no procedure, and what is inside it is read like the rest of the query.
+    private static bool CallsAWrite(List<Token> tokens, int start)
+    {
+        if (start >= tokens.Count)
+            return false;
+
+        if (tokens[start].Kind == TokenKind.Symbol && (tokens[start].Text == "{" || tokens[start].Text == "("))
+            return false;
+
+        //A backticked name is not looked into: unknown, so taken for a write.
+        if (tokens[start].Kind != TokenKind.Word)
+            return true;
+
+        var name = new StringBuilder(tokens[start].Text);
+
+        for (int i = start + 1; i + 1 < tokens.Count && tokens[i].Text == "." && tokens[i + 1].Kind == TokenKind.Word; i += 2)
+            name.Append('.').Append(tokens[i + 1].Text);
+
+        var procedure = name.ToString().ToLowerInvariant();
+
+        return !ReadingProcedures.Any(known => procedure == known || (known.EndsWith('.') && procedure.StartsWith(known, StringComparison.Ordinal)));
+    }
+
+    private enum TokenKind
+    {
+        Word,
+        Quoted,
+        Symbol
+    }
+
+    //One piece of a query: a word, a quoted string or backticked identifier (whose text is never read, so nothing
+    //inside one can look like a clause), or one character of punctuation.
+    private readonly record struct Token(TokenKind Kind, string Text);
+
+    //The query as tokens, with its comments and spaces left out. A word is letters, digits and underscores, so
+    //load_factor is one name rather than LOAD and something after it.
+    private static List<Token> Tokens(string query)
+    {
+        var tokens = new List<Token>();
+        int i = 0;
+
+        while (i < query.Length)
         {
             char c = query[i];
 
-            //Line comment.
-            if (c == '/' && i + 1 < query.Length && query[i + 1] == '/')
-            {
-                if (word.Length > 0)
-                {
-                    yield return word.ToString();
-                    word.Clear();
-                }
-
-                while (i < query.Length && query[i] != '\n')
-                    i++;
-
-                continue;
-            }
-
-            //Block comment.
-            if (c == '/' && i + 1 < query.Length && query[i + 1] == '*')
-            {
-                if (word.Length > 0)
-                {
-                    yield return word.ToString();
-                    word.Clear();
-                }
-
-                i += 2;
-                while (i + 1 < query.Length && !(query[i] == '*' && query[i + 1] == '/'))
-                    i++;
-
+            if (char.IsWhiteSpace(c))
                 i++;
-                continue;
-            }
-
-            //A quoted string or a backticked identifier — neither can hold a clause.
-            if (c == '\'' || c == '"' || c == '`')
+            else if (c == '/' && i + 1 < query.Length && query[i + 1] == '/')
+                i = PastLine(query, i);
+            else if (c == '/' && i + 1 < query.Length && query[i + 1] == '*')
+                i = PastBlockComment(query, i);
+            else if (c == '\'' || c == '"' || c == '`')
             {
-                if (word.Length > 0)
-                {
-                    yield return word.ToString();
-                    word.Clear();
-                }
+                i = PastQuoted(query, i);
+                tokens.Add(new Token(TokenKind.Quoted, ""));
+            }
+            else if (IsWordChar(c))
+            {
+                int start = i;
 
-                char quote = c;
-                i++;
-
-                while (i < query.Length)
-                {
-                    //Backticks escape by doubling rather than with a backslash.
-                    if (quote != '`' && query[i] == '\\')
-                    {
-                        i += 2;
-                        continue;
-                    }
-
-                    if (query[i] == quote)
-                    {
-                        if (quote == '`' && i + 1 < query.Length && query[i + 1] == '`')
-                        {
-                            i += 2;
-                            continue;
-                        }
-
-                        break;
-                    }
-
+                while (i < query.Length && IsWordChar(query[i]))
                     i++;
-                }
 
-                continue;
+                tokens.Add(new Token(TokenKind.Word, query.Substring(start, i - start)));
             }
-
-            if (char.IsLetter(c))
+            else
             {
-                word.Append(c);
-                continue;
-            }
-
-            if (word.Length > 0)
-            {
-                yield return word.ToString();
-                word.Clear();
+                tokens.Add(new Token(TokenKind.Symbol, c.ToString()));
+                i++;
             }
         }
 
-        if (word.Length > 0)
-            yield return word.ToString();
+        return tokens;
+    }
+
+    private static bool IsWordChar(char c)
+    {
+        return char.IsLetterOrDigit(c) || c == '_';
+    }
+
+    private static int PastLine(string query, int i)
+    {
+        while (i < query.Length && query[i] != '\n')
+            i++;
+
+        return i;
+    }
+
+    private static int PastBlockComment(string query, int i)
+    {
+        i += 2;
+
+        while (i + 1 < query.Length && !(query[i] == '*' && query[i + 1] == '/'))
+            i++;
+
+        return i + 2;
+    }
+
+    //Just past the string or backticked identifier opening at i. A backslash escapes inside a string; a backtick
+    //is escaped by doubling it.
+    private static int PastQuoted(string query, int i)
+    {
+        char quote = query[i];
+        i++;
+
+        while (i < query.Length)
+            if (quote != '`' && query[i] == '\\')
+                i += 2;
+            else if (quote == '`' && query[i] == '`' && i + 1 < query.Length && query[i + 1] == '`')
+                i += 2;
+            else if (query[i] == quote)
+                return i + 1;
+            else
+                i++;
+
+        return i;
     }
 
     //── Staged-edit parsing ─────────────────────────────────────────────
@@ -338,7 +405,7 @@ public static class CypherStatementParser
     //Reverses CypherQueryBuilder.Escape.
     private static string Unescape(string value)
     {
-        return (value ?? string.Empty).Replace("\\'", "'").Replace("\\\\", "\\");
+        return StagedLiteral.Unescape(value);
     }
 
     //Reverses the doubling CypherQueryBuilder.QuoteIdentifier applies inside backticks.

@@ -1,0 +1,3239 @@
+@using GraphDBViewerWeb.Code
+@using System.Text
+@implements IDisposable
+@inject HttpClient Http
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+@inject LlmConnectionStore Store
+
+@* An AI chat window, the same for every plugin (2026-11-02, out of Ask AI, at the user's word: "shared components ...
+   they can reference or reuse the Blazor component ... and if they want to add extra stuff, change it"). A running
+   conversation with one of the person's own models, which may call the tools the window is given; how far it goes on its
+   own is the rung at the box's foot, and every call it makes is a card in the conversation. What a window is about comes
+   in as parameters: its title and instructions, its tools and how the picker names them, the examples and intro of an
+   empty chat, its own slash commands, the words speech should expect, and what goes under an answer or on a card. Its
+   chats are its own (ChatsName). Ask AI (NlQueryModal) is this window with the graph's. The plugin guide shows the rest
+   (wiki/pages/integrating/writing-a-plugin.md, AI models).
+
+   The conversation itself is AiChat's (2026-11-01). The window is GDS Viewer's AI assistant's, asked for that day ("the
+   styling, everything"): the box and its controls in one rounded frame, the model and its effort one button with fast
+   mode in its menu, Send and Stop one button, a slash for the window's commands, a tool picker, and the (i) with what
+   the next question costs. Its rules are .gdbv-ai-* in app.css, GDS Viewer's in this app's theme.
+
+   A question carries files (2026-11-02, GDS Viewer's): by the paperclip, a paste into the box or a drop on the
+   conversation, shown as chips over the box and then over the question, and listed in the files panel beside the
+   conversation, where one can be unticked to stop sending it. 960 wide to begin with since then, as GDS Viewer's is, for
+   the panel's room.
+
+   And it can be spoken, or carry a picture from the camera or a screenshot (2026-11-02, GDS Viewer's): the microphone
+   writes into the box, by the browser's own recognition or a recording the AI provider writes out (SpeechTranscriber),
+   and the camera and the screenshot go in through the paperclip's input as a paste does.
+
+   A long one can be compacted (2026-11-02, GDS Viewer's): Compact in the tool picker, the priced suggestion over the box
+   once the history is worth it, or /compact puts a briefing in its place, and what it stands in for stays on screen,
+   folded away, and is not sent again (AiChat.CompactAsync). /export saves it as text (AiChat.Transcript).
+
+   And every chat is kept (2026-11-02, GDS Viewer's): listed down the window's left with New chat at the top, opened again
+   and carried on, saved as text or deleted from its own row. They are kept where the models are (ChatStore), with the
+   account in Treeality and in this browser in the standalone viewer. *@
+
+<FloatingDialog Visible="Visible"
+                OnClose="OnClose"
+                Title="@Title"
+                Class="gdbv-ai-window"
+                StorageKey="@StorageKey"
+                Width="min(960px, 94vw)"
+                Height="min(720px, 88vh)">
+
+    <HeaderContent>
+        @HeaderContent
+    </HeaderContent>
+
+    <TitleIcon>
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <path fill="currentColor" d="M6.4 1.6c.3 2.6 1.6 4 4.2 4.3-2.6.3-3.9 1.7-4.2 4.3-.3-2.6-1.6-4-4.2-4.3 2.6-.3 3.9-1.7 4.2-4.3z" />
+            <path fill="currentColor" d="M11.6 8.6c.2 1.6 1 2.4 2.6 2.6-1.6.2-2.4 1-2.6 2.6-.2-1.6-1-2.4-2.6-2.6 1.6-.2 2.4-1 2.6-2.6z" />
+        </svg>
+    </TitleIcon>
+
+    <ChildContent>
+        @* A file dropped on the conversation or the box goes into the box for the next question, through the paperclip's own
+           input (data-drop-into, see attachFiles in FloatingDialogInterop.js); one dropped anywhere else in the window is
+           swallowed rather than left to the browser, which would open it in place of the page. *@
+        <div class="d-flex flex-column flex-grow-1 gap-2" style="min-height: 0;" data-drop-guard @ref="body">
+            <div class="gdbv-ai-row gdbv-ai-drop" data-drop-into="@AttachInputId" @ref="row">
+                @* The chats kept, down the left as the Claude app has them (2026-11-02, GDS Viewer's): New chat at the top, then
+                   the chat on screen and every one kept, the one changed last first, each opened by a press and carried on, and
+                   saved as text or deleted from its own row, which asks in the row. A chat is kept from its first answer on,
+                   and again after every answer and every compaction; until then it is the first row all the same. Where they
+                   are kept is where the models are: with the account in Treeality, in this browser in the standalone viewer
+                   (ChatStore). Open to begin with, collapsed and opened by its arrow in the window's margin, and sized by its
+                   divider, as the files panel is. Nothing is switched while an answer is coming, which belongs to the chat on
+                   screen. *@
+                @if (chatsOpen)
+                {
+                    <aside class="gdbv-ai-chats" aria-label="Chats" data-testid="ai-chats">
+                        @* Closed by its own cross, at its top right (2026-11-05, the user); the margin's arrow only opens it. *@
+                        <div class="gdbv-ai-panel-top">
+                            <button type="button" class="gdbv-ai-chats-new" data-testid="ai-new-chat" title="@NewChatTitle"
+                                    disabled="@(!CanLeaveChat() || chat.Turns.Count == 0)" @onclick="NewChat">
+                                <svg viewBox="0 0 16 16" aria-hidden="true">
+                                    <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                                </svg>
+                                New chat
+                            </button>
+                            <button type="button" class="btn-close gdbv-ai-panel-close" aria-label="Close the chats" title="Close the chats" data-testid="ai-chats-close" @onclick="ToggleChats"></button>
+                        </div>
+
+                        <div class="gdbv-ai-chats-head">Chats</div>
+
+                        @* The chat on screen before it is kept: the first row, as it will be once its first answer is in. *@
+                        @if (chatId == null)
+                        {
+                            <div class="gdbv-ai-chat-item gdbv-ai-chat-item-on" aria-current="true" data-testid="ai-chat-now" title="The chat on screen, kept here from its first answer on">
+                                <span class="gdbv-ai-chat-text">
+                                    <span class="gdbv-ai-chat-title">@SavedChat.TitleFor(chat.Turns)</span>
+                                    <span class="gdbv-ai-chat-when">Not kept yet</span>
+                                </span>
+                            </div>
+                        }
+
+                        @foreach (var kept in chats)
+                        {
+                            var each = kept;
+                            var current = each.Id == chatId;
+
+                            if (deletingId == each.Id)
+                            {
+                                <div class="gdbv-ai-chat-item gdbv-ai-chat-deleting" data-chat="@each.Id">
+                                    <span class="gdbv-ai-chat-ask">Delete this chat? What its queries changed stays.</span>
+
+                                    <span class="gdbv-ai-chat-ask-buttons">
+                                        <button type="button" class="gdbv-ai-chat-delete-yes" data-testid="ai-chat-delete-yes" @onclick="() => DeleteChatAsync(each.Id)">Delete</button>
+                                        <button type="button" class="gdbv-ai-chat-delete-no" data-testid="ai-chat-delete-no" @onclick="() => deletingId = null">Keep</button>
+                                    </span>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="gdbv-ai-chat-item @(current ? "gdbv-ai-chat-item-on" : "") @(CanLeaveChat() || current ? "" : "gdbv-ai-chat-item-off")" data-chat="@each.Id"
+                                     role="button" tabindex="0" aria-current="@(current ? "true" : "false")" title="@ChatRowTitle(each)"
+                                     @onclick="() => OpenChatAsync(each.Id)" @onkeydown="e => ChatRowKeyAsync(e, each.Id)">
+                                    <span class="gdbv-ai-chat-text">
+                                        <span class="gdbv-ai-chat-title">@each.Title</span>
+                                        <span class="gdbv-ai-chat-when">@ChatWhen(each)</span>
+                                    </span>
+
+                                    <button type="button" class="gdbv-ai-chat-button" data-testid="ai-chat-export" aria-label="Save as text"
+                                            title="Save this chat as text: every question, answer and tool call, and what each answer was billed"
+                                            disabled="@(current && chat.Generating)" @onclick="() => ExportChatAsync(each)" @onclick:stopPropagation="true">
+                                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                                            <path fill="currentColor" d="M8 1.5a.5.5 0 0 1 .5.5v7.79l2.65-2.64a.5.5 0 0 1 .7.7l-3.5 3.5a.5.5 0 0 1-.7 0l-3.5-3.5a.5.5 0 1 1 .7-.7L7.5 9.79V2a.5.5 0 0 1 .5-.5" />
+                                            <path fill="currentColor" d="M2.5 10.5a.5.5 0 0 1 .5.5v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2a.5.5 0 0 1 1 0v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-2a.5.5 0 0 1 .5-.5" />
+                                        </svg>
+                                    </button>
+
+                                    <button type="button" class="gdbv-ai-chat-button gdbv-ai-chat-delete" data-testid="ai-chat-delete" aria-label="Delete"
+                                            title="Delete this chat. What its tool calls changed stays"
+                                            disabled="@(current && !CanLeaveChat())" @onclick="() => deletingId = each.Id" @onclick:stopPropagation="true">
+                                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                                            <path fill="currentColor" d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                                            <path fill="currentColor" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            }
+                        }
+
+                        @if (chatsProblem.Length > 0)
+                        {
+                            <div class="gdbv-ai-chats-problem" data-testid="ai-chats-problem">@chatsProblem</div>
+                        }
+
+                        <div class="gdbv-ai-chats-kept" data-testid="ai-chats-kept">Kept @KeptWhere()</div>
+                    </aside>
+                }
+
+                @* The chats' arrow, in the window's margin on the left, only while the panel is closed: it opens it, and the
+                   panel's own cross closes it (2026-11-05, the user). The bare arrow, no box round it. The divider is for
+                   sizing alone, and only there while the panel is. *@
+                @if (!chatsOpen)
+                {
+                    <button type="button" class="gdbv-ai-split-toggle gdbv-ai-split-toggle-left" data-testid="ai-chats-toggle" aria-expanded="false"
+                            aria-label="Open the chats" title="@ChatsTitle" @onclick="ToggleChats">
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M5.75 3.5 10.25 8l-4.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2"
+                                  stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                }
+
+                @if (chatsOpen)
+                {
+                    <div class="gdbv-ai-split" data-split="chats" title="Drag to size the chats"></div>
+                }
+
+                <div class="gdbv-ai-transcript" data-testid="ai-transcript" @ref="scroller">
+                    @if (chat.Turns.Count == 0 && TranscriptPanel == null)
+                    {
+                        <div class="gdbv-ai-intro">
+                            @if (Intro != null)
+                            {
+                                <p>@Intro</p>
+                            }
+                            else
+                            {
+                                <p>Ask in plain English, and keep talking to refine what comes back.</p>
+                            }
+
+                            <div class="gdbv-ai-examples" aria-label="Examples to start from">
+                                @foreach (var example in Examples)
+                                {
+                                    <button type="button" class="gdbv-ai-example" data-testid="ai-example" title="Put this in the box, to send or change first" @onclick="() => UseExampleAsync(example)">@example</button>
+                                }
+                            </div>
+
+                            <p>@SentNote</p>
+
+                            @if (selected == null)
+                            {
+                                <p class="gdbv-ai-intro-warning" data-testid="ai-no-model">
+                                    There is no model yet. Add one, with your own key from Anthropic, OpenAI or Google, under AI settings.
+
+                                    @if (OnOpenSettings.HasDelegate)
+                                    {
+                                        <button type="button" class="gdbv-ai-link" @onclick="OnOpenSettings">Open AI settings</button>
+                                    }
+                                </p>
+                            }
+                        </div>
+                    }
+
+                    @* What a compaction folded away is still here, before its briefing: shown when asked, dimmed, and hidden
+                       otherwise, since none of it is sent. *@
+                    @{
+                        var folded = chat.FoldedBefore;
+                    }
+
+                    @for (int i = 0; i < chat.Turns.Count; i++)
+                    {
+                        var turn = chat.Turns[i];
+                        var last = i == chat.Turns.Count - 1;
+
+                        <div class="@FoldClass(i, folded)">
+                            @if (turn.Kind == ChatTurn.User)
+                            {
+                                <div class="gdbv-ai-turn gdbv-ai-turn-user">
+                                    <div class="gdbv-ai-question">
+                                        @* The files it was sent with, over its words: struck through once unticked in the files panel. *@
+                                        @if (turn.Attachments.Count > 0)
+                                        {
+                                            <div class="gdbv-ai-chips" data-testid="ai-question-files">
+                                                @foreach (var file in turn.Attachments)
+                                                {
+                                                    <span class="gdbv-ai-chip @(file.Excluded ? "gdbv-ai-chip-off" : "")" title="@SentChipTitle(file)">@file.Name</span>
+                                                }
+                                            </div>
+                                        }
+
+                                        <div class="gdbv-ai-bubble gdbv-ai-bubble-user">@turn.Text</div>
+                                    </div>
+                                </div>
+                            }
+                            else if (turn.Kind == ChatTurn.Assistant)
+                            {
+                                @if (!string.IsNullOrWhiteSpace(turn.Text))
+                                {
+                                    <div class="gdbv-ai-turn">
+                                        <div class="gdbv-ai-bubble gdbv-ai-bubble-assistant">@turn.Text</div>
+                                    </div>
+                                }
+
+                                @* What the answer proposed, lifted out of its words by ProposedOf, with what the window's owner offers
+                                   to do with it under it (Ask AI: Use this query, and Run and answer). *@
+                                @if (turn.Query != null)
+                                {
+                                    <div class="gdbv-ai-proposed">
+                                        <pre class="gdbv-ai-code">@turn.Query</pre>
+
+                                        @if (AnswerActions != null)
+                                        {
+                                            <div class="gdbv-ai-proposed-actions">@AnswerActions(turn)</div>
+                                        }
+                                    </div>
+                                }
+
+                                <UsageLine Turn="turn" />
+                            }
+                            else if (turn.Kind == ChatTurn.Tool)
+                            {
+                                var ownResult = OwnResultOf(turn);
+
+                                <div class="gdbv-ai-card @(turn.Changes ? "gdbv-ai-card-change" : "gdbv-ai-card-read")" data-tool="@turn.ToolName">
+                                    <div class="gdbv-ai-card-title">
+                                        @CardTitleOf(turn)
+                                        @if (turn.Auto)
+                                        {
+                                            <span class="gdbv-ai-badge" title="Run without asking, because of the rung set below">auto</span>
+                                        }
+                                    </div>
+                                    @* A call with nothing to show, as a look at a picture is, shows nothing: the picture is the card's. *@
+                                    @if (ownResult == null && ShowsArguments(turn))
+                                    {
+                                        <pre class="gdbv-ai-code">@(turn.Query ?? turn.ArgumentsJson)</pre>
+                                    }
+
+                                    @if (turn.Decision == null)
+                                    {
+                                        <div class="gdbv-ai-card-buttons">
+                                            @* The two answers are opposite, so they read as opposite: a tick against a cross in red. A
+                                               change is drawn in red, since here it cannot be undone. *@
+                                            <button class="btn btn-sm @(turn.Changes ? "btn-danger" : "btn-success")" @onclick="() => chat.Decide(turn, true)">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="currentColor" viewBox="0 0 16 16" class="gdbv-ico" aria-hidden="true"><path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z"/></svg>
+                                                @(turn.Changes ? ApproveChangeText : "Approve and run")
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => chat.Decide(turn, false)">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" class="gdbv-ico" aria-hidden="true"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854z"/></svg>
+                                                Decline
+                                            </button>
+
+                                            @if (CardActions != null)
+                                            {
+                                                @CardActions(turn)
+                                            }
+                                        </div>
+                                    }
+                                    else if (turn.Decision == false)
+                                    {
+                                        <div class="gdbv-ai-card-note">Declined. The model was told it was not run.</div>
+
+                                        @if (CardActions != null)
+                                        {
+                                            @CardActions(turn)
+                                        }
+                                    }
+                                    else if (turn.Result == null)
+                                    {
+                                        <div class="gdbv-ai-card-note">Running…</div>
+                                    }
+                                    else if (ownResult != null)
+                                    {
+                                        @ownResult
+                                    }
+                                    else
+                                    {
+                                        <div class="gdbv-ai-card-note">@(turn.ResultIsError ? "Refused. The model was told why:" : "Ran. The model was given this result:")</div>
+                                        <pre class="gdbv-ai-code @(turn.ResultIsError ? "gdbv-ai-code-refused" : "")">@turn.Result</pre>
+
+                                        @if (turn.Png is string png)
+                                        {
+                                            <img class="gdbv-ai-picture" src="data:image/png;base64,@png" alt="The picture the model was shown" />
+                                        }
+                                    }
+                                </div>
+                            }
+                            else if (turn.Kind == ChatTurn.Summary)
+                            {
+                                @* A compaction's briefing, in place of the conversation before it, which a press shows again. *@
+                                <div class="gdbv-ai-summary" data-testid="ai-summary">
+                                    <div class="gdbv-ai-summary-head">
+                                        <span class="gdbv-ai-summary-title">Conversation compacted</span>
+
+                                        @if (i == folded)
+                                        {
+                                            <button type="button" class="gdbv-ai-link" data-testid="ai-show-earlier" @onclick="() => showEarlier = !showEarlier">@EarlierToggle(folded)</button>
+                                        }
+                                    </div>
+
+                                    <div class="gdbv-ai-summary-note">The assistant carries on from this briefing. What came before it is not sent again.</div>
+                                    <div class="gdbv-ai-summary-text">@turn.Text</div>
+
+                                    @if (turn.Attachments.Count > 0)
+                                    {
+                                        <div class="gdbv-ai-summary-note gdbv-ai-summary-files">
+                                            Its files are kept, unticked: @string.Join(", ", turn.Attachments.Select(file => file.Name)).
+                                            <button type="button" class="gdbv-ai-link" @onclick="() => filesOpen = true">Tick one in the files panel</button> to send it again.
+                                        </div>
+                                    }
+                                </div>
+
+                                <UsageLine Turn="turn" />
+                            }
+                            else if (turn.Kind == ChatTurn.Reopened)
+                            {
+                                <div class="gdbv-ai-turn-note" data-testid="ai-reopened">@turn.Text</div>
+                            }
+                            else if (turn.Kind == ChatTurn.Paused)
+                            {
+                                @* A long run that was working, paused rather than failed: Continue only on the last turn. *@
+                                <div class="gdbv-ai-turn-paused" data-testid="ai-paused">
+                                    <span>@turn.Text</span>
+
+                                    @if (last && !chat.Generating)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-primary" data-testid="ai-continue" @onclick="ContinueAsync">Continue</button>
+                                    }
+                                </div>
+
+                                <UsageLine Turn="turn" />
+                            }
+                            else
+                            {
+                                <div class="gdbv-ai-turn-error">@turn.Text</div>
+
+                                @* A run that failed or was stopped partway was still billed for what it sent. *@
+                                <UsageLine Turn="turn" />
+                            }
+                        </div>
+                    }
+
+                    @if (chat.Compacting)
+                    {
+                        <div class="gdbv-ai-thinking">Compacting the conversation…</div>
+                    }
+                    else if (chat.Generating)
+                    {
+                        <div class="gdbv-ai-thinking">Thinking…</div>
+                    }
+
+                    @if (TranscriptPanel != null)
+                    {
+                        @TranscriptPanel(new AiChatPanelState(selected?.Name, chat.Generating))
+                    }
+                </div>
+
+                @* The slash commands: a slash at the start of the box lists what the window can do, over the conversation's
+                   foot just above the box, narrowed as the name is typed. *@
+                @if (SlashShown())
+                {
+                    var offered = SlashMatches();
+
+                    <div class="gdbv-ai-slash-menu" role="listbox" aria-label="Commands" data-testid="ai-slash-menu">
+                        @for (int i = 0; i < offered.Count; i++)
+                        {
+                            var command = offered[i];
+                            var index = i;
+
+                            <div class="gdbv-ai-slash-item @(index == slashIndex ? "gdbv-ai-slash-item-on" : "") @(command.Why == null ? "" : "gdbv-ai-slash-item-off")"
+                                 role="option" aria-selected="@(index == slashIndex ? "true" : "false")" data-command="@command.Name"
+                                 title="@(command.Why ?? command.Says)"
+                                 @onmouseenter="() => slashIndex = index" @onmousedown:preventDefault="true" @onclick="() => RunSlashAsync(command, string.Empty)">
+                                <span class="gdbv-ai-slash-name">/@command.Name</span>
+                                <span class="gdbv-ai-slash-says">@(command.Why ?? command.Says)</span>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @* The model menu, from the model's button in the box's row: the saved models with a check on the one picked,
+                   then the effort, a row that opens its levels in the menu's place, and fast mode on a model that offers it.
+                   A press anywhere else puts it away, and so does Escape. *@
+                @if (modelMenuOpen)
+                {
+                    <div class="gdbv-ai-model-menu" role="menu" aria-label="Model and effort" tabindex="-1" data-testid="ai-model-menu" @ref="modelMenuCard" @onkeydown="ModelMenuKey">
+                        @if (effortListOpen)
+                        {
+                            <button type="button" class="gdbv-ai-menu-item gdbv-ai-menu-back" data-testid="ai-effort-back" @onclick="CloseEfforts">
+                                <svg class="gdbv-ai-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                                    <path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                                Effort
+                            </button>
+
+                            @foreach (var offered in LlmConnection.EffortLevels(selected).Prepend(""))
+                            {
+                                var choosing = offered;
+
+                                <button type="button" class="gdbv-ai-menu-item" role="menuitemradio" aria-checked="@(effort == choosing ? "true" : "false")"
+                                        data-effort="@choosing" @onclick="() => ChooseEffort(choosing)">
+                                    <span class="gdbv-ai-menu-name">@(choosing.Length == 0 ? $"Default ({EffortName(LlmConnection.DefaultEffort(selected))})" : EffortName(choosing))</span>
+
+                                    @if (effort == choosing)
+                                    {
+                                        <svg class="gdbv-ai-menu-check" viewBox="0 0 16 16" aria-hidden="true">
+                                            <path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                                        </svg>
+                                    }
+                                </button>
+                            }
+                        }
+                        else
+                        {
+                            @if (models.Count == 0)
+                            {
+                                <div class="gdbv-ai-menu-note">No model yet. Add one under AI settings.</div>
+                            }
+
+                            @foreach (var (name, connection) in models)
+                            {
+                                var choosing = name;
+                                var on = selected?.Name == name;
+
+                                <button type="button" class="gdbv-ai-menu-item" role="menuitemradio" aria-checked="@(on ? "true" : "false")"
+                                        data-model="@choosing" @onclick="() => ChooseModel(choosing)">
+                                    <span class="gdbv-ai-menu-name">@name</span>
+                                    <span class="gdbv-ai-menu-value">@ProviderSaid(connection)</span>
+
+                                    @if (on)
+                                    {
+                                        <svg class="gdbv-ai-menu-check" viewBox="0 0 16 16" aria-hidden="true">
+                                            <path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                                        </svg>
+                                    }
+                                </button>
+                            }
+
+                            @if (EffortSaid() is string effortNow)
+                            {
+                                <div class="gdbv-ai-menu-line"></div>
+
+                                <button type="button" class="gdbv-ai-menu-item" role="menuitem" data-testid="ai-effort"
+                                        title="How hard the model thinks before answering. Default sends no level, and the model thinks as its provider has it think"
+                                        @onclick="OpenEfforts">
+                                    <span class="gdbv-ai-menu-name">Effort</span>
+                                    <span class="gdbv-ai-menu-value">@effortNow</span>
+                                    <svg class="gdbv-ai-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                                        <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </button>
+                            }
+
+                            @if (LlmConnection.SupportsFast(selected))
+                            {
+                                <div class="gdbv-ai-menu-line"></div>
+                                <div class="gdbv-ai-menu-group">Fast mode</div>
+
+                                <button type="button" class="gdbv-ai-menu-item" role="menuitemcheckbox" aria-checked="@(fast ? "true" : "false")" data-testid="ai-fast"
+                                        title="The same model, writing up to two and a half times as fast, at twice the price. Anthropic's Opus models only"
+                                        @onclick="() => fast = !fast">
+                                    <span class="gdbv-ai-menu-name">Enable fast mode</span>
+                                    <span class="gdbv-ai-switch @(fast ? "gdbv-ai-switch-on" : "")" aria-hidden="true"></span>
+                                </button>
+
+                                <div class="gdbv-ai-menu-note">Up to 2.5× as fast, at twice the price.</div>
+                            }
+
+                            @if (OnOpenSettings.HasDelegate)
+                            {
+                                <div class="gdbv-ai-menu-line"></div>
+
+                                <button type="button" class="gdbv-ai-menu-item" role="menuitem" data-testid="ai-manage-models" @onclick="ManageModelsAsync">
+                                    <span class="gdbv-ai-menu-name">Manage models</span>
+                                    <svg class="gdbv-ai-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                                        <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </button>
+                            }
+                        }
+                    </div>
+                }
+
+                @* The tool picker: the tools the model may use in this conversation, and Compact with what it costs. Over the
+                   conversation's foot at the right, just above its switch; a press anywhere else puts it away, and so does
+                   Escape. *@
+                @if (pickerOpen)
+                {
+                    <div class="gdbv-ai-tool-picker" role="dialog" aria-label="Tools and compacting" tabindex="-1" data-testid="ai-tool-picker" @ref="pickerCard" @onkeydown="PickerKey">
+                        <div class="gdbv-ai-picker-head">Tools the assistant may use</div>
+
+                        @* The window's own tools, as its Tools gives them, in two groups by what they do, each with all and none
+                           (2026-11-02, GDS Viewer's, at the user's word): reading, and changing. *@
+                        @if (ToolGroups().Count == 0)
+                        {
+                            <div class="gdbv-ai-picker-note" data-testid="ai-no-tools">No tools are offered in this window now.</div>
+                        }
+
+                        @foreach (var (group, names) in ToolGroups())
+                        {
+                            var all = names;
+
+                            <div class="gdbv-ai-picker-group" data-testid="ai-tool-group">
+                                <span class="gdbv-ai-picker-group-name">@group</span>
+                                <button type="button" class="gdbv-ai-link" data-testid="ai-tools-all" @onclick="() => SetTools(all, true)">all</button>
+                                <button type="button" class="gdbv-ai-link" data-testid="ai-tools-none" @onclick="() => SetTools(all, false)">none</button>
+                            </div>
+
+                            @foreach (var (name, says) in names)
+                            {
+                                var tool = name;
+
+                                <label class="gdbv-ai-picker-tool" title="@says">
+                                    <input type="checkbox" data-tool="@tool" checked="@(!chat.ToolsOff.Contains(tool))" @onchange="e => ToolChanged(tool, e)" />
+                                    <span>@says</span>
+                                </label>
+                            }
+                        }
+
+                        <div class="gdbv-ai-picker-note">
+                            A tool switched off is not offered to the model, which is told so. It stays off in the next conversation too,
+                            until the page is reloaded.
+                        </div>
+
+                        @* The owner's choices about its tools, under them: Ask AI's are how a graph is drawn from text. *@
+                        @if (ToolOptions != null)
+                        {
+                            <div data-testid="ai-tool-options">@ToolOptions</div>
+                        }
+
+                        <div class="gdbv-ai-picker-head">This conversation</div>
+
+                        <div class="gdbv-ai-picker-action">
+                            <button type="button" class="btn btn-sm btn-outline-success" data-testid="ai-compact" disabled="@(CompactBlocked() != null)"
+                                    title="Replace the conversation so far with a briefing the assistant carries on from" @onclick="CompactAsync">Compact</button>
+                            <span class="gdbv-ai-picker-price" data-testid="ai-compact-price">@CompactLine()</span>
+                        </div>
+                    </div>
+                }
+
+                @* The files panel: every file this conversation sends, each with a tick (unticked, it stays on screen and stops
+                   being sent), and the ones waiting for the next question. GDS Viewer's, from ConfigurationRuleEditor: the
+                   remedy for a conversation that can take no more, and for one whose old screenshot is paid for again with
+                   every question. Beside the conversation, or over its right side in a window too narrow for both; opened and
+                   collapsed by its arrow in the window's margin, sized by dragging the divider at its inner edge. *@
+                @* Its arrow, as the chats' is: only while the panel is closed, to open it, the panel's cross closing it. *@
+                @if (!filesOpen)
+                {
+                    <button type="button" class="gdbv-ai-split-toggle" data-testid="ai-files-toggle" aria-expanded="false"
+                            aria-label="Open the files" title="@FilesTitle" @onclick="() => filesOpen = true">
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M10.25 3.5 5.75 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2"
+                                  stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+
+                        @* How many files the conversation holds, while the panel that lists them is collapsed. *@
+                        @if (FileCount() > 0)
+                        {
+                            <span class="gdbv-ai-count" data-testid="ai-files-count">@FileCount()</span>
+                        }
+                    </button>
+                }
+
+                @if (filesOpen)
+                {
+                    <div class="gdbv-ai-split" data-split="files" title="Drag to size the files"></div>
+
+                    <aside class="gdbv-ai-files" aria-label="Files in this conversation" data-testid="ai-files">
+                        <div class="gdbv-ai-panel-top">
+                            <div class="gdbv-ai-files-head">In this conversation</div>
+                            <button type="button" class="btn-close gdbv-ai-panel-close" aria-label="Close the files" title="Close the files" data-testid="ai-files-close" @onclick="() => filesOpen = false"></button>
+                        </div>
+
+                        @if (SentWith(false).Count == 0 && SentWith(true).Count > 0)
+                        {
+                            <div class="gdbv-ai-files-none">None sent since it was compacted.</div>
+                        }
+                        else if (SentWith(false).Count == 0)
+                        {
+                            <div class="gdbv-ai-files-none">None sent yet.</div>
+                        }
+
+                        @foreach (var (question, file) in SentWith(false))
+                        {
+                            <label class="gdbv-ai-file-row @(file.Excluded ? "gdbv-ai-file-off" : "")" title="@($"Sent with: {question.Text}")" @key="(file.Id, ticksRefused)">
+                                <input type="checkbox" class="gdbv-ai-file-tick" data-testid="ai-file-tick" checked="@(!file.Excluded)" @onchange="e => IncludeChanged(file, e)"
+                                       aria-label="@($"Send {file.Name} with every question")" />
+                                <span class="gdbv-ai-file-name">@file.Name</span>
+                                <span class="gdbv-ai-file-size">@AiAttachment.Size(file.Data.Length)</span>
+                            </label>
+                        }
+
+                        @* The files a compaction kept, on its briefing: read into it once and unticked since, so they stop being paid
+                           for with every question. Ticked, one goes again, with the briefing. *@
+                        @if (SentWith(true).Count > 0)
+                        {
+                            <div class="gdbv-ai-files-head">From before the summary</div>
+
+                            @foreach (var (_, file) in SentWith(true))
+                            {
+                                <label class="gdbv-ai-file-row @(file.Excluded ? "gdbv-ai-file-off" : "")" title="Read into the summary when the conversation was compacted. Tick it to send it again with every question" @key="(file.Id, ticksRefused)">
+                                    <input type="checkbox" class="gdbv-ai-file-tick" data-testid="ai-kept-file-tick" checked="@(!file.Excluded)" @onchange="e => IncludeChanged(file, e)"
+                                           aria-label="@($"Send {file.Name} with every question")" />
+                                    <span class="gdbv-ai-file-name">@file.Name</span>
+                                    <span class="gdbv-ai-file-size">@AiAttachment.Size(file.Data.Length)</span>
+                                </label>
+                            }
+                        }
+
+                        <div class="gdbv-ai-files-head">With the next question</div>
+
+                        @if (chat.Pending.Count == 0)
+                        {
+                            <div class="gdbv-ai-files-none">None. Attach one with the paperclip, paste a picture into the box, or drop files here.</div>
+                        }
+
+                        @foreach (var file in chat.Pending)
+                        {
+                            <div class="gdbv-ai-file-row" @key="file.Id">
+                                <span class="gdbv-ai-file-name" title="@file.Name">@file.Name</span>
+                                <span class="gdbv-ai-file-size">@AiAttachment.Size(file.Data.Length)</span>
+                                <button type="button" class="gdbv-ai-chip-remove" aria-label="@($"Take {file.Name} off")" title="Take it off" @onclick="() => Unattach(file)">&times;</button>
+                            </div>
+                        }
+
+                        <div class="gdbv-ai-files-weight" data-testid="ai-files-weight">@FilesWeight()</div>
+                    </aside>
+                }
+            </div>
+
+            @* The suggestion to compact, priced: what the history costs every question now, and what compacting it costs once.
+               Suggested once enough has been asked and the history is long enough to be worth it, and put away until the next
+               compaction or a new chat. *@
+            @if (SuggestCompacting())
+            {
+                <div class="gdbv-ai-suggest" data-testid="ai-compact-suggestion">
+                    <span class="gdbv-ai-suggest-text">@CompactSuggestion()</span>
+                    <button type="button" class="btn btn-sm btn-outline-success" data-testid="ai-compact-now" @onclick="CompactAsync">Compact</button>
+                    <button type="button" class="gdbv-ai-link" data-testid="ai-compact-later" @onclick="() => chat.CompactSuggestionDismissed = true">Not now</button>
+                </div>
+            }
+
+            @* The files waiting to go with the next question, each with its cross: the box's own, since that is where they go. *@
+            @if (chat.Pending.Count > 0)
+            {
+                <div class="gdbv-ai-chips" data-testid="ai-pending">
+                    @foreach (var file in chat.Pending)
+                    {
+                        <span class="gdbv-ai-chip @(NotSentTo(file) == null ? "" : "gdbv-ai-chip-blocked")" title="@PendingChipTitle(file)" @key="file.Id">
+                            <span class="gdbv-ai-chip-name">@file.Name</span>
+                            <span class="gdbv-ai-chip-size">@AiAttachment.Size(file.Data.Length)</span>
+                            <button type="button" class="gdbv-ai-chip-remove" aria-label="@($"Take {file.Name} off")" title="Take it off" @onclick="() => Unattach(file)">&times;</button>
+                        </span>
+                    }
+                </div>
+            }
+
+            @if (attachProblem.Length > 0)
+            {
+                <div class="gdbv-ai-form-error" data-testid="ai-attach-problem">@attachProblem</div>
+            }
+
+            @* A file in the box the model picked cannot be sent: Send waits, and this says which and why. *@
+            @if (Blocked() is string why)
+            {
+                <div class="gdbv-ai-form-error" data-testid="ai-blocked">@why</div>
+            }
+
+            @if (slashProblem.Length > 0)
+            {
+                <div class="gdbv-ai-form-warning" data-testid="ai-slash-problem">@slashProblem</div>
+            }
+
+            @if (speechProblem.Length > 0)
+            {
+                <div class="gdbv-ai-form-error" data-testid="ai-speech-problem">@speechProblem</div>
+            }
+
+            @* The camera, live, over the box: the shutter attaches the frame on screen to the next question, and the card goes. *@
+            @if (cameraOpen)
+            {
+                <div class="gdbv-ai-camera" role="dialog" aria-label="Camera" data-testid="ai-camera" @onkeydown="CameraKeyAsync">
+                    <video class="gdbv-ai-camera-video" data-testid="ai-camera-video" @ref="cameraVideo" autoplay playsinline muted></video>
+
+                    <button type="button" class="gdbv-ai-bar-button gdbv-ai-camera-close" data-testid="ai-camera-close"
+                            aria-label="Close the camera" title="Close the camera" @onclick="CloseCameraAsync">
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                        </svg>
+                    </button>
+
+                    <div class="gdbv-ai-camera-row">
+                        @if (cameraProblem.Length > 0)
+                        {
+                            <span class="gdbv-ai-form-error" data-testid="ai-camera-problem">@cameraProblem</span>
+                        }
+                        else
+                        {
+                            <button type="button" class="gdbv-ai-camera-shutter" data-testid="ai-camera-capture" aria-label="Capture"
+                                    title="Take the picture on screen, and attach it to the next question" @onclick="CaptureAsync">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M2 5.2a1.2 1.2 0 0 1 1.2-1.2h1.9l1.1-1.6h3.6l1.1 1.6h1.9A1.2 1.2 0 0 1 14 5.2v6.6a1.2 1.2 0 0 1-1.2 1.2H3.2A1.2 1.2 0 0 1 2 11.8z" />
+                                    <circle cx="8" cy="8.4" r="2.5" />
+                                </svg>
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+
+            @* The box and what goes with the next question, in one rounded frame: the words on top, and along the frame's
+               foot a slim row of borderless controls, the paperclip, the camera, a screenshot and how far the model may go
+               at the start; the tools, the model, the (i), Send and the microphone at the end. A press anywhere in the
+               frame's spare room puts the caret in the box. *@
+            <div class="gdbv-ai-box @(listening ? "gdbv-ai-box-listening" : "")" @onclick="FocusPromptAsync">
+                <textarea class="gdbv-ai-prompt" rows="1" data-testid="ai-prompt" @ref="promptBox" data-drop-into="@AttachInputId"
+                          placeholder="@Placeholder"
+                          title="Enter sends. Shift+Enter starts a new line. A picture pasted here goes with the question."
+                          data-slash-menu="@(SlashShown() ? "open" : "closed")"
+                          @bind="nlPrompt" @bind:event="oninput" @onkeydown="OnPromptKeyDownAsync"></textarea>
+
+                @* What the microphone hears while it listens: bars that rise and fall with the sound, newest on the right, so a
+                   muted microphone shows at once. In the box's top right corner rather than the row under it, so nothing in
+                   the row moves when it comes and goes; the words keep clear of it. Drawn by SpeechInterop.js, which sets the
+                   bars' heights itself rather than through a render each tick. *@
+                @if (listening)
+                {
+                    <span class="gdbv-ai-mic-level" data-testid="ai-mic-level" @ref="micLevel" aria-hidden="true" title="What the microphone hears">
+                        @for (var bar = 0; bar < MicLevelBars; bar++)
+                        {
+                            <span class="gdbv-ai-mic-level-bar"></span>
+                        }
+                    </span>
+                }
+
+                <div class="gdbv-ai-bar">
+                    @* The paperclip: the browser's own file dialog, through an input of the page's own that a paste into the box
+                       and a drop on the conversation go through too, so there is one way in (attachFiles in
+                       FloatingDialogInterop.js). *@
+                    <InputFile id="@AttachInputId" style="display: none;" multiple accept="@AiAttachment.Accept" OnChange="FilesChosenAsync" />
+                    <label for="@AttachInputId" class="gdbv-ai-bar-button" role="button" data-testid="ai-attach"
+                           aria-label="Attach files" title="@AttachTitle" @onclick:stopPropagation="true">
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path fill="currentColor" d="M4.5 3a2.5 2.5 0 0 1 5 0v9a1.5 1.5 0 0 1-3 0V5a.5.5 0 0 1 1 0v7a.5.5 0 0 0 1 0V3a1.5 1.5 0 1 0-3 0v9a2.5 2.5 0 0 0 5 0V5a.5.5 0 0 1 1 0v7a3.5 3.5 0 1 1-7 0z" />
+                        </svg>
+                    </label>
+
+                    @if (AllowCamera)
+                    {
+                        @* The camera: a picture from a webcam, attached to the next question as a pasted one is. Opens the camera in
+                           a card over the box (CameraInterop.js). *@
+                        <button type="button" class="gdbv-ai-bar-button @(cameraOpen ? "gdbv-ai-bar-button-on" : "")" data-testid="ai-camera-toggle"
+                                aria-pressed="@(cameraOpen ? "true" : "false")" aria-label="Take a picture with the camera"
+                                title="Take a picture with your camera, and attach it to the next question as a pasted picture is, for a model that sees pictures"
+                                @onclick="ToggleCameraAsync" @onclick:stopPropagation="true">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M2 5.2a1.2 1.2 0 0 1 1.2-1.2h1.9l1.1-1.6h3.6l1.1 1.6h1.9A1.2 1.2 0 0 1 14 5.2v6.6a1.2 1.2 0 0 1-1.2 1.2H3.2A1.2 1.2 0 0 1 2 11.8z" />
+                                <circle cx="8" cy="8.4" r="2.5" />
+                            </svg>
+                        </button>
+
+                        @* A screenshot: the browser's own picker of a screen, a window or a tab, and one frame of it attached to the
+                           next question as a pasted picture is (CameraInterop.js). *@
+                        <button type="button" class="gdbv-ai-bar-button" data-testid="ai-screenshot" aria-label="Attach a screenshot"
+                                title="Take a screenshot of a screen, a window or a browser tab, picked in your browser's own window, and attach it to the next question, for a model that sees pictures"
+                                @onclick="ScreenshotAsync" @onclick:stopPropagation="true">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M2 5V3.2A1.2 1.2 0 0 1 3.2 2H5M11 2h1.8A1.2 1.2 0 0 1 14 3.2V5M14 11v1.8a1.2 1.2 0 0 1-1.2 1.2H11M5 14H3.2A1.2 1.2 0 0 1 2 12.8V11" />
+                                <rect x="5" y="5.5" width="6" height="5" rx="0.8" />
+                            </svg>
+                        </button>
+                    }
+
+                    @* How far the model may go on its own. Settable with no database attached: a control that cannot be moved
+                       reads as broken rather than as inapplicable, so it says so in words instead. A rung chosen while an
+                       answer is coming holds from its next call (AiChat.Mode). Not remembered between visits: the rung that
+                       changes things unasked is one nobody should find already on. *@
+                    <select class="gdbv-ai-select" data-testid="ai-mode" value="@chat.Mode" @onchange="ModeChosen" @onclick:stopPropagation="true" title="@ApprovalModeHint">
+                        <option value="@ToolApprovalMode.Ask">@AskEachLabel</option>
+                        <option value="@ToolApprovalMode.AutoRead">Ask before changes</option>
+                        <option value="@ToolApprovalMode.AutoReadWrite">Change without asking</option>
+                    </select>
+
+                    @* Who answers, rather than what is being said to them, so it sits at the far end beside Send. *@
+                    <div class="gdbv-ai-bar-end" @onclick:stopPropagation="true">
+                        <button type="button" class="gdbv-ai-bar-button @(pickerOpen ? "gdbv-ai-bar-button-on" : "")" data-testid="ai-tool-picker-toggle"
+                                aria-pressed="@(pickerOpen ? "true" : "false")" aria-label="Tools and compacting" title="@PickerTitle" @onclick="TogglePicker">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                                <line x1="2" y1="4" x2="14" y2="4" stroke-linecap="round" />
+                                <line x1="2" y1="8" x2="14" y2="8" stroke-linecap="round" />
+                                <line x1="2" y1="12" x2="14" y2="12" stroke-linecap="round" />
+                                <circle cx="5.5" cy="4" r="1.7" fill="currentColor" />
+                                <circle cx="10.5" cy="8" r="1.7" fill="currentColor" />
+                                <circle cx="7" cy="12" r="1.7" fill="currentColor" />
+                            </svg>
+
+                            @if (chat.ToolsOff.Count > 0)
+                            {
+                                <span class="gdbv-ai-count" data-testid="ai-tools-off">@chat.ToolsOff.Count</span>
+                            }
+                        </button>
+
+                        @* The model and its effort in one button, the effort quieter beside the name, and a bolt while fast
+                           mode is on: see the model menu. *@
+                        <button type="button" class="gdbv-ai-model-toggle @(modelMenuOpen ? "gdbv-ai-model-toggle-on" : "")" data-testid="ai-model-toggle"
+                                aria-haspopup="menu" aria-expanded="@(modelMenuOpen ? "true" : "false")" aria-label="AI model"
+                                title="@ModelMenuTitle" @onclick="ToggleModelMenu">
+                            <span class="gdbv-ai-model-name" data-testid="ai-model-chosen">@ModelSaid</span>
+
+                            @if (EffortSaid() is string level)
+                            {
+                                <span class="gdbv-ai-model-effort" data-testid="ai-model-effort">@level</span>
+                            }
+
+                            @if (fast && LlmConnection.SupportsFast(selected))
+                            {
+                                <svg class="gdbv-ai-model-fast" viewBox="0 0 16 16" aria-hidden="true">
+                                    <path d="M9.2 1.5 3.5 9h4l-1 5.5L12.5 7h-4z" fill="currentColor" />
+                                </svg>
+                            }
+
+                            <svg class="gdbv-ai-model-arrow" viewBox="0 0 16 16" aria-hidden="true">
+                                <path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                        </button>
+
+                        @* What the next request costs before it is sent, and what has been spent: the (i) shows it in a card while
+                           pointed at, and a press on it puts it on a line of its own under the box, or takes it off again. *@
+                        @if (selected != null)
+                        {
+                            <div class="gdbv-ai-meter-holder">
+                                <button type="button" class="gdbv-ai-bar-button @(meterOn ? "gdbv-ai-bar-button-on" : "")" data-testid="ai-meter-toggle"
+                                        aria-pressed="@(meterOn ? "true" : "false")" aria-label="@MeterLabel" @onclick="() => meterOn = !meterOn">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                                        <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+                                        <circle cx="8" cy="4.9" r="0.9" fill="currentColor" />
+                                        <path d="M8 7.2v4.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                                    </svg>
+                                </button>
+
+                                @if (!meterOn)
+                                {
+                                    <div class="gdbv-ai-meter-card" role="tooltip">
+                                        <span class="gdbv-ai-meter-note">Press the (i) to keep this under the box</span>
+                                        @MeterLines()
+                                    </div>
+                                }
+                            </div>
+                        }
+
+                        @* Send and Stop are one button: Stop while an answer is coming, Send the rest of the time, so the press
+                           that stops a message is where the press that sent it went. See SendOrStopAsync for the double-click
+                           that would stop it. *@
+                        <button type="button" class="gdbv-ai-send @(chat.Generating ? "gdbv-ai-stopping" : "")" data-testid="ai-send"
+                                aria-label="@(chat.Generating ? "Stop" : "Send")" title="@SendTitle"
+                                disabled="@(!chat.Generating && !CanSend())" @onclick="SendOrStopAsync">
+                            @if (chat.Generating)
+                            {
+                                <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="currentColor" /></svg>
+                            }
+                            else
+                            {
+                                <svg viewBox="0 0 16 16" aria-hidden="true">
+                                    <path d="M8 13V3.5M3.8 7.6 8 3.4l4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                            }
+                        </button>
+
+                        @if (AllowSpeech)
+                        {
+                            @* The microphone: speech into the box, by the browser's own recognition as the words are said, or recorded
+                               and written out by the AI provider, chosen in AI settings and said on the button when pointed at. Red
+                               while it listens, breathing while the provider writes it out. The last of the row, after Send, as GDS
+                               Viewer has it. See SpeechInterop.js and SpeechTranscriber. *@
+                            <button type="button" class="gdbv-ai-bar-button gdbv-ai-mic @(listening ? "gdbv-ai-mic-on" : "") @(transcribing ? "gdbv-ai-mic-busy" : "") @(MicUsable() ? "" : "gdbv-ai-mic-off")"
+                                    data-testid="ai-mic" aria-pressed="@(listening ? "true" : "false")" aria-label="@MicLabel()" title="@MicTitle()"
+                                    disabled="@transcribing" @onclick="MicAsync">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+                                    <rect x="5.75" y="1.75" width="4.5" height="8" rx="2.25" />
+                                    <path d="M3.6 7.6a4.4 4.4 0 0 0 8.8 0M8 12v2.2M5.9 14.2h4.2" />
+                                </svg>
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @if (selected != null && meterOn)
+            {
+                <div class="gdbv-ai-meter" data-testid="ai-meter">
+                    @MeterLines()
+                </div>
+            }
+        </div>
+    </ChildContent>
+
+</FloatingDialog>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    ///<summary>The window's title, and what a chat saved as text is headed and named for.</summary>
+    [Parameter] public string Title { get; set; } = "AI assistant";
+
+    ///<summary>Where the window keeps its place and size in this browser: one of its own per window.</summary>
+    [Parameter] public string StorageKey { get; set; } = "ai-assistant";
+
+    ///<summary>
+    ///Whose chats the window lists and keeps (<see cref="LlmConnectionStore.ChatsFor"/>): each window its own, so one
+    ///plugin's chats never show in another's (the user, 2026-11-02: "don't mix stuff").
+    ///</summary>
+    [Parameter] public string ChatsName { get; set; } = "ai-assistant";
+
+    ///<summary>
+    ///The model's instructions for the next question, given the rung it is sent at and the tools switched off: what the
+    ///window is for, and what its tools do. A tool switched off is best named there, with where to switch it back on.
+    ///</summary>
+    [Parameter] public Func<ToolApprovalMode, IReadOnlySet<string>, string> Instructions { get; set; }
+
+    ///<summary>The tools the next question goes with, asked for at every question, or null for none.</summary>
+    [Parameter] public Func<ILlmToolRunner> Tools { get; set; }
+
+    ///<summary>What the tool picker calls a tool. Its own description where this gives nothing.</summary>
+    [Parameter] public Func<LlmTool, string> ToolLabel { get; set; }
+
+    ///<summary>What an empty conversation offers to start from, each put in the box by a press rather than sent.</summary>
+    [Parameter] public IReadOnlyList<string> Examples { get; set; } = Array.Empty<string>();
+
+    ///<summary>What an empty conversation says the window is for, over the examples.</summary>
+    [Parameter] public RenderFragment Intro { get; set; }
+
+    ///<summary>What an empty conversation says is sent, and to whom, under the examples.</summary>
+    [Parameter] public string SentNote { get; set; } = "What you type and attach, and what the assistant's tools return, are sent to the provider of the model picked below. Nothing is sent until you press Send.";
+
+    ///<summary>The box's words while it is empty.</summary>
+    [Parameter] public string Placeholder { get; set; } = "Ask a question, or type / for commands";
+
+    ///<summary>The window's own slash commands, listed after the ones every window has: questions written out for it.</summary>
+    [Parameter] public IReadOnlyList<AiSlashCommand> Commands { get; set; } = Array.Empty<AiSlashCommand>();
+
+    ///<summary>
+    ///Lifts what an answer proposes out of its words, to be shown on its own under it with <see cref="AnswerActions"/>:
+    ///Ask AI's fenced query. Null where answers propose nothing.
+    ///</summary>
+    [Parameter] public Func<string, string> ProposedOf { get; set; }
+
+    ///<summary>What goes under what an answer proposed: the window owner's own buttons for it.</summary>
+    [Parameter] public RenderFragment<ChatTurn> AnswerActions { get; set; }
+
+    ///<summary>What goes on a tool call's card beside its own buttons, while it waits and once it was declined.</summary>
+    [Parameter] public RenderFragment<ChatTurn> CardActions { get; set; }
+
+    ///<summary>
+    ///What a call that ran shows in place of what it answered the model, or null to show that answer (2026-11-02): for a tool
+    ///whose answer is for the model and whose card is for the person, as a proposed graph's card is its preview and its Use
+    ///button. A card drawn this way does not show the arguments either, since what it draws is them. A refused call is shown
+    ///as any other, with what it was asked and why it was refused.
+    ///</summary>
+    [Parameter] public RenderFragment<ChatTurn> CardResult { get; set; }
+
+    ///<summary>
+    ///The owner's choices about its tools, drawn in the tool picker under them (2026-11-02): what Ask AI asks of the model when
+    ///it draws a graph, the knowledge-graph window's checkboxes. The owner keeps them and reads them into its instructions and
+    ///its tools, which are asked for at every question.
+    ///</summary>
+    [Parameter] public RenderFragment ToolOptions { get; set; }
+
+    ///<summary>
+    ///A card of the owner's at the conversation's end, in place of the empty conversation's words: an AiChatWizard, as Ask AI's
+    ///knowledge-graph wizard is. Given the window's state as it draws, since a model picked below redraws this window and not
+    ///its owner. Null for none.
+    ///</summary>
+    [Parameter] public RenderFragment<AiChatPanelState> TranscriptPanel { get; set; }
+
+    ///<summary>What a tool call's card is headed with, for how it stands. A general heading where this gives nothing.</summary>
+    [Parameter] public Func<ChatTurn, string> CardTitle { get; set; }
+
+    ///<summary>The button that lets a call that changes something go ahead.</summary>
+    [Parameter] public string ApproveChangeText { get; set; } = "Approve and make the change";
+
+    ///<summary>The first rung's name in the box's row.</summary>
+    [Parameter] public string AskEachLabel { get; set; } = "Ask before every tool call";
+
+    ///<summary>What the rung chosen means here, for the box's row. A general one where this gives nothing.</summary>
+    [Parameter] public Func<ToolApprovalMode, string> ModeHint { get; set; }
+
+    ///<summary>The names a recording should be written out with: the window's own terms, which the provider is told to expect.</summary>
+    [Parameter] public Func<IEnumerable<string>> Vocabulary { get; set; }
+
+    ///<summary>Extra controls in the window's title bar.</summary>
+    [Parameter] public RenderFragment HeaderContent { get; set; }
+
+    ///<summary>Whether the camera and a screenshot are offered, through the paperclip's input.</summary>
+    [Parameter] public bool AllowCamera { get; set; } = true;
+
+    ///<summary>Whether the microphone is offered.</summary>
+    [Parameter] public bool AllowSpeech { get; set; } = true;
+
+    ///<summary>Opens AI settings, where models are added and changed: Manage models, and the link for a window with none.</summary>
+    [Parameter] public EventCallback OnOpenSettings { get; set; }
+
+    ///<summary>The database the conversation is about, as the bar names it, or empty with none connected: what a chat saved as text says it was about.</summary>
+    [Parameter] public string Subject { get; set; } = "";
+
+    ///<summary>
+    ///Where the host keeps the chats, in its own words after "Kept" (<see cref="ViewerHostOptions.WhereAiChatsAreKept"/>):
+    ///where the storage the host composes puts them. Null says this browser, where the standalone viewer keeps them.
+    ///</summary>
+    [Parameter] public string ChatsKeptWhere { get; set; }
+
+    ///<summary>The conversation: what has been said, run and billed, and the run in progress.</summary>
+    private readonly AiChat chat = new();
+
+    ///<summary>The saved models, read from the store and read again whenever it says they changed.</summary>
+    private Dictionary<string, LlmConnection> models = new();
+
+    //The model picked; null when no models exist yet.
+    private LlmConnection selected;
+
+    ///<summary>The chosen reasoning effort, empty for "say nothing and let the model default". Per request, never saved.</summary>
+    private string effort = "";
+
+    ///<summary>Whether the next question runs in fast mode, where the model picked offers it (<see cref="LlmConnection.SupportsFast"/>).</summary>
+    private bool fast;
+
+    private string nlPrompt = "";
+
+    private ElementReference body;
+    private ElementReference scroller;
+    private int scrolledTurns = -1;
+
+    private ElementReference promptBox;
+    private bool composerAttached;
+    private bool composerSized;
+
+    private bool modelMenuOpen;
+    private bool effortListOpen;
+    private ElementReference modelMenuCard;
+    private bool focusModelMenu;
+
+    private bool pickerOpen;
+    private ElementReference pickerCard;
+    private bool focusPicker;
+
+    ///<summary>Whether what the next request costs, what has been spent and the rates are on a line under the box. On to begin with; the (i) takes it off.</summary>
+    private bool meterOn = true;
+
+    ///<summary>The paperclip's input, which a paste and a drop hand their files to as well.</summary>
+    private const string AttachInputId = "gdbv-ai-attach-input";
+
+    ///<summary>The row the files panel and the conversation share, whose divider sizes the panel.</summary>
+    private ElementReference row;
+
+    ///<summary>Whether the files panel is open: to begin with, as GDS Viewer's is. Kept for as long as the page is, through a new chat.</summary>
+    private bool filesOpen = true;
+
+    ///<summary>Why the files last chosen, pasted or dropped were turned away: under the box until the next are taken or a question goes.</summary>
+    private string attachProblem = "";
+
+    ///<summary>
+    ///Counts refused ticks, as part of each row's key in the files panel: a tick the budget turned back leaves the file
+    ///unticked, and the checkbox the browser already ticked has to be drawn again from scratch to say so.
+    ///</summary>
+    private int ticksRefused;
+
+    ///<summary>Held for the outside-press helper, which says when a press lands outside a menu; disposed with the window.</summary>
+    private DotNetObjectReference<AiChatWindow> handle;
+
+    protected override async Task OnInitializedAsync()
+    {
+        chat.Changed += Redraw;
+        Store.Changed += ModelsChangedAsync;
+        Store.Speech.Changed += SpeechChangedAsync;
+        Store.ChatsFor(ChatsName).Changed += ChatsChangedAsync;
+        chat.ProposedOf = ProposedOf;
+        chat.Name = Title;
+        speechMode = await Store.Speech.GetAsync();
+        models = await Store.LoadAsync();
+        Picked(models.Values.FirstOrDefault());
+
+        await ChatsChangedAsync();
+    }
+
+    public void Dispose()
+    {
+        chat.Changed -= Redraw;
+        Store.Changed -= ModelsChangedAsync;
+        Store.Speech.Changed -= SpeechChangedAsync;
+        Store.ChatsFor(ChatsName).Changed -= ChatsChangedAsync;
+        chat.Cancel();
+        transcribeStop?.Cancel();
+        handle?.Dispose();
+
+        //Neither the microphone nor the camera outlives the window: a light left on is a device still in use.
+        try
+        {
+            _ = JS.InvokeVoidAsync("aiSpeech.cancel");
+            _ = JS.InvokeVoidAsync("aiCamera.close");
+        }
+        catch { }
+    }
+
+    private Task Redraw()
+    {
+        return InvokeAsync(StateHasChanged);
+    }
+
+    ///<summary>Another window saved the models. Keep the one picked if it is still there, by name, or take the first.</summary>
+    private async Task ModelsChangedAsync()
+    {
+        var name = selected?.Name;
+
+        models = await Store.LoadAsync();
+
+        if (name != null && models.TryGetValue(name, out var same))
+            Picked(same);
+        else
+            Picked(models.Values.FirstOrDefault());
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    ///<summary>Takes a model, and drops an effort or fast mode it does not take: a choice made for one model is refused by the next.</summary>
+    private void Picked(LlmConnection connection)
+    {
+        selected = connection;
+
+        if (!LlmConnection.EffortLevels(selected).Contains(effort))
+            effort = "";
+
+        if (!LlmConnection.SupportsFast(selected))
+            fast = false;
+
+        MarkPdfs();
+    }
+
+    ///<summary>
+    ///Every PDF in the box and the conversation marked to go as the model picked takes one: as its words, where the model's
+    ///setting says so (<see cref="LlmConnection.PdfAsText"/>), and as the file otherwise.
+    ///</summary>
+    private void MarkPdfs()
+    {
+        var asText = selected != null && selected.PdfAsText;
+
+        foreach (var file in chat.Pending.Concat(chat.SentFiles().Select(sent => sent.File)))
+            if (file.Kind == AttachmentKind.Pdf)
+                file.AsText = asText;
+    }
+
+    ///<summary>
+    ///The PDFs going as their words read, PdfPig fetched first where the host loads it on demand (<see cref="IPdfReaderLoader"/>).
+    ///Why the next question cannot go, or null: the reader could not be fetched, or a PDF in the box has no words to read.
+    ///</summary>
+    private async Task<string> ReadPdfsAsync()
+    {
+        MarkPdfs();
+
+        var unread = chat.Pending.Concat(chat.SentFiles().Select(sent => sent.File)).Where(file => file.AsText && !file.PdfRead).ToList();
+
+        if (unread.Count > 0)
+        {
+            if (Services.GetService(typeof(IPdfReaderLoader)) is IPdfReaderLoader loader && await loader.EnsureLoadedAsync() is string failed)
+                return failed;
+
+            foreach (var file in unread)
+                file.ReadPdf();
+        }
+
+        foreach (var file in chat.Pending)
+            if (file.AsText && file.Unreadable is string why)
+                return why;
+
+        return null;
+    }
+
+    ///<summary>The model picked as the next question asks it: a copy, with the effort and fast mode chosen here.</summary>
+    private LlmConnection Asked()
+    {
+        return new LlmConnection(selected) { Effort = effort, Fast = fast };
+    }
+
+    ///<summary>One attachment of the window to the page's scripts, said to the console by name when it fails - see OnAfterRenderAsync.</summary>
+    private async Task AttachAsync(string function, params object[] arguments)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync(function, arguments);
+        }
+        catch (JSException ex)
+        {
+            Console.WriteLine($"{function} failed, so that part of the AI window is not wired up: {ex.Message}");
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!composerAttached)
+        {
+            composerAttached = true;
+            handle = DotNetObjectReference.Create(this);
+
+            //
+            //Each attachment on its own, so one that fails costs itself and not the ones after it - one try round all four
+            //left the files, the splits and the menus unattached when the composer's script threw, and said nothing.
+            //What failed goes to the console with its name (GDS Viewer's, 2026-11-03).
+            //
+            await AttachAsync("floatingDialog.attachComposer", promptBox);
+            await AttachAsync("floatingDialog.attachFiles", promptBox, AttachInputId);
+            await AttachAsync("floatingDialog.attachSplits", row);
+            await AttachAsync("floatingDialog.dismissOnOutsidePress", handle, body, new[]
+            {
+                new { menu = ".gdbv-ai-model-menu", opener = "[data-testid='ai-model-toggle']", method = nameof(OnModelMenuDismissed) },
+                new { menu = ".gdbv-ai-tool-picker", opener = "[data-testid='ai-tool-picker-toggle']", method = nameof(OnPickerDismissed) }
+            });
+
+            try
+            {
+                browserSpeech = await JS.InvokeAsync<bool>("aiSpeech.browserSupported");
+            }
+            catch (JSException ex)
+            {
+                Console.WriteLine($"aiSpeech.browserSupported failed, so the browser's speech is taken as unavailable: {ex.Message}");
+            }
+
+            if (browserSpeech)
+                StateHasChanged();
+        }
+
+        //A hidden window gives its children no height at all, so the first measurement has to wait until
+        //there is something to measure. The panel is hidden rather than unmounted, so that is not the
+        //same moment as the first render.
+        if (Visible && !composerSized)
+        {
+            composerSized = true;
+
+            try
+            {
+                await JS.InvokeVoidAsync("floatingDialog.growComposer", promptBox);
+            }
+            catch { }
+        }
+        else if (!Visible)
+        {
+            composerSized = false;
+
+            //Closed, the window is only hidden, so it lets go of the microphone and the camera itself.
+            if (listening || cameraOpen)
+                await PutDevicesAwayAsync();
+        }
+
+        if (listening && !micLevelStarted)
+        {
+            micLevelStarted = true;
+
+            try
+            {
+                await JS.InvokeVoidAsync("aiSpeech.showLevel", micLevel);
+            }
+            catch { }
+        }
+        else if (!listening)
+            micLevelStarted = false;
+
+        //The camera is asked for once its card is on the page, since the picture goes into the card's video.
+        if (cameraOpen && !cameraStarted)
+        {
+            cameraStarted = true;
+
+            try
+            {
+                cameraProblem = await JS.InvokeAsync<string>("aiCamera.open", cameraVideo) ?? "";
+            }
+            catch (Exception ex)
+            {
+                cameraProblem = $"The camera could not be opened: {ex.Message}";
+            }
+
+            if (cameraProblem.Length > 0)
+                StateHasChanged();
+        }
+
+        //A menu takes the keyboard as it opens, so Escape puts it away rather than landing on the button.
+        if (focusModelMenu)
+        {
+            focusModelMenu = false;
+
+            try
+            {
+                await modelMenuCard.FocusAsync();
+            }
+            catch { }
+        }
+
+        if (focusPicker)
+        {
+            focusPicker = false;
+
+            try
+            {
+                await pickerCard.FocusAsync();
+            }
+            catch { }
+        }
+
+        //Follow the conversation down as it grows, but leave the scroll alone otherwise: yanking it back
+        //while somebody is reading an earlier answer would be worse than not following at all.
+        if (chat.Turns.Count == scrolledTurns)
+            return;
+
+        scrolledTurns = chat.Turns.Count;
+
+        try
+        {
+            await JS.InvokeVoidAsync("floatingDialog.scrollToEnd", scroller);
+        }
+        catch { }
+    }
+
+    private void ModeChosen(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<ToolApprovalMode>(e.Value?.ToString(), out var chosen))
+            chat.Mode = chosen;
+    }
+
+    private string ApprovalModeHint
+    {
+        get
+        {
+            if (ModeHint != null)
+                return ModeHint(chat.Mode);
+
+            if (chat.Mode == ToolApprovalMode.Ask)
+                return "Each tool the model asks to use waits for you, whether it reads or changes something.";
+            else if (chat.Mode == ToolApprovalMode.AutoRead)
+                return "Tools that only read run as soon as the model asks. One that changes something still waits for you.";
+
+            return "The model uses its tools on its own, the ones that change things too. Nothing waits for you.";
+        }
+    }
+
+    ///<summary>
+    ///Whether an answer is coming, for a button of the window owner's own to wait for it. Plugins hold a reference to the
+    ///window for this and to send a question of their own (<see cref="AskAsync"/>).
+    ///</summary>
+    public bool Generating => chat.Generating;
+
+    ///<summary>Brings the conversation's end into view: for a card of the owner's just put there.</summary>
+    public async Task ScrollToEndAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("floatingDialog.scrollToEnd", scroller);
+        }
+        catch { }
+    }
+
+    ///<summary>What the conversation holds as text, for a tool or a card of the owner's that checks a quote against it (<see cref="AiChat.SourceText"/>).</summary>
+    public string SourceText()
+    {
+        return chat.SourceText();
+    }
+
+    ///<summary>Whether the person sent a PDF or a picture, whose words <see cref="SourceText"/> does not hold.</summary>
+    public bool SentFilesNotRead()
+    {
+        return chat.SentFilesNotRead();
+    }
+
+    ///<summary>
+    ///Sends <paramref name="text"/> as the next question, as if typed into the box and sent: what a button of the window
+    ///owner's own does, Ask AI's Run and answer among them. Nothing is sent while an answer is coming, or with no model.
+    ///</summary>
+    public async Task AskAsync(string text)
+    {
+        if (chat.Generating || string.IsNullOrWhiteSpace(text))
+            return;
+
+        nlPrompt = text;
+
+        await SendAsync();
+    }
+
+    #region Chats kept
+
+    ///<summary>The id the chat on screen is kept under, or null until its first answer is in (KeepChatAsync).</summary>
+    private string chatId;
+
+    ///<summary>When the chat on screen was first kept.</summary>
+    private DateTime chatCreated;
+
+    ///<summary>
+    ///Counts the chats put on screen, so an answer that comes in after another chat was opened or started is not kept under
+    ///the new one's id. Nothing can be switched while an answer is coming, but a reply arriving as Stop lands is the case
+    ///this is for.
+    ///</summary>
+    private int chatShown;
+
+    ///<summary>The chats kept, for the panel: read again whenever the store says they changed.</summary>
+    private List<ChatSummary> chats = new();
+
+    ///<summary>Whether the chats panel is open: to begin with, as GDS Viewer's is. Kept for as long as the page is.</summary>
+    private bool chatsOpen = true;
+
+    ///<summary>The chat whose row is asking whether to delete it, or null.</summary>
+    private string deletingId;
+
+    ///<summary>Why the chats could not be read or a chat could not be kept, at the panel's foot until the next goes through.</summary>
+    private string chatsProblem = "";
+
+    private string KeptWhere()
+    {
+        return ChatsKeptWhere ?? "in this browser";
+    }
+
+    ///<summary>Reads the list again: a chat kept or deleted.</summary>
+    private async Task ChatsChangedAsync()
+    {
+        try
+        {
+            chats = await Store.ChatsFor(ChatsName).ListAsync();
+        }
+        catch (Exception failed)
+        {
+            chatsProblem = $"The chats could not be read: {failed.Message}";
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    ///<summary>Whether the chat on screen can be left for another: not while an answer is coming, which belongs to it.</summary>
+    private bool CanLeaveChat()
+    {
+        return !chat.Generating;
+    }
+
+    private string NewChatTitle
+    {
+        get
+        {
+            if (!CanLeaveChat())
+                return "A new chat, once the answer is in, or press Stop";
+
+            return "A new chat. This one stays in the chats list, to open again";
+        }
+    }
+
+    private void ToggleChats()
+    {
+        chatsOpen = !chatsOpen;
+        deletingId = null;
+    }
+
+    private string ChatsTitle
+    {
+        get
+        {
+            if (chatsOpen)
+                return "Collapse the chats";
+
+            return $"Open the chats, kept {KeptWhere()}: open one to carry it on, save it as text, or delete it";
+        }
+    }
+
+    ///<summary>What a row says under its title: the database it was about, and when it was last changed.</summary>
+    private static string ChatWhen(ChatSummary kept)
+    {
+        var at = kept.Updated.ToLocalTime();
+        var when = at.ToString("MMM d", System.Globalization.CultureInfo.InvariantCulture);
+
+        if (at.Date == DateTime.Now.Date)
+            when = at.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
+        if (string.IsNullOrEmpty(kept.Subject))
+            return when;
+
+        return $"{kept.Subject} · {when}";
+    }
+
+    private string ChatRowTitle(ChatSummary kept)
+    {
+        if (kept.Id == chatId)
+            return $"{kept.Title}: the chat on screen";
+
+        if (!CanLeaveChat())
+            return $"{kept.Title}: opened once the answer is in";
+
+        return $"{kept.Title}: open it, and carry it on";
+    }
+
+    private async Task ChatRowKeyAsync(KeyboardEventArgs e, string id)
+    {
+        if (e.Key == "Enter" || e.Key == " ")
+            await OpenChatAsync(id);
+    }
+
+    ///<summary>
+    ///Keeps the chat on screen, under the id it was first kept with: after every answer and every compaction. A chat with no
+    ///question in it is not kept: an empty one, or one where nothing was sent.
+    ///</summary>
+    private async Task KeepChatAsync()
+    {
+        if (!chat.Turns.Any(turn => turn.Kind == ChatTurn.User))
+            return;
+
+        var now = DateTime.UtcNow;
+
+        if (chatId == null)
+        {
+            chatId = SavedChat.NewId();
+            chatCreated = now;
+        }
+
+        var kept = new SavedChat
+        {
+            Id = chatId,
+            Title = SavedChat.TitleFor(chat.Turns),
+            Subject = Subject ?? "",
+            Created = chatCreated,
+            Updated = now,
+            Turns = SavedChat.Keep(chat.Turns)
+        };
+
+        try
+        {
+            await Store.ChatsFor(ChatsName).SaveAsync(kept);
+
+            chatsProblem = "";
+        }
+        catch (Exception failed)
+        {
+            chatsProblem = $"This chat could not be kept: {failed.Message}";
+        }
+    }
+
+    ///<summary>
+    ///A new chat in the window, the one that was on screen already kept, since it is kept after every answer. Nothing is
+    ///thrown away, so it asks nothing first.
+    ///</summary>
+    private void NewChat()
+    {
+        if (!CanLeaveChat() || chat.Turns.Count == 0)
+            return;
+
+        ShowChat(null, Enumerable.Empty<ChatTurn>(), null);
+    }
+
+    ///<summary>Opens a kept chat, to read and carry on, with a line saying so, since what its queries returned may be out of date.</summary>
+    private async Task OpenChatAsync(string id)
+    {
+        if (id == chatId || !CanLeaveChat())
+            return;
+
+        deletingId = null;
+
+        SavedChat kept = null;
+
+        try
+        {
+            kept = await Store.ChatsFor(ChatsName).LoadAsync(id);
+        }
+        catch (Exception failed)
+        {
+            chatsProblem = $"The chat could not be opened: {failed.Message}";
+        }
+
+        //Gone from where it was kept, deleted in another tab, say. The list is read again without it.
+        if (kept == null)
+        {
+            await ChatsChangedAsync();
+
+            return;
+        }
+
+        ShowChat(kept, kept.Unkept(), ReopenedLine(kept));
+    }
+
+    ///<summary>What a reopened chat says where it was opened: which database is connected now, when that is not the one it was about.</summary>
+    private string ReopenedLine(SavedChat kept)
+    {
+        if (string.IsNullOrEmpty(Subject))
+            return "Opened again, with no database connected.";
+
+        if (!string.IsNullOrEmpty(kept.Subject) && kept.Subject != Subject)
+            return $"Opened again with {Subject} connected. It was about {kept.Subject}.";
+
+        return "Opened again.";
+    }
+
+    ///<summary>Puts a chat on screen in place of the one there: a kept one, or a new one when <paramref name="kept"/> is null.</summary>
+    private void ShowChat(SavedChat kept, IEnumerable<ChatTurn> turns, string reopened)
+    {
+        chatShown++;
+
+        if (kept == null)
+        {
+            chat.Clear();
+            chatId = null;
+            chatCreated = default;
+        }
+        else
+        {
+            chat.Restore(turns, reopened);
+            chatId = kept.Id;
+            chatCreated = kept.Created;
+        }
+
+        attachProblem = "";
+        showEarlier = false;
+    }
+
+    ///<summary>Saves a chat as text from its own row: the one on screen as it stands, another read from where it is kept.</summary>
+    private async Task ExportChatAsync(ChatSummary row)
+    {
+        if (row.Id == chatId)
+        {
+            await ExportAsync(chat, Subject);
+
+            return;
+        }
+
+        SavedChat kept = null;
+
+        try
+        {
+            kept = await Store.ChatsFor(ChatsName).LoadAsync(row.Id);
+        }
+        catch { }
+
+        if (kept == null)
+        {
+            await ChatsChangedAsync();
+
+            return;
+        }
+
+        var transcript = new AiChat();
+
+        transcript.Restore(kept.Unkept(), null);
+
+        await ExportAsync(transcript, kept.Subject);
+    }
+
+    ///<summary>Deletes a chat, once its row has been asked. The one on screen gives way to a new one.</summary>
+    private async Task DeleteChatAsync(string id)
+    {
+        deletingId = null;
+
+        if (id == chatId)
+        {
+            if (!CanLeaveChat())
+                return;
+
+            ShowChat(null, Enumerable.Empty<ChatTurn>(), null);
+        }
+
+        try
+        {
+            await Store.ChatsFor(ChatsName).DeleteAsync(id);
+        }
+        catch (Exception failed)
+        {
+            chatsProblem = $"The chat could not be deleted: {failed.Message}";
+        }
+    }
+
+    #endregion
+
+    ///<summary>What the card says happened: the window owner's words, or a general one by the kind of call and how it ended.</summary>
+    private string CardTitleOf(ChatTurn turn)
+    {
+        if (CardTitle != null)
+            return CardTitle(turn);
+
+        var tool = ToolLabelOf(turn.ToolName);
+
+        if (turn.Decision == null)
+            return $"The model wants to use: {tool}";
+        else if (turn.Decision == false)
+            return $"The model asked to use: {tool}";
+
+        return $"The model used: {tool}";
+    }
+
+    ///<summary>
+    ///What the window's owner draws for a call that went ahead, or null where it draws nothing of its own (<see cref="CardResult"/>).
+    ///Asked from the moment the call goes ahead, so its arguments are not shown while it runs and then taken away.
+    ///</summary>
+    private RenderFragment OwnResultOf(ChatTurn turn)
+    {
+        if (CardResult == null || turn.Decision != true || turn.ResultIsError)
+            return null;
+
+        return CardResult(turn);
+    }
+
+    ///<summary>Whether a card shows what its call was asked with: not for a call with nothing to show, as a look at a picture has.</summary>
+    private static bool ShowsArguments(ChatTurn turn)
+    {
+        if (!string.IsNullOrWhiteSpace(turn.Query))
+            return true;
+
+        var arguments = (turn.ArgumentsJson ?? "").Trim();
+
+        return arguments.Length > 0 && arguments != "{}";
+    }
+
+    #region Sending
+
+    private bool CanSend()
+    {
+        if (TypedSlash() != null && !chat.Generating)
+            return true;
+
+        return selected != null && !chat.Generating && !string.IsNullOrWhiteSpace(nlPrompt) && Blocked() == null;
+    }
+
+    private string SendTitle
+    {
+        get
+        {
+            if (chat.Generating)
+                return "Stop the answer. A query it already ran has run";
+            else if (selected == null)
+                return "Add a model under AI settings first";
+
+            if (Blocked() is string why)
+                return why;
+
+            return "Send. Enter does the same";
+        }
+    }
+
+    ///<summary>
+    ///Enter sends; Shift+Enter breaks the line. Only half of that is decided here: the newline itself is refused in JS,
+    ///because a Blazor handler's preventDefault is fixed when the component renders rather than when the key is pressed.
+    ///</summary>
+    private async Task OnPromptKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (await SlashKeyAsync(e))
+            return;
+
+        if (e.Key != "Enter" || e.ShiftKey || e.IsComposing)
+            return;
+
+        if (await RunTypedSlashAsync())
+            return;
+
+        await SendAsync();
+    }
+
+    ///<summary>
+    ///Send, or Stop while an answer is coming. <strong>A double-click on Send does not stop what it sent</strong>: the first
+    ///click sends and the button becomes Stop under the pointer, so a click the browser counts as the second of a pair is
+    ///let go.
+    ///</summary>
+    private async Task SendOrStopAsync(MouseEventArgs e)
+    {
+        if (chat.Generating)
+        {
+            if (e.Detail < 2)
+                chat.Cancel();
+
+            return;
+        }
+
+        if (await RunTypedSlashAsync())
+            return;
+
+        await SendAsync();
+    }
+
+    private async Task SendAsync()
+    {
+        if (selected == null || string.IsNullOrWhiteSpace(nlPrompt) || chat.Generating || Blocked() != null)
+            return;
+
+        if (await ReadPdfsAsync() is string unread)
+        {
+            attachProblem = unread;
+
+            return;
+        }
+
+        var text = nlPrompt;
+
+        nlPrompt = "";
+        slashProblem = "";
+        attachProblem = "";
+
+        //Emptied in the page too, so the box shrinks against what is in it now rather than against the
+        //message that has just left it. Nothing fires an input event when C# clears a bound value.
+        try
+        {
+            await JS.InvokeVoidAsync("floatingDialog.resetComposer", promptBox);
+        }
+        catch { }
+
+        //Effort and fast mode are chosen per request, so they ride on a copy: set on the stored connection they would be
+        //saved against the model for every feature that uses it.
+        var provider = LlmProviderFactory.Create(LlmHttpClient.For(Services, Http), Asked());
+        var shown = chatShown;
+
+        //As set under AI settings when this is sent, so a change there holds from the next message on.
+        chat.MaxToolRounds = await Store.Rounds.GetAsync();
+
+        var outcome = await chat.SendAsync(text, provider, SystemPrompt(), ToolsNow());
+
+        if (shown == chatShown)
+            await KeepChatAsync();
+
+        //A question that failed with files gives them back to the box (AiChat.GaveFilesBack), and its words with them when
+        //the box is still empty, rather than leaving them to be typed again.
+        if (outcome == ChatOutcome.Failed && chat.GaveFilesBack && string.IsNullOrWhiteSpace(nlPrompt))
+        {
+            nlPrompt = text;
+            composerSized = false;
+        }
+    }
+
+    private string SystemPrompt()
+    {
+        if (Instructions == null)
+            return "You are an assistant in a chat window, talking with the person who opened it.";
+
+        return Instructions(chat.Mode, chat.ToolsOff);
+    }
+
+    ///<summary>The tools the next question goes with, as the window's owner gives them; null for none.</summary>
+    private ILlmToolRunner ToolsNow()
+    {
+        if (Tools == null)
+            return null;
+
+        return Tools();
+    }
+
+    ///<summary>Carries a paused run on: a message of its own, with the calls before the pause going with it in words.</summary>
+    private async Task ContinueAsync()
+    {
+        var typed = nlPrompt;
+
+        nlPrompt = AiChat.ContinueText;
+
+        await SendAsync();
+
+        //What was typed goes back, also where Continue could not go, or went and gave its files back with its own words.
+        if (string.IsNullOrEmpty(nlPrompt) || nlPrompt == AiChat.ContinueText)
+            nlPrompt = typed;
+    }
+
+    ///<summary>An example under the empty conversation's words, put in the box with the keyboard there, to send or change first.</summary>
+    ///<summary>
+    ///Puts <paramref name="text"/> in the box to send or change first, as an example's press does, unless something is being
+    ///written there already: for a button of the owner's elsewhere on the page that starts a conversation of a kind.
+    ///</summary>
+    public async Task PutInBoxAsync(string text)
+    {
+        if (!string.IsNullOrWhiteSpace(nlPrompt))
+            await FocusPromptAsync();
+        else
+            await UseExampleAsync(text);
+    }
+
+    private async Task UseExampleAsync(string example)
+    {
+        nlPrompt = example;
+        composerSized = false;
+
+        StateHasChanged();
+
+        await FocusPromptAsync();
+    }
+
+    ///<summary>A press in the box's frame but on none of its controls, which puts the caret in the box.</summary>
+    private async Task FocusPromptAsync()
+    {
+        try
+        {
+            await promptBox.FocusAsync();
+        }
+        catch { }
+    }
+
+    #endregion
+
+    #region The model menu
+
+    private void ToggleModelMenu()
+    {
+        modelMenuOpen = !modelMenuOpen;
+        effortListOpen = false;
+        focusModelMenu = modelMenuOpen;
+        pickerOpen = false;
+    }
+
+    ///<summary>A press anywhere but the menu or its button, reported by the outside-press helper.</summary>
+    [JSInvokable]
+    public void OnModelMenuDismissed()
+    {
+        if (!modelMenuOpen)
+            return;
+
+        modelMenuOpen = false;
+
+        StateHasChanged();
+    }
+
+    ///<summary>Escape steps back out of the effort levels, and then puts the menu away.</summary>
+    private void ModelMenuKey(KeyboardEventArgs e)
+    {
+        if (e.Key != "Escape")
+            return;
+
+        if (effortListOpen)
+            effortListOpen = false;
+        else
+            modelMenuOpen = false;
+    }
+
+    private void ChooseModel(string name)
+    {
+        if (models.TryGetValue(name, out var connection))
+            Picked(connection);
+
+        modelMenuOpen = false;
+    }
+
+    private void OpenEfforts()
+    {
+        effortListOpen = true;
+        focusModelMenu = true;
+    }
+
+    private void CloseEfforts()
+    {
+        effortListOpen = false;
+        focusModelMenu = true;
+    }
+
+    private void ChooseEffort(string level)
+    {
+        effort = level;
+        effortListOpen = false;
+        modelMenuOpen = false;
+    }
+
+    private async Task ManageModelsAsync()
+    {
+        modelMenuOpen = false;
+
+        await OnOpenSettings.InvokeAsync();
+    }
+
+    ///<summary>The button's words: the model's name, or what to do without one.</summary>
+    private string ModelSaid
+    {
+        get
+        {
+            if (selected != null)
+                return selected.Name;
+            else if (models.Count == 0)
+                return "No model yet - add one under AI settings";
+
+            return "Pick a model";
+        }
+    }
+
+    ///<summary>The effort beside the name, the one chosen or what the model does when told nothing, or null on a model that takes none.</summary>
+    private string EffortSaid()
+    {
+        if (!LlmConnection.SupportsEffort(selected))
+            return null;
+
+        if (effort.Length > 0)
+            return EffortName(effort);
+
+        return EffortName(LlmConnection.DefaultEffort(selected));
+    }
+
+    ///<summary>A level as it is read: Low, Extra high, Max, and a default the provider names in words, as it names it.</summary>
+    private static string EffortName(string level)
+    {
+        if (level == "xhigh")
+            return "Extra high";
+        else if (level.Length == 0)
+            return "";
+
+        return char.ToUpperInvariant(level[0]) + level.Substring(1);
+    }
+
+    private string ModelMenuTitle
+    {
+        get
+        {
+            var said = "Which model answers, and how hard it thinks. Models are added and changed under AI settings";
+
+            if (fast && LlmConnection.SupportsFast(selected))
+                said += ". Fast mode is on: answers come up to two and a half times as fast, at twice the price";
+
+            return said;
+        }
+    }
+
+    ///<summary>A saved model's provider as the menu says it, beside its name.</summary>
+    private static string ProviderSaid(LlmConnection connection)
+    {
+        if (connection.ProviderType == LlmConnection.Custom)
+            return "Other";
+
+        return connection.ProviderType;
+    }
+
+    #endregion
+
+    #region The tool picker
+
+    ///<summary>
+    ///The tools on offer now, as the picker lists them: in two groups by what they do, reading first and changing after,
+    ///each tool by its label. A group with none is left out.
+    ///</summary>
+    private List<(string Group, List<(string Name, string Says)> Tools)> ToolGroups()
+    {
+        var reading = new List<(string Name, string Says)>();
+        var changing = new List<(string Name, string Says)>();
+
+        var tools = ToolsNow();
+
+        //As the model is offered them: every question here goes through the approval gate, which offers the tools that
+        //change things too (ApprovingToolRunner), so the picker lists them before the first question as well.
+        if (tools is IWriteCapableToolRunner writable)
+            writable.AllowWrites = true;
+
+        if (tools != null)
+            foreach (var tool in tools.Tools)
+                if (tool.Changes)
+                    changing.Add((tool.Name, ToolLabelOf(tool)));
+                else
+                    reading.Add((tool.Name, ToolLabelOf(tool)));
+
+        var groups = new List<(string Group, List<(string Name, string Says)> Tools)>();
+
+        if (reading.Count > 0)
+            groups.Add(("Reading", reading));
+
+        if (changing.Count > 0)
+            groups.Add(("Changing", changing));
+
+        return groups;
+    }
+
+    ///<summary>What the picker calls a tool: the window owner's label, or its own description's first sentence.</summary>
+    private string ToolLabelOf(LlmTool tool)
+    {
+        if (ToolLabel != null && ToolLabel(tool) is string label && label.Length > 0)
+            return label;
+
+        var described = (tool.Description ?? "").Trim();
+        var end = described.IndexOf(". ", StringComparison.Ordinal);
+
+        if (end > 0)
+            described = described.Substring(0, end);
+
+        if (described.Length == 0)
+            return tool.Name;
+
+        return described.TrimEnd('.');
+    }
+
+    ///<summary>A card's tool by its label, where the tool is still on offer, or by its name.</summary>
+    private string ToolLabelOf(string name)
+    {
+        if (ToolsNow() is ILlmToolRunner tools && tools.Tools.FirstOrDefault(tool => tool.Name == name) is LlmTool offered)
+            return ToolLabelOf(offered);
+
+        return name;
+    }
+
+    ///<summary>A group's all or none.</summary>
+    private void SetTools(List<(string Name, string Says)> tools, bool on)
+    {
+        foreach (var (name, _) in tools)
+            if (on)
+                chat.ToolsOff.Remove(name);
+            else
+                chat.ToolsOff.Add(name);
+    }
+
+    private string PickerTitle
+    {
+        get
+        {
+            if (chat.ToolsOff.Count == 0)
+                return "The tools the assistant may use in this conversation";
+
+            return $"The tools the assistant may use in this conversation: {chat.ToolsOff.Count} switched off";
+        }
+    }
+
+    ///<summary>
+    ///Opens the tool picker, where the tools are and the owner's choices about them (<see cref="ToolOptions"/>): for a button of
+    ///the owner's that starts a conversation whose choices are worth seeing first, as the Import panel's Generate with AI does.
+    ///The caret stays where it was, so what was put in the box can be written on.
+    ///</summary>
+    public void ShowTools()
+    {
+        pickerOpen = true;
+        modelMenuOpen = false;
+
+        StateHasChanged();
+    }
+
+    private void TogglePicker()
+    {
+        pickerOpen = !pickerOpen;
+        focusPicker = pickerOpen;
+        modelMenuOpen = false;
+    }
+
+    ///<summary>A press anywhere but the picker or its switch, reported by the outside-press helper.</summary>
+    [JSInvokable]
+    public void OnPickerDismissed()
+    {
+        if (!pickerOpen)
+            return;
+
+        pickerOpen = false;
+
+        StateHasChanged();
+    }
+
+    private void PickerKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            pickerOpen = false;
+    }
+
+    private void ToolChanged(string name, ChangeEventArgs e)
+    {
+        if (e.Value is bool on && on)
+            chat.ToolsOff.Remove(name);
+        else
+            chat.ToolsOff.Add(name);
+    }
+
+    #endregion
+
+    #region Compacting
+
+    ///<summary>Whether what the last compaction folded away is shown, dimmed, above its briefing. Folded again by the next one.</summary>
+    private bool showEarlier;
+
+    ///<summary>Why Compact cannot be pressed now, or null when it can.</summary>
+    private string CompactBlocked()
+    {
+        if (selected == null)
+            return "Add a model under AI settings first";
+
+        return chat.WhyNotCompact();
+    }
+
+    ///<summary>Beside Compact in the picker: what it would read and cost on the model picked, or why it cannot be done.</summary>
+    private string CompactLine()
+    {
+        if (CompactBlocked() is string why)
+            return why + ".";
+
+        var history = chat.HistoryTokens(selected.ProviderType);
+        var said = $"Reads about {AiPricing.About(history)} tokens of history once";
+
+        if (AiChat.CompactCost(AiPricing.For(Asked(), DateTime.UtcNow), history) is decimal dollars)
+            said += $", about {AiPricing.Money(dollars)}";
+
+        return said + ".";
+    }
+
+    private bool SuggestCompacting()
+    {
+        if (selected == null)
+            return false;
+
+        return chat.WorthCompacting(selected.ProviderType);
+    }
+
+    ///<summary>What the history costs every question now, and what compacting it would cost once, on the model picked.</summary>
+    private string CompactSuggestion()
+    {
+        var history = chat.HistoryTokens(selected.ProviderType);
+        var price = AiPricing.For(Asked(), DateTime.UtcNow);
+        var said = new StringBuilder($"This conversation sends about {AiPricing.About(history)} tokens of history with every question");
+
+        if (price != null)
+            said.Append($", {AiPricing.Money(price.CostOfInput(history))} each time");
+
+        said.Append($". Compacting puts a briefing of about {AiPricing.About(AiChat.BriefingTokens)} tokens in its place");
+
+        if (AiChat.CompactCost(price, history) is decimal dollars)
+            said.Append($", for about {AiPricing.Money(dollars)} once");
+
+        return said.Append('.').ToString();
+    }
+
+    ///<summary>
+    ///Compact, from the picker, the suggestion or /compact: the conversation so far replaced by a briefing
+    ///(<see cref="AiChat.CompactAsync"/>), on the model picked at the least effort it takes, since a briefing carries facts
+    ///across rather than reasoning about them. Not in fast mode, which would pay twice for that.
+    ///</summary>
+    private async Task CompactAsync()
+    {
+        if (CompactBlocked() != null)
+            return;
+
+        pickerOpen = false;
+
+        var least = "";
+
+        if (LlmConnection.SupportsEffort(selected))
+            least = "low";
+
+        var provider = LlmProviderFactory.Create(LlmHttpClient.For(Services, Http), new LlmConnection(selected) { Effort = least });
+        var shown = chatShown;
+
+        if (await chat.CompactAsync(provider) == ChatOutcome.Answered)
+            showEarlier = false;
+
+        if (shown == chatShown)
+            await KeepChatAsync();
+    }
+
+    ///<summary>How a turn is drawn for where it sits: before the last briefing it is folded away, or dimmed while shown.</summary>
+    private string FoldClass(int index, int folded)
+    {
+        if (index >= folded)
+            return "";
+
+        if (showEarlier)
+            return "gdbv-ai-earlier";
+
+        return "gdbv-ai-earlier gdbv-ai-folded";
+    }
+
+    private string EarlierToggle(int folded)
+    {
+        if (showEarlier)
+            return "Hide what came before";
+
+        return $"Show what came before ({folded})";
+    }
+
+    ///<summary>The files the panel lists in one of its two groups: sent with a question since the last compaction, or kept on its briefing.</summary>
+    private List<(ChatTurn Question, AiAttachment File)> SentWith(bool kept)
+    {
+        return chat.SentFiles().Where(sent => (sent.Question.Kind == ChatTurn.Summary) == kept).ToList();
+    }
+
+    #endregion
+
+    #region Saving as text
+
+    ///<summary>
+    ///Downloads a chat as text, to read back or paste in another day (<see cref="AiChat.Transcript"/>), named for when it was
+    ///saved. Not while an answer is coming, which would leave it half written.
+    ///</summary>
+    private async Task ExportAsync(AiChat transcript, string subject)
+    {
+        if (transcript.Turns.Count == 0 || transcript.Generating)
+            return;
+
+        var now = DateTime.Now;
+        var name = $"{AiChat.FileNameOf(Title)}-{now.ToString("yyyyMMdd-HHmm", System.Globalization.CultureInfo.InvariantCulture)}.txt";
+
+        try
+        {
+            await JS.InvokeVoidAsync("exportInterop.downloadText", name, transcript.Transcript(subject, now), "text/plain");
+        }
+        catch (JSException ex)
+        {
+            //Said in the chat, where the export was asked for: a download that did not happen and nothing said is a press
+            //on a button that did nothing (GDS Viewer's, 2026-11-03).
+            transcript.Refuse($"The export could not be downloaded: {ex.Message}");
+            StateHasChanged();
+        }
+    }
+
+    #endregion
+
+    #region Files
+
+    private string AttachTitle => $"Attach files to the next question: pictures, PDFs, Excel and Word files, CSV, JSON, GraphML and other text, up to {AiAttachment.MostPerQuestion}. A picture pasted into the box, or files dropped on the conversation, go the same way";
+
+    private string FilesTitle
+    {
+        get
+        {
+            if (filesOpen)
+                return "Collapse the files";
+
+            return "Open the files in this conversation, and which of them go with every question";
+        }
+    }
+
+    ///<summary>How many files the conversation holds: sent, ticked or not, and waiting for the next question.</summary>
+    private int FileCount()
+    {
+        return chat.SentFiles().Count + chat.Pending.Count;
+    }
+
+    ///<summary>
+    ///Files chosen with the paperclip, or pasted or dropped and handed to its input: each read and put in the box, or turned
+    ///away with why. One at a time, so a picture too big costs the others nothing, and one far too big is turned away on
+    ///its size before a byte of it is read: OpenReadStream throws past its own maximum, which would be a failure rather
+    ///than a reason.
+    ///</summary>
+    private async Task FilesChosenAsync(InputFileChangeEventArgs e)
+    {
+        var problems = new List<string>();
+
+        //GetMultipleFiles throws past its maximum, so every file is taken and the count refuses the extras.
+        foreach (var chosen in e.GetMultipleFiles(e.FileCount))
+        {
+            if (AiAttachment.Refusal(chosen.Name, chosen.ContentType, chosen.Size) is string refused)
+            {
+                problems.Add(refused);
+
+                continue;
+            }
+
+            byte[] data;
+
+            try
+            {
+                await using var stream = chosen.OpenReadStream(AiAttachment.MostBytes(AiAttachment.KindOf(chosen.Name, chosen.ContentType)));
+                using var memory = new MemoryStream();
+
+                await stream.CopyToAsync(memory);
+                data = memory.ToArray();
+            }
+            catch (Exception failed)
+            {
+                problems.Add($"{chosen.Name} could not be read: {failed.Message}");
+
+                continue;
+            }
+
+            //The bytes' own checks, and the question's and the conversation's budgets.
+            if (chat.Attach(new AiAttachment(chosen.Name, chosen.ContentType, data)) is string problem)
+                problems.Add(problem);
+        }
+
+        attachProblem = string.Join(" ", problems);
+
+        MarkPdfs();
+    }
+
+    private void Unattach(AiAttachment file)
+    {
+        chat.Unattach(file);
+        attachProblem = "";
+    }
+
+    ///<summary>A tick in the files panel: a file left out of the conversation from here on, or sent with it again.</summary>
+    private void IncludeChanged(AiAttachment file, ChangeEventArgs e)
+    {
+        var include = e.Value is bool ticked && ticked;
+
+        if (chat.Include(file, include) is string problem)
+        {
+            attachProblem = problem;
+            ticksRefused++;
+
+            return;
+        }
+
+        attachProblem = "";
+    }
+
+    ///<summary>Why a file in the box cannot go to the model picked, or null when it can.</summary>
+    private string NotSentTo(AiAttachment file)
+    {
+        if (selected == null)
+            return null;
+
+        return AiAttachment.NotSentTo(selected.ProviderType, file, selected.PdfAsText);
+    }
+
+    ///<summary>The first file in the box the model picked cannot be sent, said as why Send waits: sent anyway, it would reach the model as a line saying it could not.</summary>
+    private string Blocked()
+    {
+        foreach (var file in chat.Pending)
+            if (NotSentTo(file) is string why)
+                return why;
+
+        return null;
+    }
+
+    private string PendingChipTitle(AiAttachment file)
+    {
+        if (NotSentTo(file) is string why)
+            return why;
+
+        return $"{file.Name}, {AiAttachment.Size(file.Data.Length)}, goes with the next question";
+    }
+
+    private static string SentChipTitle(AiAttachment file)
+    {
+        var said = $"{file.Name}, {AiAttachment.Size(file.Data.Length)}";
+
+        if (file.Excluded)
+            return said + ". Left out of the conversation since: tick it in the files panel to send it again";
+
+        return said + ". Sent again with every question: untick it in the files panel to stop";
+    }
+
+    ///<summary>What the ticked files and the waiting ones add to every question, under the files panel's lists.</summary>
+    private string FilesWeight()
+    {
+        if (selected == null)
+            return "";
+
+        long tokens = 0;
+        var files = 0;
+
+        foreach (var (_, file) in chat.SentFiles())
+        {
+            if (file.Excluded)
+                continue;
+
+            tokens += AiEstimate.Attachment(file, selected.ProviderType);
+            files++;
+        }
+
+        foreach (var file in chat.Pending)
+        {
+            tokens += AiEstimate.Attachment(file, selected.ProviderType);
+            files++;
+        }
+
+        if (files == 0)
+            return "No file goes with the next question.";
+
+        var said = $"These add about {AiPricing.About(tokens)} tokens to every question";
+
+        if (AiPricing.For(Asked(), DateTime.UtcNow) is LlmPrice price)
+            said += $", {AiPricing.Money(price.CostOfInput(tokens))} at this model's rates";
+
+        return said + ".";
+    }
+
+    #endregion
+
+    #region The meter
+
+    ///<summary>What the next request costs, what has been spent and the rates: the same in the card the (i) shows while pointed at and on the line under the box.</summary>
+    private RenderFragment MeterLines()
+    {
+        return @<span class="gdbv-ai-meter-lines">
+            <span data-testid="ai-estimate" title="@EstimateTitle()">@EstimateLine()</span>
+
+            @if (chat.Used.Reported)
+            {
+                <span class="gdbv-ai-spent" data-testid="ai-spent" title="@SpentTitle()">@SpentLine()</span>
+            }
+
+            @if (selected != null && AiPricing.PricingPage(selected.ProviderType) is string published)
+            {
+                <a class="gdbv-ai-rates" href="@published" target="_blank" rel="noopener noreferrer" title="@RatesTitle()">rates</a>
+            }
+        </span>;
+    }
+
+    private string MeterLabel
+    {
+        get
+        {
+            if (meterOn)
+                return $"{EstimateLine()}. Press to take the costs off the line under the box";
+
+            return $"{EstimateLine()}. Press to keep the costs on a line under the box";
+        }
+    }
+
+    ///<summary>The next request as it would go now: the instructions, the tools, the conversation with its ticked files, and the box with its files.</summary>
+    private long NextRequestTokens()
+    {
+        long toolTokens = 0;
+
+        if (ToolsNow() is ILlmToolRunner tools)
+            toolTokens = AiEstimate.ToolTokens(new SwitchableToolRunner(tools, chat.ToolsOff).Tools);
+
+        var conversation = chat.BuildConversation();
+
+        conversation.Add(LlmMessage.FromUser(nlPrompt, chat.Pending.ToArray()));
+
+        return AiEstimate.Request(SystemPrompt(), toolTokens, conversation, selected.ProviderType);
+    }
+
+    private string EstimateLine()
+    {
+        if (selected == null)
+            return "";
+
+        var tokens = NextRequestTokens();
+        var said = $"Next request: about {AiPricing.About(tokens)} tokens";
+
+        if (AiPricing.For(Asked(), DateTime.UtcNow) is LlmPrice price)
+            said += $", {AiPricing.Money(price.CostOfInput(tokens))} to send";
+
+        return said;
+    }
+
+    private string EstimateTitle()
+    {
+        var said = new List<string>
+        {
+            "What sending now puts in front of the model: its instructions, the tools, this conversation with its ticked files, and the box with its files.",
+            "Every round of tool calls sends it again, and an answer is billed on top at the output rate; on Anthropic most of a round is read back from the cache, at a tenth of the rate or less.",
+            "Counted from characters, at about 3.5 a token; what was really billed shows under each answer."
+        };
+
+        if (selected != null && AiPricing.For(selected, DateTime.UtcNow) == null)
+            said.Add("This model has no rate, so no cost is shown: give it one under AI settings.");
+
+        return string.Join(" ", said);
+    }
+
+    private string SpentLine()
+    {
+        if (chat.Cost is decimal dollars)
+            return "Spent: " + AiPricing.Money(dollars);
+
+        var used = chat.Used;
+
+        return $"Spent: {AiPricing.Count(used.InputTokens)} tokens in, {AiPricing.Count(used.OutputTokens)} out";
+    }
+
+    private string SpentTitle()
+    {
+        var said = new StringBuilder("What the providers reported billing since this page opened - a new chat does not take it back:");
+
+        foreach (var (model, spent) in chat.Spend)
+        {
+            said.AppendLine();
+            said.Append($"{model}: {AiPricing.Count(spent.Usage.InputTokens)} tokens in");
+
+            if (spent.Usage.CachedInputTokens > 0)
+                said.Append($" ({AiPricing.Count(spent.Usage.CachedInputTokens)} read from the cache)");
+
+            said.Append($", {AiPricing.Count(spent.Usage.OutputTokens)} out, in {spent.Usage.Requests} requests");
+
+            if (spent.Cost is decimal dollars)
+                said.Append($" - {AiPricing.Money(dollars)}");
+            else
+                said.Append(" - no rate for this model");
+        }
+
+        return said.ToString();
+    }
+
+    private string RatesTitle()
+    {
+        var where = "Where the provider publishes its rates";
+
+        if (selected != null && AiPricing.For(Asked(), DateTime.UtcNow) is LlmPrice price)
+            return $"{where}. The figures here use {price.Source}. A model's own rates can be set under AI settings";
+
+        return $"{where}. This model has no rate here: give it one under AI settings";
+    }
+
+    #endregion
+
+    #region Slash commands
+
+    ///<summary>
+    ///<strong>A slash at the start of the box lists what the window can do</strong> (2026-11-01, GDS Viewer's, where it was
+    ///asked for on 2026-10-31, as Claude has them): its own actions and questions it is often asked, written out. Typing
+    ///narrows the list; the arrows move through it, Enter or a press runs the one marked, Tab writes its name out to add
+    ///words after it, and Escape puts the list away. A command that cannot run now stays listed, dimmed, saying why. A
+    ///question command sends its question at once, with any words written after its name added to it. Nothing reaches the
+    ///model by its slash: a name that is no command is sent as it was written.
+    ///</summary>
+    private sealed record SlashCommand(string Name, string Says, string Why, string Question = null);
+
+    ///<summary>The marked row of the list, which the arrows move.</summary>
+    private int slashIndex;
+
+    ///<summary>The box's words when Escape put the list away: it stays away until they change.</summary>
+    private string slashDismissed;
+
+    ///<summary>Why the command last asked for could not run, under the box until the next one.</summary>
+    private string slashProblem = "";
+
+    ///<summary>Every command, in the order listed, each with why it cannot run now or null.</summary>
+    private List<SlashCommand> SlashCommands()
+    {
+        string busy = null;
+
+        if (chat.Generating)
+            busy = "Once the answer is in";
+
+        var asking = busy;
+
+        if (asking == null && selected == null)
+            asking = "Add a model under AI settings first";
+
+        var newWhy = busy;
+
+        if (newWhy == null && chat.Turns.Count == 0)
+            newWhy = "This chat is new already";
+
+        var exportWhy = busy;
+
+        if (exportWhy == null && chat.Turns.Count == 0)
+            exportWhy = "Nothing has been said in this chat yet";
+
+        string settingsWhy = null;
+
+        if (!OnOpenSettings.HasDelegate)
+            settingsWhy = "AI settings are not on this page";
+
+        var commands = new List<SlashCommand>
+        {
+            new SlashCommand("new", "Start a new chat. This one stays in the chats list", newWhy),
+            new SlashCommand("compact", "Replace the conversation so far with a briefing the assistant carries on from", CompactBlocked()),
+            new SlashCommand("export", "Save this chat as text", exportWhy),
+            new SlashCommand("tools", "Choose the tools the assistant may use in this chat", null)
+        };
+
+        if (AllowCamera)
+        {
+            commands.Add(new SlashCommand("camera", "Take a picture with your camera, for the next question", null));
+            commands.Add(new SlashCommand("screenshot", "Attach a screenshot of a screen, a window or a tab", null));
+        }
+
+        commands.Add(new SlashCommand("settings", "Open AI settings: the models, their keys, and speech to text", settingsWhy));
+
+        //The window owner's own: questions, which wait for a model, and for whatever else the owner says they need.
+        foreach (var own in Commands)
+        {
+            var why = asking;
+
+            if (why == null && own.WhyNot != null)
+                why = own.WhyNot();
+
+            commands.Add(new SlashCommand(own.Name, own.Says, why, own.Question));
+        }
+
+        return commands;
+    }
+
+    ///<summary>The name being typed after the box's leading slash, or null when the box holds anything else.</summary>
+    private string SlashTyped()
+    {
+        if (string.IsNullOrEmpty(nlPrompt) || nlPrompt[0] != '/')
+            return null;
+
+        var name = nlPrompt.Substring(1);
+
+        if (name.Any(character => !char.IsAsciiLetterLower(character)))
+            return null;
+
+        return name;
+    }
+
+    ///<summary>The commands whose names start with what is typed after the slash.</summary>
+    private List<SlashCommand> SlashMatches()
+    {
+        var typed = SlashTyped();
+
+        if (typed == null)
+            return new List<SlashCommand>();
+
+        return SlashCommands().Where(command => command.Name.StartsWith(typed, StringComparison.Ordinal)).ToList();
+    }
+
+    private bool SlashShown()
+    {
+        if (nlPrompt == slashDismissed)
+            return false;
+
+        return SlashMatches().Count > 0;
+    }
+
+    ///<summary>The command and its words when the box holds one written out, "/count products only", or null.</summary>
+    private (SlashCommand Command, string Words)? TypedSlash()
+    {
+        var text = (nlPrompt ?? "").Trim();
+
+        if (text.Length < 2 || text[0] != '/')
+            return null;
+
+        var end = 1;
+
+        while (end < text.Length && char.IsAsciiLetterLower(text[end]))
+            end++;
+
+        if (end < text.Length && !char.IsWhiteSpace(text[end]))
+            return null;
+
+        var name = text.Substring(1, end - 1);
+        var command = SlashCommands().FirstOrDefault(each => each.Name == name);
+
+        if (command == null)
+            return null;
+
+        return (command, text.Substring(end).Trim());
+    }
+
+    ///<summary>The list's keys while it is up. Answers whether the key was the list's.</summary>
+    private async Task<bool> SlashKeyAsync(KeyboardEventArgs e)
+    {
+        if (!SlashShown() || e.IsComposing)
+            return false;
+
+        var offered = SlashMatches();
+
+        if (slashIndex >= offered.Count)
+            slashIndex = 0;
+
+        if (e.Key == "ArrowDown")
+        {
+            slashIndex = (slashIndex + 1) % offered.Count;
+
+            return true;
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            slashIndex = (slashIndex + offered.Count - 1) % offered.Count;
+
+            return true;
+        }
+        else if (e.Key == "Escape")
+        {
+            slashDismissed = nlPrompt;
+
+            return true;
+        }
+        else if (e.Key == "Tab")
+        {
+            nlPrompt = $"/{offered[slashIndex].Name} ";
+
+            return true;
+        }
+        else if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await RunSlashAsync(offered[slashIndex], string.Empty);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    ///<summary>Runs the command written out in the box, if it holds one. Answers whether it did, or said why it could not.</summary>
+    private async Task<bool> RunTypedSlashAsync()
+    {
+        var typed = TypedSlash();
+
+        if (typed == null)
+            return false;
+
+        await RunSlashAsync(typed.Value.Command, typed.Value.Words);
+
+        return true;
+    }
+
+    private async Task RunSlashAsync(SlashCommand command, string words)
+    {
+        slashProblem = "";
+        slashIndex = 0;
+
+        if (command.Why != null)
+        {
+            slashProblem = $"/{command.Name}: {command.Why}.";
+
+            return;
+        }
+
+        if (command.Question != null)
+        {
+            var question = command.Question;
+
+            if (words.Length > 0)
+                question = $"{question} {words}";
+
+            nlPrompt = question;
+
+            await SendAsync();
+
+            return;
+        }
+
+        nlPrompt = "";
+
+        try
+        {
+            await JS.InvokeVoidAsync("floatingDialog.resetComposer", promptBox);
+        }
+        catch { }
+
+        if (command.Name == "new")
+            NewChat();
+        else if (command.Name == "compact")
+            await CompactAsync();
+        else if (command.Name == "export")
+            await ExportAsync(chat, Subject);
+        else if (command.Name == "tools")
+            TogglePicker();
+        else if (command.Name == "camera" && !cameraOpen)
+            await ToggleCameraAsync();
+        else if (command.Name == "screenshot")
+            await ScreenshotAsync();
+        else if (command.Name == "settings")
+            await OnOpenSettings.InvokeAsync();
+    }
+
+    #endregion
+
+    #region The camera and a screenshot
+
+    ///<summary>Whether the camera's card is open over the box.</summary>
+    private bool cameraOpen;
+
+    ///<summary>Whether the open card's camera has been asked for, once it is on the page (see OnAfterRenderAsync).</summary>
+    private bool cameraStarted;
+
+    private ElementReference cameraVideo;
+
+    ///<summary>Why the camera shows nothing, in its card where the shutter would be.</summary>
+    private string cameraProblem = "";
+
+    private async Task ToggleCameraAsync()
+    {
+        if (cameraOpen)
+        {
+            await CloseCameraAsync();
+
+            return;
+        }
+
+        cameraOpen = true;
+        cameraStarted = false;
+        cameraProblem = "";
+    }
+
+    ///<summary>Puts the card away and stops every track, or the camera's light stays on.</summary>
+    private async Task CloseCameraAsync()
+    {
+        cameraOpen = false;
+
+        try
+        {
+            await JS.InvokeVoidAsync("aiCamera.close");
+        }
+        catch { }
+    }
+
+    private async Task CameraKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            await CloseCameraAsync();
+    }
+
+    ///<summary>
+    ///A screenshot, picked in the browser's own window and attached through the paperclip's input. A picker closed without a
+    ///choice attaches nothing and says nothing: it is somebody changing their mind, not a failure.
+    ///</summary>
+    private async Task ScreenshotAsync()
+    {
+        attachProblem = "";
+
+        var why = "The screenshot could not be taken.";
+
+        try
+        {
+            why = await JS.InvokeAsync<string>("aiCamera.screenshot", AttachInputId);
+        }
+        catch { }
+
+        if (!string.IsNullOrEmpty(why) && why != "canceled")
+            attachProblem = why;
+    }
+
+    ///<summary>The frame on screen, attached through the paperclip's input, which is where its checks are, and the card closed.</summary>
+    private async Task CaptureAsync()
+    {
+        var why = "The picture could not be taken.";
+
+        try
+        {
+            why = await JS.InvokeAsync<string>("aiCamera.capture", cameraVideo, AttachInputId);
+        }
+        catch { }
+
+        if (!string.IsNullOrEmpty(why))
+        {
+            cameraProblem = why;
+
+            return;
+        }
+
+        await CloseCameraAsync();
+    }
+
+    ///<summary>The window was closed: what the microphone was hearing is let go unwritten, and the camera's card goes.</summary>
+    private async Task PutDevicesAwayAsync()
+    {
+        listening = false;
+        cameraOpen = false;
+
+        try
+        {
+            await JS.InvokeVoidAsync("aiSpeech.cancel");
+            await JS.InvokeVoidAsync("aiCamera.close");
+        }
+        catch { }
+
+        StateHasChanged();
+    }
+
+    #endregion
+
+    #region The microphone
+
+    ///<summary>How the microphone turns speech into words, chosen in AI settings (<see cref="SpeechPreference"/>).</summary>
+    private SpeechMode speechMode = SpeechMode.Browser;
+
+    ///<summary>The way the listening going now was started, which a change of setting halfway through does not change.</summary>
+    private SpeechMode listeningMode = SpeechMode.Browser;
+
+    ///<summary>Whether this browser has a recognizer of its own, asked once the page is up.</summary>
+    private bool browserSpeech;
+
+    ///<summary>Whether the microphone is listening or recording.</summary>
+    private bool listening;
+
+    ///<summary>How many bars the level meter in the box has, newest on the right.</summary>
+    private const int MicLevelBars = 16;
+
+    ///<summary>The level meter, while the microphone listens (showLevel in SpeechInterop.js).</summary>
+    private ElementReference micLevel;
+
+    ///<summary>Whether the meter of the listening going now has been started, once its bars are on the page.</summary>
+    private bool micLevelStarted;
+
+    ///<summary>Whether a recording is with the provider, being written out.</summary>
+    private bool transcribing;
+
+    ///<summary>Why the microphone has nothing to show, under the box until it is pressed again.</summary>
+    private string speechProblem = "";
+
+    private CancellationTokenSource transcribeStop;
+
+    private async Task SpeechChangedAsync()
+    {
+        speechMode = await Store.Speech.GetAsync();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    ///<summary>Whether a press on the microphone can do anything here, which dims it when not; dimmed, it still says why when pointed at.</summary>
+    private bool MicUsable()
+    {
+        return speechMode == SpeechMode.Provider || browserSpeech;
+    }
+
+    private string MicLabel()
+    {
+        if (transcribing)
+            return "Writing out what you said";
+
+        if (listening)
+            return "Stop listening";
+
+        return "Speak your question";
+    }
+
+    ///<summary>What the microphone says when pointed at: what a press does in the way it is set to, and the other way and what it is better at.</summary>
+    private string MicTitle()
+    {
+        if (transcribing)
+            return "Writing out what you said…";
+
+        if (listening && listeningMode == SpeechMode.Provider)
+            return "Recording: press to stop, and the AI provider writes it out";
+
+        if (listening)
+            return "Listening: press to stop";
+
+        if (speechMode == SpeechMode.Provider)
+            return "Speak your question: press, talk, and press again. An OpenAI or Gemini model writes it out, told the words this window expects, and the provider bills it. For live words as you talk, switch Speech to text to Browser in AI settings";
+
+        if (!browserSpeech)
+            return "This browser has no speech recognition of its own. Switch Speech to text to AI provider in AI settings, and the microphone records instead";
+
+        return "Speak your question: your browser writes it into the box as you talk (Chrome and Edge send the audio to Google or Microsoft). For better accuracy with labels and query words, switch Speech to text to AI provider in AI settings";
+    }
+
+    private async Task MicAsync()
+    {
+        if (transcribing)
+            return;
+
+        speechProblem = "";
+
+        if (listening)
+        {
+            await StopSpeechAsync();
+
+            return;
+        }
+
+        listeningMode = speechMode;
+
+        if (speechMode == SpeechMode.Browser)
+        {
+            if (!browserSpeech)
+            {
+                speechProblem = "This browser has no speech recognition of its own: Chrome and Edge have. Or switch Speech to text to AI provider in AI settings, and the microphone records instead.";
+
+                return;
+            }
+
+            try
+            {
+                listening = await JS.InvokeAsync<bool>("aiSpeech.startListening", promptBox, handle);
+            }
+            catch { }
+
+            if (!listening)
+                speechProblem = "The browser's speech recognition could not start. Press the microphone again.";
+
+            return;
+        }
+
+        var why = "The microphone could not be started.";
+
+        try
+        {
+            why = await JS.InvokeAsync<string>("aiSpeech.startRecording", handle);
+        }
+        catch { }
+
+        if (!string.IsNullOrEmpty(why))
+        {
+            speechProblem = why;
+
+            return;
+        }
+
+        listening = true;
+    }
+
+    private async Task StopSpeechAsync()
+    {
+        if (listeningMode == SpeechMode.Browser)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("aiSpeech.stopListening");
+            }
+            catch { }
+
+            return;
+        }
+
+        listening = false;
+        transcribing = true;
+
+        StateHasChanged();
+
+        var recorded = "";
+
+        try
+        {
+            recorded = await JS.InvokeAsync<string>("aiSpeech.stopRecording");
+        }
+        catch (Exception ex)
+        {
+            speechProblem = $"The recording could not be read: {ex.Message}";
+        }
+
+        try
+        {
+            await TranscribeAsync(recorded);
+        }
+        finally
+        {
+            transcribing = false;
+        }
+    }
+
+    ///<summary>
+    ///The browser's recognizer ended, or the recording reached its limit. The recognizer's words are in the box already, put
+    ///there as if typed; a recording at its limit is written out as if the microphone had been pressed.
+    ///</summary>
+    [JSInvokable]
+    public async Task OnSpeechEnded(string problem)
+    {
+        if (problem == "limit")
+        {
+            if (listening && listeningMode == SpeechMode.Provider)
+                await StopSpeechAsync();
+
+            StateHasChanged();
+
+            return;
+        }
+
+        listening = false;
+
+        if (!string.IsNullOrEmpty(problem))
+            speechProblem = problem;
+
+        composerSized = false;
+
+        StateHasChanged();
+    }
+
+    ///<summary>The words the provider is told to expect: the window owner's terms, or none.</summary>
+    private IEnumerable<string> VocabularyNow()
+    {
+        if (Vocabulary == null)
+            return Array.Empty<string>();
+
+        return Vocabulary() ?? Array.Empty<string>();
+    }
+
+    ///<summary>Sends a recording to be written out, and puts what came back after what the box holds.</summary>
+    private async Task TranscribeAsync(string recorded)
+    {
+        if (string.IsNullOrEmpty(recorded))
+        {
+            if (speechProblem.Length == 0)
+                speechProblem = "Nothing was recorded.";
+
+            return;
+        }
+
+        var saved = await Store.LoadAsync();
+        var model = SpeechTranscriber.Pick(selected, saved.Values);
+
+        if (model == null)
+        {
+            speechProblem = "Speech written out by the AI provider takes an OpenAI or Gemini model: add one in AI settings, or switch Speech to text to Browser there. Claude models take no audio.";
+
+            return;
+        }
+
+        var stop = new CancellationTokenSource();
+
+        transcribeStop = stop;
+
+        try
+        {
+            var wav = Convert.FromBase64String(recorded);
+            var (text, problem) = await SpeechTranscriber.TranscribeAsync(LlmHttpClient.For(Services, Http), model, wav, SpeechTranscriber.Vocabulary(VocabularyNow()), stop.Token);
+
+            if (problem != null)
+            {
+                speechProblem = problem;
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                speechProblem = "Nothing was heard in the recording.";
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(nlPrompt))
+                nlPrompt = text.Trim();
+            else
+                nlPrompt = nlPrompt.TrimEnd() + " " + text.Trim();
+
+            composerSized = false;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (transcribeStop == stop)
+                transcribeStop = null;
+
+            stop.Dispose();
+        }
+    }
+
+    #endregion
+}

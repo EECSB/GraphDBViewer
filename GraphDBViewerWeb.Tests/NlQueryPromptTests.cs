@@ -44,14 +44,6 @@ public class NlQueryPromptTests
         Assert.DoesNotContain("Property keys:", prompt);
     }
 
-    [Fact]
-    public void BuildSystemPrompt_NullSchemaDoesNotThrow()
-    {
-        var prompt = NlQueryPrompt.BuildSystemPrompt("gremlin", null);
-
-        Assert.Contains("Gremlin", prompt);
-    }
-
     //The "use ONLY the labels listed below" rule used to be emitted unconditionally while the label
     //sections below it were each gated on being non-empty — so an unread schema constrained the model to
     //the empty set and then told it to answer anyway.

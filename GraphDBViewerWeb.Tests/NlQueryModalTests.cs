@@ -23,8 +23,9 @@ public class NlQueryModalTests : BunitContext
 
         var cut = Render<LlmConnectionPicker>();
 
-        //"+" opens the add-model form; a fresh LlmConnection defaults to Anthropic.
-        cut.FindAll("button").First(b => b.TextContent.Trim() == "+").Click();
+        //New, at the end of the picker's menu, opens the add-model form; a fresh LlmConnection defaults to Anthropic.
+        cut.Click("[data-testid=llm-picker-chevron]");
+        cut.Click("[data-testid=llm-picker-add]");
 
         return cut;
     }
@@ -53,7 +54,7 @@ public class NlQueryModalTests : BunitContext
 
         Assert.Contains(cut.FindAll("label"), l => l.TextContent.Trim() == "Max tokens");
 
-        cut.FindAll("button").First(b => b.TextContent.Trim() == "OpenAI").Click();
+        cut.Click(c => c.FindAll("button").First(b => b.TextContent.Trim() == "OpenAI"));
 
         Assert.DoesNotContain(cut.FindAll("label"), l => l.TextContent.Trim() == "Max tokens");
     }
@@ -74,7 +75,7 @@ public class NlQueryModalTests : BunitContext
     {
         var cut = RenderModalWithOpenForm();
 
-        cut.FindAll("button").First(b => b.TextContent.Trim() == "Gemini").Click();
+        cut.Click(c => c.FindAll("button").First(b => b.TextContent.Trim() == "Gemini"));
 
         Assert.NotNull(cut.Find($"input[placeholder='{OpenAiProvider.GeminiBaseUrl}']"));
     }
@@ -96,9 +97,10 @@ public class NlQueryModalTests : BunitContext
         //The other picker — the one under Settings — adds one.
         var editing = Render<LlmConnectionPicker>();
 
-        editing.FindAll("button").First(b => b.TextContent.Trim() == "+").Click();
-        editing.Find("input[placeholder='e.g. Claude Opus']").Change("Added elsewhere");
-        editing.FindAll("button").First(b => b.TextContent.Trim() == "Add").Click();
+        editing.Click("[data-testid=llm-picker-chevron]");
+        editing.Click("[data-testid=llm-picker-add]");
+        editing.Change("input[placeholder='e.g. Claude Opus']", "Added elsewhere");
+        editing.Click("[data-testid=llm-form-save]");
 
         picking.WaitForAssertion(() => Assert.Contains("Added elsewhere", picking.Markup));
 
@@ -125,30 +127,33 @@ public class NlQueryModalTests : BunitContext
         //Add two, so there is something to switch between.
         foreach (var name in new[] { "Alpha", "Beta" })
         {
-            cut.FindAll("button").First(b => b.TextContent.Trim() == "+").Click();
-            cut.Find("input[placeholder='e.g. Claude Opus']").Change(name);
-            cut.Find("input[type=password]").Change("key-" + name);
-            cut.FindAll("button").First(b => b.TextContent.Trim() == "Add").Click();
+            cut.Click("[data-testid=llm-picker-chevron]");
+            cut.Click("[data-testid=llm-picker-add]");
+            cut.Change("input[placeholder='e.g. Claude Opus']", name);
+            cut.Change("input[type=password]", "key-" + name);
+            cut.Click("[data-testid=llm-form-save]");
         }
 
-        //Saving leaves the form up, showing what was saved.
-        cut.WaitForAssertion(() => Assert.Equal("Beta", cut.Find("input[placeholder='e.g. Claude Opus']").GetAttribute("value")));
+        //Saving leaves the form up, showing what was saved, its name heading the picker.
+        cut.WaitForAssertion(() => Assert.Equal("Beta", cut.Find("[data-testid=llm-picker] .gdbv-picker-head .gdbv-picker-name").TextContent));
 
         //Nothing is pressed to see another model's settings: choosing it is the whole gesture.
-        cut.Find("select").Change("Alpha");
+        cut.Click("[data-testid=llm-picker-chevron]");
+        cut.Click("[data-testid=llm-picker-menu] [data-key='Alpha']");
 
         cut.WaitForAssertion(() =>
         {
-            Assert.Equal("Alpha", cut.Find("input[placeholder='e.g. Claude Opus']").GetAttribute("value"));
+            Assert.Equal("Alpha", cut.Find("[data-testid=llm-picker] .gdbv-picker-head .gdbv-picker-name").TextContent);
             Assert.Equal("key-Alpha", cut.Find("input[type=password]").GetAttribute("value"));
         });
 
         Assert.DoesNotContain(cut.FindAll("button"), b => b.TextContent.Trim() == "Edit");
         Assert.DoesNotContain("Edit model", cut.Markup);
 
-        //Cancel stays: with the form always on screen it reverts rather than closes.
-        Assert.Contains(cut.FindAll("button"), b => b.TextContent.Trim() == "Cancel");
+        //No Cancel since Save joined the picker (2026-11-05, the user): picking the model again puts back what is saved.
+        Assert.DoesNotContain(cut.FindAll("button"), b => b.TextContent.Trim() == "Cancel");
     }
+
 
     //The four provider families the factory routes on. "Other" is the label; its value is "Custom".
     [Fact]

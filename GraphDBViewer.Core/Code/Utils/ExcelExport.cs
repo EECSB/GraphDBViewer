@@ -118,8 +118,22 @@ public static class ExcelExport
         target.Append("</row>");
     }
 
+    ///<summary>The most characters Excel holds in one cell; a workbook with more is "repaired" on opening, with a warning.</summary>
+    public const int CellLimit = 32767;
+
+    //A longer value is cut to the limit, one short of it when the cut would halve a surrogate pair, which XML cannot carry.
     private static void AppendTextCell(StringBuilder target, string reference, string value, int style)
     {
+        if (value != null && value.Length > CellLimit)
+        {
+            var limit = CellLimit;
+
+            if (char.IsHighSurrogate(value[limit - 1]))
+                limit--;
+
+            value = value.Substring(0, limit);
+        }
+
         target.Append($"<c r=\"{reference}\" t=\"inlineStr\" s=\"{style}\"><is><t xml:space=\"preserve\">{XmlEscape(value)}</t></is></c>");
     }
 
@@ -146,12 +160,20 @@ public static class ExcelExport
         return s;
     }
 
+    //A control character other than a tab, a line feed and a carriage return is one XML 1.0 cannot carry, escaped
+    //or not, and Excel refuses the whole workbook over one: it is dropped, which is what a sheet would show anyway.
     private static string XmlEscape(string value)
     {
         if (string.IsNullOrEmpty(value))
             return "";
 
-        return value
+        var kept = new StringBuilder(value.Length);
+
+        foreach (var c in value)
+            if (c >= ' ' || c == '\t' || c == '\n' || c == '\r')
+                kept.Append(c);
+
+        return kept.ToString()
             .Replace("&", "&amp;")
             .Replace("<", "&lt;")
             .Replace(">", "&gt;")

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace GraphDBViewerWeb.Code;
@@ -15,19 +16,25 @@ public sealed class LlmMessage
     public const string UserRole = "user";
     public const string AssistantRole = "assistant";
 
-    public LlmMessage(string role, string text)
+    private static readonly IReadOnlyList<AiAttachment> None = Array.Empty<AiAttachment>();
+
+    public LlmMessage(string role, string text, IReadOnlyList<AiAttachment> attachments = null)
     {
         Role = role;
         Text = text;
+        Attachments = attachments ?? None;
     }
 
     public string Role { get; }
 
     public string Text { get; }
 
-    public static LlmMessage FromUser(string text)
+    ///<summary>The files a question was sent with, which go ahead of its words (<see cref="AiAttachment.Parts"/>). Empty for anything else.</summary>
+    public IReadOnlyList<AiAttachment> Attachments { get; }
+
+    public static LlmMessage FromUser(string text, IReadOnlyList<AiAttachment> attachments = null)
     {
-        return new LlmMessage(UserRole, text);
+        return new LlmMessage(UserRole, text, attachments);
     }
 
     public static LlmMessage FromAssistant(string text)

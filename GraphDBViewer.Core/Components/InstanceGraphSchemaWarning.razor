@@ -1,0 +1,29 @@
+@using GraphDBViewerWeb.Code
+
+@*The instance graph's schema warning, drawn the same way above every plugin that writes to the graph.
+   A JanusGraph nobody declared a schema on still takes every write, and fixes each property's datatype
+   from the first one, so this sits above the plugin rather than in its place: the page works, and the
+   moment to read the sentence is before anything is written through it. Nothing renders without one.*@
+@if (!string.IsNullOrEmpty(Warning))
+{
+    <div class="alert alert-warning" style="max-width: 48rem;" data-testid="schema-warning">
+        <div>@Warning</div>
+
+        @if (Account != null && Account.Can(AccountInfo.InstanceConfigure))
+        {
+            <a class="d-inline-block mt-1" href="/instance-graph">Open the instance graph page →</a>
+        }
+        else
+        {
+            <div class="gdbv-text mt-1">An administrator can declare the schema on the instance graph page.</div>
+        }
+    </div>
+}
+
+@code {
+    ///<summary>The sentence the host sent, or null when there is nothing to warn about.</summary>
+    [Parameter] public string Warning { get; set; }
+
+    ///<summary>Who is signed in, cascaded by the layout: whoever may configure the graph gets the way to it.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+}

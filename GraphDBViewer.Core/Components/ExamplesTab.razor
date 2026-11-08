@@ -1,17 +1,24 @@
 @using GraphDBViewerWeb.Code
 
 <div class="border rounded p-2" style="height: 15em; overflow-y: auto;">
-    <div class="text-muted mb-2" style="font-size: 0.75em;">Click an example to load it into the Query tab.</div>
+    @if (Groups.Count == 0)
+    {
+        <div class="gdbv-text-xs text-muted" data-testid="no-examples">No examples in @NlQueryPrompt.LanguageDisplayName(Language) yet: this database does not run Gremlin or openCypher, which the examples are written in.</div>
+    }
+    else
+    {
+        <div class="gdbv-text-xs text-muted mb-2">Click an example to load it into the Query tab.</div>
+    }
 
     @foreach (var group in Groups)
     {
-        <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.62em; letter-spacing: 0.05em;">@group.Category</div>
+        <div class="gdbv-text-xs text-muted text-uppercase fw-bold mb-1" style="letter-spacing: 0.05em;">@group.Category</div>
         <div class="d-flex flex-wrap gap-1 mb-2">
             @foreach (var ex in group.Examples)
             {
                 <button type="button"
-                        class="btn btn-sm @(ex.Destructive ? "btn-outline-danger" : "btn-outline-secondary")"
-                        style="font-size: 0.75em;"
+                        class="gdbv-text-xs btn btn-sm @(ex.Destructive ? "btn-outline-danger" : "btn-outline-secondary")"
+                       
                         title="@ex.Query"
                         @onclick="() => OnSelect.InvokeAsync(ex.Query)">
                     @ex.Name
@@ -24,19 +31,22 @@
 @code {
     [Parameter] public EventCallback<string> OnSelect { get; set; }
 
-    ///<summary>The editor's language, so the examples match it — Cypher for openCypher, Gremlin otherwise.</summary>
+    ///<summary>The editor's language, so the examples match it — Cypher for openCypher, Gremlin for Gremlin or none.</summary>
     [Parameter] public string Language { get; set; }
 
-    //Swaps the whole example list to match the editor language. SPARQL has no set of its own yet, so it
-    //shares the Gremlin default (its own examples can slot in here the same way Cypher's do).
+    //Swaps the whole example list to match the editor language. AQL, DQL and SPARQL have no set of their own
+    //yet, and until 2026-10-31 were shown Gremlin's, which their databases cannot run; they get none, and a line
+    //saying so (their own examples can slot in here the same way Cypher's do).
     private IReadOnlyList<QueryExampleGroup> Groups
     {
         get
         {
             if (Language == "cypher")
                 return CypherExamples.Groups;
+            else if (string.IsNullOrEmpty(Language) || Language == "gremlin")
+                return GremlinExamples.Groups;
 
-            return GremlinExamples.Groups;
+            return [];
         }
     }
 }

@@ -1,22 +1,389 @@
-﻿/* Light 2 tints the app surfaces alice blue: the top bar, the cards, the panels inset in them and
-   the front of a selected tab. It is one of three themes, so it hangs off an attribute the page sets
-   rather than off the light/dark split, and Dark and Light 1 need no rules of their own: without the
-   attribute nothing below applies and every surface keeps what Bootstrap gives it.
+﻿/* The look (2026-10-28, "Slate", chosen from three proposals): every color, size and corner the shell and the pages
+   draw comes from the tokens below, so a theme is a set of values and nothing else. Light and dark are the two sets;
+   Light 2 tints Light 1's surfaces. Bootstrap's own variables are pointed at the tokens under them, so its components
+   follow without rules of their own; the few that keep Sass literals (buttons, fields, checks) are retold further down.
 
-   The tab rule names the color outright instead of setting --bs-nav-tabs-link-active-bg, which loses
-   to whatever paints the tab buttons. */
+   Three surface levels: the page (bg), what sits on it (s1: cards, panes, the bar), and what is raised on that (s2:
+   headers, toolbars; s3: hover and pressed). Three text levels. One accent, the brand's green, for what is selected and
+   what acts; violet for a thing shared between places; the tags' three hues for the diagram's System, User and
+   Structural. Muted text clears 4.5:1 on the surface it is for in both sets. */
+:root,
+[data-bs-theme="light"] {
+    --gdbv-bg: #f6f8fa;
+    --gdbv-s1: #ffffff;
+    --gdbv-s2: #f6f8fa;
+    --gdbv-s3: #eaeef2;
+    --gdbv-line: #d0d7de;
+    --gdbv-line-2: #e7ebef;
+    --gdbv-fg: #1f2328;
+    --gdbv-fg-rgb: 31, 35, 40;
+    --gdbv-fg-2: #59636e;
+    --gdbv-fg-2-rgb: 89, 99, 110;
+    --gdbv-fg-3: #6b7580;
+    --gdbv-accent: #1a7f4b;
+    --gdbv-accent-rgb: 26, 127, 75;
+    --gdbv-accent-hover: #166a3f;
+    --gdbv-accent-fg: #ffffff;
+    --gdbv-accent-soft: rgba(26, 127, 75, 0.12);
+    --gdbv-sel-bg: #dcefe4;
+    --gdbv-sel-fg: #0f5a34;
+    --gdbv-hi-bg: rgba(26, 127, 75, 0.07);
+    --gdbv-shared: #6e56cf;
+    --gdbv-shared-bg: #ede9fe;
+    --gdbv-shared-fg: #4c3a9e;
+    --gdbv-badge-bg: #e7ebef;
+    --gdbv-badge-fg: #59636e;
+    --gdbv-tag-system-bg: #fbf0d9;
+    --gdbv-tag-system-fg: #7a4b00;
+    --gdbv-tag-user-bg: #dceefb;
+    --gdbv-tag-user-fg: #0b4a8a;
+    --gdbv-tag-structural-bg: #fbe3ec;
+    --gdbv-tag-structural-fg: #8a2a4f;
+    --gdbv-input-bg: #ffffff;
+    --gdbv-node-bg: #ffffff;
+    --gdbv-node-line: #c9d1d9;
+    --gdbv-alert: #cf222e;
+    --gdbv-alert-fg: #ffffff;
+    --gdbv-shadow: 0 1px 2px rgba(31, 35, 40, 0.06);
+    --gdbv-shadow-menu: 0 8px 24px rgba(31, 35, 40, 0.14);
+    --gdbv-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --gdbv-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    --gdbv-fs: 13px;
+    --gdbv-fs-sm: 12px;
+    --gdbv-fs-xs: 11px;
+    --gdbv-fs-lg: 15px;
+    --gdbv-radius: 6px;
+    --gdbv-radius-sm: 4px;
+    --gdbv-radius-lg: 8px;
+    --gdbv-bar-h: 48px;
+    --gdbv-head-h: 40px;
+    --gdbv-ctl-h: 28px;
+    --gdbv-input-h: 30px;
+    --gdbv-row-h: 26px;
+}
+
+[data-bs-theme="dark"] {
+    --gdbv-bg: #0d1117;
+    --gdbv-s1: #161b22;
+    --gdbv-s2: #1c2128;
+    --gdbv-s3: #262c36;
+    --gdbv-line: #30363d;
+    --gdbv-line-2: #21262d;
+    --gdbv-fg: #e6edf3;
+    --gdbv-fg-rgb: 230, 237, 243;
+    --gdbv-fg-2: #9198a1;
+    --gdbv-fg-2-rgb: 145, 152, 161;
+    --gdbv-fg-3: #7d8590;
+    --gdbv-accent: #3fb950;
+    --gdbv-accent-rgb: 63, 185, 80;
+    --gdbv-accent-hover: #56d364;
+    --gdbv-accent-fg: #0d1117;
+    --gdbv-accent-soft: rgba(63, 185, 80, 0.15);
+    --gdbv-sel-bg: #1c3a2a;
+    --gdbv-sel-fg: #7ee787;
+    --gdbv-hi-bg: rgba(63, 185, 80, 0.08);
+    --gdbv-shared: #a371f7;
+    --gdbv-shared-bg: #322c4d;
+    --gdbv-shared-fg: #c7a7ff;
+    --gdbv-badge-bg: #262c36;
+    --gdbv-badge-fg: #9198a1;
+    --gdbv-tag-system-bg: #3a2a06;
+    --gdbv-tag-system-fg: #f0c36a;
+    --gdbv-tag-user-bg: #0c2d4e;
+    --gdbv-tag-user-fg: #8ec5ff;
+    --gdbv-tag-structural-bg: #44192b;
+    --gdbv-tag-structural-fg: #f4a3c3;
+    --gdbv-input-bg: #0d1117;
+    --gdbv-node-bg: #1c2128;
+    --gdbv-node-line: #3d444d;
+    --gdbv-alert: #f85149;
+    --gdbv-alert-fg: #0d1117;
+    --gdbv-shadow: none;
+    --gdbv-shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* Light 2: Light 1 with its surfaces tinted. It rides on an attribute of its own rather than a third value of the
+   light/dark one, which Bootstrap owns and reads. */
+/* The blue themes (2026-10-29): the same sets with the accent and what it colors swapped for a blue, on an attribute
+   of their own as the tint is, so Light green 1 and Light blue 1 differ in these lines alone. */
+[data-gdbv-accent="blue"] {
+    --gdbv-accent: #0969da;
+    --gdbv-accent-rgb: 9, 105, 218;
+    --gdbv-accent-hover: #0550ae;
+    --gdbv-accent-fg: #ffffff;
+    --gdbv-accent-soft: rgba(9, 105, 218, 0.12);
+    --gdbv-sel-bg: #ddf4ff;
+    --gdbv-sel-fg: #0a3069;
+    --gdbv-hi-bg: rgba(9, 105, 218, 0.07);
+}
+
+[data-bs-theme="dark"][data-gdbv-accent="blue"] {
+    --gdbv-accent: #4493f8;
+    --gdbv-accent-rgb: 68, 147, 248;
+    --gdbv-accent-hover: #58a6ff;
+    --gdbv-accent-fg: #0d1117;
+    --gdbv-accent-soft: rgba(68, 147, 248, 0.15);
+    --gdbv-sel-bg: #122a4a;
+    --gdbv-sel-fg: #79c0ff;
+    --gdbv-hi-bg: rgba(68, 147, 248, 0.08);
+}
+
+[data-gdbv-tint="on"] {
+    --gdbv-bg: #eef3f8;
+    --gdbv-s1: #f6f9fc;
+    --gdbv-s2: #e9eff5;
+    --gdbv-s3: #dde5ed;
+    --gdbv-input-bg: #ffffff;
+}
+
+/* Bootstrap, pointed at the tokens. Its dark set lives on the same attribute selector, so this later rule of the same
+   specificity wins for both. */
+:root,
+[data-bs-theme="light"],
+[data-bs-theme="dark"] {
+    --bs-body-bg: var(--gdbv-bg);
+    --bs-body-color: var(--gdbv-fg);
+    --bs-body-color-rgb: var(--gdbv-fg-rgb);
+    --bs-emphasis-color: var(--gdbv-fg);
+    --bs-emphasis-color-rgb: var(--gdbv-fg-rgb);
+    --bs-heading-color: var(--gdbv-fg);
+    --bs-secondary-color: var(--gdbv-fg-2);
+    --bs-secondary-color-rgb: var(--gdbv-fg-2-rgb);
+    --bs-tertiary-color: var(--gdbv-fg-3);
+    --bs-secondary-bg: var(--gdbv-s2);
+    --bs-tertiary-bg: var(--gdbv-s3);
+    --bs-secondary-rgb: var(--gdbv-fg-2-rgb);
+    --bs-secondary-bg-subtle: var(--gdbv-badge-bg);
+    --bs-secondary-text-emphasis: var(--gdbv-badge-fg);
+    --bs-border-color: var(--gdbv-line);
+    --bs-border-color-translucent: var(--gdbv-line);
+    --bs-border-radius: var(--gdbv-radius);
+    --bs-border-radius-sm: var(--gdbv-radius-sm);
+    --bs-border-radius-lg: var(--gdbv-radius-lg);
+    --bs-primary: var(--gdbv-accent);
+    --bs-primary-rgb: var(--gdbv-accent-rgb);
+    --bs-primary-bg-subtle: var(--gdbv-sel-bg);
+    --bs-primary-border-subtle: var(--gdbv-accent);
+    --bs-primary-text-emphasis: var(--gdbv-sel-fg);
+    --bs-link-color: var(--gdbv-accent);
+    --bs-link-color-rgb: var(--gdbv-accent-rgb);
+    --bs-link-hover-color: var(--gdbv-accent-hover);
+    --bs-link-hover-color-rgb: var(--gdbv-accent-rgb);
+    --bs-body-font-family: var(--gdbv-font);
+    --bs-body-font-size: var(--gdbv-fs);
+    --bs-body-line-height: 1.45;
+    --bs-font-monospace: var(--gdbv-mono);
+    --bs-focus-ring-color: rgba(var(--gdbv-accent-rgb), 0.3);
+    --bs-form-control-bg: var(--gdbv-input-bg);
+    --bs-box-shadow: var(--gdbv-shadow-menu);
+}
+
+/* What Bootstrap keeps as Sass literals: the buttons' and fields' colors, sizes and corners, retold on the tokens. The
+   small size is the app's usual control, 28px; the regular one 31px; fields one more. */
+.btn {
+    --bs-btn-font-size: var(--gdbv-fs);
+    --bs-btn-padding-y: 0.3rem;
+    --bs-btn-padding-x: 0.75rem;
+    --bs-btn-border-radius: var(--gdbv-radius);
+}
+
+.btn-sm,
+.btn-group-sm > .btn,
+.input-group-sm > .btn {
+    --bs-btn-font-size: var(--gdbv-fs-sm);
+    --bs-btn-padding-y: 0.25rem;
+    --bs-btn-padding-x: 0.6rem;
+    --bs-btn-border-radius: var(--gdbv-radius);
+    font-weight: 500;
+}
+
+.btn-primary {
+    --bs-btn-color: var(--gdbv-accent-fg);
+    --bs-btn-bg: var(--gdbv-accent);
+    --bs-btn-border-color: var(--gdbv-accent);
+    --bs-btn-hover-color: var(--gdbv-accent-fg);
+    --bs-btn-hover-bg: var(--gdbv-accent-hover);
+    --bs-btn-hover-border-color: var(--gdbv-accent-hover);
+    --bs-btn-active-color: var(--gdbv-accent-fg);
+    --bs-btn-active-bg: var(--gdbv-accent-hover);
+    --bs-btn-active-border-color: var(--gdbv-accent-hover);
+    --bs-btn-disabled-color: var(--gdbv-accent-fg);
+    --bs-btn-disabled-bg: var(--gdbv-accent);
+    --bs-btn-disabled-border-color: var(--gdbv-accent);
+    --bs-btn-focus-shadow-rgb: var(--gdbv-accent-rgb);
+}
+
+.btn-outline-primary {
+    --bs-btn-color: var(--gdbv-accent);
+    --bs-btn-border-color: var(--gdbv-accent);
+    --bs-btn-hover-color: var(--gdbv-accent-fg);
+    --bs-btn-hover-bg: var(--gdbv-accent);
+    --bs-btn-hover-border-color: var(--gdbv-accent);
+    --bs-btn-active-color: var(--gdbv-accent-fg);
+    --bs-btn-active-bg: var(--gdbv-accent);
+    --bs-btn-active-border-color: var(--gdbv-accent);
+    --bs-btn-disabled-color: var(--gdbv-accent);
+    --bs-btn-disabled-border-color: var(--gdbv-accent);
+    --bs-btn-focus-shadow-rgb: var(--gdbv-accent-rgb);
+}
+
+/* A pressed segment and a plain one: the filled gray and the outlined gray are the two halves of every segmented
+   control in the app, so they are drawn as one control, the pressed half a shade darker. */
+.btn-secondary {
+    --bs-btn-color: var(--gdbv-fg);
+    --bs-btn-bg: var(--gdbv-s3);
+    --bs-btn-border-color: var(--gdbv-line);
+    --bs-btn-hover-color: var(--gdbv-fg);
+    --bs-btn-hover-bg: var(--gdbv-line-2);
+    --bs-btn-hover-border-color: var(--gdbv-line);
+    --bs-btn-active-color: var(--gdbv-fg);
+    --bs-btn-active-bg: var(--gdbv-s3);
+    --bs-btn-active-border-color: var(--gdbv-line);
+    --bs-btn-disabled-color: var(--gdbv-fg-3);
+    --bs-btn-disabled-bg: var(--gdbv-s3);
+    --bs-btn-disabled-border-color: var(--gdbv-line);
+    --bs-btn-focus-shadow-rgb: var(--gdbv-fg-2-rgb);
+}
+
+.btn-outline-secondary {
+    --bs-btn-color: var(--gdbv-fg-2);
+    --bs-btn-border-color: var(--gdbv-line);
+    --bs-btn-hover-color: var(--gdbv-fg);
+    --bs-btn-hover-bg: var(--gdbv-s3);
+    --bs-btn-hover-border-color: var(--gdbv-line);
+    --bs-btn-active-color: var(--gdbv-fg);
+    --bs-btn-active-bg: var(--gdbv-s3);
+    --bs-btn-active-border-color: var(--gdbv-line);
+    --bs-btn-disabled-color: var(--gdbv-fg-3);
+    --bs-btn-disabled-border-color: var(--gdbv-line);
+    --bs-btn-focus-shadow-rgb: var(--gdbv-fg-2-rgb);
+}
+
+.form-control,
+.form-select {
+    font-size: var(--gdbv-fs);
+    padding: 0.3rem 0.6rem;
+    border-radius: var(--gdbv-radius);
+}
+
+.form-control-sm,
+.form-select-sm,
+.input-group-sm > .form-control,
+.input-group-sm > .form-select {
+    font-size: var(--gdbv-fs-sm);
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--gdbv-radius);
+}
+
+/* Bootstrap's words and buttons in a small group are 14px, which stood a row 3px taller than a small field (2026-11-05, the
+   user: a property's row against the Label box over it). */
+.input-group-sm > .input-group-text,
+.input-group-sm > .btn {
+    font-size: var(--gdbv-fs-sm);
+}
+
+.input-group-sm > .input-group-text {
+    padding: 0.25rem 0.5rem;
+}
+
+/* A select's arrow is drawn 0.75rem in from its right edge, 16px wide, and the shorthands above took away the room Bootstrap
+   keeps for it, so a long choice ran under the arrow (2026-11-02, the saved-connection list). A list showing several rows,
+   which has no arrow, keeps Bootstrap's own narrower padding, its rule being the more specific. */
+.form-select,
+.form-select-sm,
+.input-group-sm > .form-select {
+    padding-right: 2.25rem;
+}
+
+.form-control:focus,
+.form-select:focus,
+.form-check-input:focus {
+    border-color: var(--gdbv-accent);
+    box-shadow: 0 0 0 3px var(--gdbv-accent-soft);
+}
+
+.form-check-input:checked {
+    background-color: var(--gdbv-accent);
+    border-color: var(--gdbv-accent);
+}
+
+/* The other places Bootstrap keeps its blue as a literal: the chosen row of a list group, the active pill, a progress
+   bar, the active page and a range's thumb, all the accent. */
+.list-group {
+    --bs-list-group-active-color: var(--gdbv-accent-fg);
+    --bs-list-group-active-bg: var(--gdbv-accent);
+    --bs-list-group-active-border-color: var(--gdbv-accent);
+}
+
+.nav-pills {
+    --bs-nav-pills-link-active-color: var(--gdbv-accent-fg);
+    --bs-nav-pills-link-active-bg: var(--gdbv-accent);
+}
+
+.progress,
+.progress-stacked {
+    --bs-progress-bar-bg: var(--gdbv-accent);
+}
+
+.pagination {
+    --bs-pagination-active-color: var(--gdbv-accent-fg);
+    --bs-pagination-active-bg: var(--gdbv-accent);
+    --bs-pagination-active-border-color: var(--gdbv-accent);
+}
+
+.form-range::-webkit-slider-thumb {
+    background-color: var(--gdbv-accent);
+}
+
+.form-range::-moz-range-thumb {
+    background-color: var(--gdbv-accent);
+}
+
+.form-control::placeholder {
+    color: var(--gdbv-fg-3);
+}
+
+.card {
+    --bs-card-bg: var(--gdbv-s1);
+    --bs-card-border-color: var(--gdbv-line);
+    --bs-card-border-radius: var(--gdbv-radius-lg);
+    --bs-card-inner-border-radius: calc(var(--gdbv-radius-lg) - 1px);
+    --bs-card-cap-bg: var(--gdbv-s2);
+}
+
+.dropdown-item {
+    --bs-dropdown-link-color: var(--gdbv-fg);
+    --bs-dropdown-link-hover-color: var(--gdbv-fg);
+    --bs-dropdown-link-hover-bg: var(--gdbv-s3);
+    --bs-dropdown-link-active-color: var(--gdbv-accent-fg);
+    --bs-dropdown-link-active-bg: var(--gdbv-accent);
+    --bs-dropdown-link-disabled-color: var(--gdbv-fg-3);
+    --bs-dropdown-item-padding-x: 0.75rem;
+    --bs-dropdown-item-padding-y: 0.3rem;
+}
+
+/* The viewer's inset panels and the front of a selected page tab sit one level up from their card. */
 .gdbv-tint-panel {
-    background-color: var(--bs-secondary-bg);
+    background-color: var(--gdbv-s2);
 }
 
-[data-gdbv-tint="on"] .gdbv-tint,
-[data-gdbv-tint="on"] .gdbv-tint-panel,
 [data-gdbv-tint="on"] .nav-tabs .nav-link.active {
-    background-color: aliceblue;
+    background-color: var(--gdbv-s1);
 }
 
-html, body {
-    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+/* The selected tab has no line at its foot, anywhere (2026-11-05, the user): it reaches over the line of what it stands
+   on, which a card, being positioned, would otherwise draw across it, and its own bottom border shows its background. */
+.nav-tabs .nav-link.active {
+    position: relative;
+    z-index: 1;
+    border-bottom-color: transparent;
+}
+
+/* The product name in the top bar. A host restyles it from its own page head, after this sheet, as
+   Treeality does; one that does not keeps the plain heading the viewer always had. */
+.gdbv-app-title {
+    font-size: 1.25rem;
+    line-height: 1;
 }
 
 /* Resizable split between the main graph view (.split-main) and the query sidebar (.split-side),
@@ -28,18 +395,596 @@ html, body {
     flex-direction: column;
     gap: 1rem;
 }
-.split-gutter { display: none; }
+.split-gutter,
+.split-edge { display: none; }
 
 /* Page width. The content sits in a centered column whose max width is a fraction of the viewport
    (80vw), leaving generous side margins. Being viewport-relative, those margins scale with browser
    zoom instead of ballooning — the same reason the 100vh-based height stays put when you zoom. The
    top-bar full-width toggle (.gdbv-fullscreen) drops the cap to fill the viewport. */
 .gdbv-page {
-    max-width: 80vw;
+    /* The side margins are variables since 2026-10-29: by default the margins the 80vw cap gave (the article's own
+       1.5rem padding taken off), and on the viewer page each can be dragged by the edge handle on that side
+       (SplitterInterop sets them on <html>, remembered in this browser), so the graph grows toward the left and the
+       sidebar toward the right without going full width. */
+    --gdbv-page-margin: max(0px, 10vw - 1.5rem);
+    width: auto;
+    max-width: none;
+    margin-left: var(--gdbv-page-ml, var(--gdbv-page-margin));
+    margin-right: var(--gdbv-page-mr, var(--gdbv-page-margin));
+    padding-bottom: 0.5rem;
 }
 
+/* Full width: the viewer's two cards run to the window's sides and bottom with no rounding, since they meet the edges
+   (2026-10-29, the user). Their height is the window's below the bar and the workspace's row. */
 .gdbv-page.gdbv-fullscreen {
-    max-width: none;
+    margin-left: 0;
+    margin-right: 0;
+    padding-bottom: 0;
+}
+
+.gdbv-fullscreen .split-main > .card,
+.gdbv-fullscreen .split-side > .card {
+    border-radius: 0;
+}
+
+/* Except where the two meet each other at the divider, away from any edge: the graph's top right corner stays rounded
+   (2026-11-02, the user). Not embedded, where the graph's card is alone, and not under the standalone viewer's tabs,
+   which stand on that corner. The sidebar's top left has its own tabs standing on it (2026-11-03). */
+.gdbv-page.gdbv-fullscreen:not(.gdbv-embedded):not(:has(.gdbv-tabstrip-row)) .split-main > .card {
+    border-top-right-radius: var(--gdbv-radius-lg);
+}
+
+/* The viewer's own page keeps the room above it it has outside full width, the content's 0.5rem, so its workspace tabs
+   and the sidebar's buttons do not touch the bar's line (2026-11-02, the user). Only the viewer: a plugin's card
+   (gdbv-page-below) runs up to the bar, and the embedded viewer has no bar above it. */
+.gdbv-page.gdbv-fullscreen:not(.gdbv-page-below):not(.gdbv-embedded) {
+    padding-top: 0.5rem;
+}
+
+/* The band the top bar sits in. The bar is a banner across the window's top (2026-10-28): edge to edge, no rounding,
+   only a line along its bottom, which its tabs stand on. Sticky, the band is what stays at the top of the window.
+   Bootstrap's sticky-top level keeps the bar's own menus above the page. */
+.gdbv-shell-band {
+    background-color: var(--bs-body-bg);
+}
+
+/* The bar itself, and not the windows it opens beside it in the band: AI settings had been squared and lost all but its
+   bottom border to this, its header then the page's own color with nothing around it (2026-11-02, the user). */
+.gdbv-shell-band > .gdbv-bar {
+    min-height: var(--gdbv-bar-h);
+    border-width: 0 0 1px;
+    border-radius: 0;
+}
+
+/* The bar's row of controls: as much padding as puts a 32px icon button in the middle of the 48px bar (49 with the
+   line under it). */
+.gdbv-bar-row {
+    padding: 8px 12px 8px 8px !important;
+}
+
+/* A page's controls in the bar (the standalone viewer's tabs) stand in it as if the bar had drawn them: the wrapper that
+   marks them is no box of its own, so their strip of tabs reaches the bar's bottom edge as the plugin pages' does. */
+.gdbv-bar-contribution {
+    display: contents;
+}
+
+/* The bar's icon buttons (Plugins, full width, the bell): ghosts, 32px square, that fill on hover. */
+/* The bell count sits on the glyph, at its top right, not at the corner of the 32px ghost button around it, where it hung half off the bar. */
+.gdbv-bell-count {
+    top: 2px;
+    right: 2px;
+    transform: none;
+}
+
+.gdbv-bar-icon.btn {
+    --bs-btn-color: var(--gdbv-fg-2);
+    --bs-btn-bg: transparent;
+    --bs-btn-border-color: transparent;
+    --bs-btn-hover-color: var(--gdbv-fg);
+    --bs-btn-hover-bg: var(--gdbv-s3);
+    --bs-btn-hover-border-color: transparent;
+    --bs-btn-active-color: var(--gdbv-fg);
+    --bs-btn-active-bg: var(--gdbv-s3);
+    --bs-btn-active-border-color: transparent;
+    --bs-btn-padding-y: 0;
+    --bs-btn-padding-x: 0;
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    color: var(--gdbv-fg-2) !important;
+}
+
+.gdbv-bar-icon.btn:hover,
+.gdbv-bar-icon.btn.active {
+    color: var(--gdbv-fg) !important;
+}
+
+.gdbv-bar-icon.btn.active {
+    background-color: var(--gdbv-s3);
+}
+
+/* The menus that hang from the bar: one level up, with a soft shadow. Each is a card with .shadow; a plain card inside
+   a window the bar opens, AI settings' model form, is no menu and keeps no shadow (2026-11-02, the user). */
+.gdbv-shell-band .card .card.shadow {
+    --bs-card-border-radius: var(--gdbv-radius-lg);
+    box-shadow: var(--gdbv-shadow-menu) !important;
+}
+
+.gdbv-shell-band.gdbv-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+}
+
+/* Every page but the viewer sits in a card (CardLayout), as far under the bar as the viewer's own cards and as the
+   window's sides, with rounder corners than theirs. */
+.gdbv-page-card {
+    border-radius: var(--gdbv-radius-lg);
+}
+
+.gdbv-page-card {
+    padding: 1.25rem 1.5rem 1.5rem;
+}
+
+/* The card lays its children out in a column, which would stretch a button put straight in it across the page. */
+.gdbv-page-card > .btn {
+    align-self: flex-start;
+}
+
+/* Every page's card runs down the window (2026-10-28) and stops as far from its bottom as from its sides, keeping its
+   corners (2026-10-29); full width, it runs to the bottom and loses its edge there. Past the window it grows with what
+   it holds, and the page scrolls. */
+main:has(.gdbv-page-card) {
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+}
+
+.content:has(.gdbv-page-card) {
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
+}
+
+.content:has(.gdbv-page-card) > .gdbv-page-below {
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
+}
+
+.gdbv-page-card {
+    flex: 1 0 auto;
+    margin-bottom: 0.5rem;
+}
+
+/* Full width (2026-10-29): the card runs to the window's sides and bottom, its side edges kept and its corners gone;
+   the line under the bar stays 1 px, which the user preferred to a thicker one. */
+.content:has(.gdbv-fullscreen) {
+    padding: 0 !important;
+}
+
+.gdbv-fullscreen .gdbv-page-card {
+    margin-bottom: 0;
+    border-bottom: 0;
+    border-radius: 0;
+}
+
+/* A page that fills it edge to edge (the tree builder) marks its root gdbv-fill: its card drops its padding, and the
+   root is a column as tall as the card, for a part of it to take the rest of the height. */
+.gdbv-page-card:has(> .gdbv-fill) {
+    padding: 0;
+    overflow: hidden;
+}
+
+.gdbv-fill {
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
+}
+
+/* A page's heading inside its card: an icon in a tinted square, the title, and a line under it. Plugin pages draw none
+   (2026-10-28), since the bar's tab names them; each keeps a heading for screen readers only. */
+.gdbv-head {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.gdbv-head-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 2.6rem;
+    height: 2.6rem;
+    border-radius: var(--gdbv-radius-lg);
+    font-size: 1.25rem;
+    background-color: var(--bs-primary-bg-subtle);
+    color: var(--bs-primary-text-emphasis);
+}
+
+/* A Bootstrap icon in a tile or a menu's icon column sits in the middle of it, not a little low. The icon font's own rule
+   drops the glyph by .125em and the page's line height gives its box a few pixels more height than the glyph, so the
+   glyph is drawn off the center of the box that is itself centered (2026-10-26). */
+.gdbv-head-icon > .bi,
+.gdbv-menu-icon > .bi {
+    display: flex;
+    line-height: 1;
+}
+
+.gdbv-head-icon > .bi::before,
+.gdbv-menu-icon > .bi::before {
+    vertical-align: 0;
+}
+
+.gdbv-head-title {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.gdbv-head-sub {
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
+}
+
+/* A page's tabs, underlined, each with its icon. */
+.gdbv-tabs {
+    gap: 1.25rem;
+    margin-bottom: 1.25rem;
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.gdbv-tabs .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.6rem 0.1rem;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-tabs .nav-link.active {
+    color: var(--bs-emphasis-color);
+}
+
+/* Panel boards (panel-boards spec): a page's panels in rows of columns, as a person arranged them. */
+.gdbv-board-row + .gdbv-board-row {
+    margin-top: 1rem;
+}
+
+.gdbv-board-column {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    height: 100%;
+}
+
+.gdbv-board-customizing .gdbv-board-column {
+    min-height: 5rem;
+    padding: 0.6rem;
+    border: 1px dashed var(--bs-border-color);
+    border-radius: 0.75rem;
+    gap: 0.5rem;
+}
+
+.gdbv-board-tile {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.45rem 0.6rem 0.45rem 0.75rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.6rem;
+    background-color: var(--bs-body-bg);
+    cursor: grab;
+}
+
+.gdbv-board-tile .btn {
+    padding: 0.1rem 0.4rem;
+}
+
+.gdbv-board-tile.gdbv-board-over {
+    border-color: var(--bs-primary);
+    box-shadow: 0 0 0 2px var(--bs-primary-border-subtle);
+}
+
+.gdbv-board-grip {
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-board-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.gdbv-board-end {
+    padding: 0.35rem;
+    border-radius: 0.6rem;
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+}
+
+/* A panel's card: rounder than Bootstrap's, its header tinted, and a table inside flush with its edges, with small
+   capitals over its columns. Bootstrap works out the inner radius from its own default where .card is declared, so it
+   is set again here, or the tinted header's square corners cover the card's rounded border. */
+.gdbv-panel-card {
+    --bs-card-border-radius: var(--gdbv-radius-lg);
+    --bs-card-inner-border-radius: calc(var(--gdbv-radius-lg) - 1px);
+    --bs-card-border-color: var(--gdbv-line);
+    --bs-card-cap-bg: var(--gdbv-s2);
+    --bs-card-cap-padding-y: 0.25rem;
+    --bs-card-cap-padding-x: 0.75rem;
+}
+
+.gdbv-panel-card > .card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: var(--gdbv-head-h);
+    font-weight: 600;
+    font-size: var(--gdbv-fs);
+    border-bottom-color: var(--gdbv-line);
+}
+
+.gdbv-panel-card > .card-header > .bi {
+    font-size: 1rem;
+    line-height: 1;
+}
+
+/* A panel card that keeps its own padding, as a form does: its title looks like a header, reaching the card's edges. */
+.gdbv-panel-card > .gdbv-card-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: var(--gdbv-head-h);
+    margin: -1rem -1rem 1rem;
+    padding: 0.25rem 0.75rem;
+    border-bottom: 1px solid var(--gdbv-line);
+    border-radius: calc(var(--gdbv-radius-lg) - 1px) calc(var(--gdbv-radius-lg) - 1px) 0 0;
+    background-color: var(--gdbv-s2);
+    font-weight: 600;
+    font-size: var(--gdbv-fs);
+}
+
+.gdbv-panel-card.p-2 > .gdbv-card-title {
+    margin: -0.5rem -0.5rem 0.75rem;
+}
+
+.gdbv-panel-card > .card-header .nav-link {
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-panel-card > .card-header .nav-link.active {
+    color: var(--bs-emphasis-color);
+}
+
+.gdbv-count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 0.4rem;
+    border-radius: 9px;
+    font-size: var(--gdbv-fs-xs);
+    font-weight: 600;
+    line-height: 1;
+}
+
+.gdbv-panel-card .table {
+    --bs-table-bg: transparent;
+    margin-bottom: 0;
+    font-size: 0.85rem;
+}
+
+.gdbv-panel-card .table > :not(caption) > * > * {
+    padding: 0.5rem 0.75rem;
+    border-bottom-color: var(--bs-border-color-translucent);
+}
+
+.gdbv-panel-card .table > tbody > tr:last-child > * {
+    border-bottom-width: 0;
+}
+
+.gdbv-panel-card .table thead th {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--bs-secondary-color);
+}
+
+/* A column's heading that sorts it: a button that reads like the heading beside it. */
+.gdbv-panel-card .table thead th .btn-link {
+    padding: 0;
+    border: 0;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-decoration: none;
+    color: inherit;
+}
+
+/* A grid of many narrow columns in a panel, such as a column a day: tighter cells, and the first column on its left. */
+.gdbv-panel-card .table.gdbv-dense {
+    font-size: 0.78rem;
+}
+
+.gdbv-panel-card .table.gdbv-dense > :not(caption) > * > * {
+    padding: 0.35rem 0.4rem;
+}
+
+.gdbv-panel-card .table.gdbv-dense > :not(caption) > * > :first-child {
+    padding-left: 0.75rem;
+}
+
+/* A panel's own toolbar under its header: a toggle or two, and a legend at the right. */
+.gdbv-panel-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--bs-border-color-translucent);
+    font-size: 0.8rem;
+}
+
+/* A choice among several, as a chip with its checkbox in it, such as a workstation an operation can also be done at. */
+.gdbv-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0.15rem 0.3rem 0.15rem 0;
+    padding: 0.2rem 0.6rem 0.2rem 0.45rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 2rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.gdbv-chip .form-check-input {
+    margin: 0;
+}
+
+.gdbv-chip:has(.form-check-input:checked) {
+    border-color: var(--bs-primary-border-subtle);
+    background-color: var(--bs-primary-bg-subtle);
+    color: var(--bs-primary-text-emphasis);
+}
+
+/* A short explanation at the top of a tab, beside an icon. */
+.gdbv-lead {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    max-width: 60rem;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-lead > .bi {
+    margin-top: 0.05rem;
+    color: var(--bs-primary);
+}
+
+/* A form's section heading inside a panel. */
+.gdbv-field-title {
+    margin-bottom: 0.25rem;
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+/* A strip of a page's actions, and the same stacked in a narrow column. */
+.gdbv-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--bs-border-color-translucent);
+    border-radius: 0.75rem;
+    background-color: var(--bs-tertiary-bg);
+}
+
+.gdbv-strip.gdbv-stacked {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.gdbv-strip.gdbv-stacked > .btn-group {
+    order: -1;
+    margin-left: 0 !important;
+}
+
+.gdbv-strip.gdbv-stacked > .vr {
+    display: none;
+}
+
+/* A count with its icon, as a tile. */
+.gdbv-tile {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    height: 100%;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--bs-border-color-translucent);
+    border-radius: 0.75rem;
+    background-color: var(--bs-body-bg);
+}
+
+.gdbv-tile-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.7rem;
+    font-size: 1.15rem;
+}
+
+.gdbv-tile-number {
+    font-size: 1.55rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.gdbv-tile-label {
+    margin-top: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+}
+
+/* A short value on a tinted pill, such as how late a build is. */
+.gdbv-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 2rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+/* A group's heading in a list, such as the late builds among what needs attention. */
+.gdbv-group-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding-top: 0.6rem;
+    padding-bottom: 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--bs-secondary-color);
+}
+
+/* A legend's swatch: a small box in the color of what it names. */
+.gdbv-swatch {
+    display: inline-block;
+    width: 0.9rem;
+    height: 0.6rem;
+    margin-right: 0.3rem;
+    border: 1px solid;
+    border-radius: 0.2rem;
+    vertical-align: -1px;
+}
+
+/* A reference that opens its record: bold, and underlined only under the pointer. */
+.gdbv-ref {
+    font-weight: 500;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.gdbv-ref:hover {
+    text-decoration: underline;
 }
 
 /* Icon-only toolbar buttons (the link / delete / add-component / style / clear cluster above the
@@ -53,6 +998,13 @@ html, body {
     min-height: calc(1.5em + 0.5rem + 2px);
 }
 
+/* The zoom and re-center buttons' "−", "+" and "⛶", drawn to the bold characters' measure: a box of their own size
+   with no line around it, so the button's flex centering puts each in its exact middle (2026-11-02, the user). */
+.gdbv-glyph {
+    display: block;
+    flex: 0 0 auto;
+}
+
 /* Close (×) button in the linking popup: muted by default, brightens to the body color on hover
    so it reads as clickable. */
 .gdbv-x-close {
@@ -63,22 +1015,388 @@ html, body {
     color: var(--bs-body-color) !important;
 }
 
-/* Icon accent colors: vivid in dark mode; darker / more saturated in light mode where the vivid
-   versions wash out. Applied via the SVG fills of the link / eraser toolbar icons. */
+/* The link and eraser toolbar icons, colored through their SVG fills: the accent for the one that joins, the alert
+   color for the one that removes. The tokens follow the theme, so one definition does. */
 :root {
-    --gdbv-link-icon: #d9480f;    /* light: deep dark orange */
-    --gdbv-eraser-icon: #c2185b;  /* light: dark pink */
+    --gdbv-link-icon: var(--gdbv-fg-2);/*muted at rest since 2026-10-29; the accent while the link mode is on, below*/
+    --gdbv-eraser-icon: var(--gdbv-alert);
 }
 
-[data-bs-theme="dark"] {
-    --gdbv-link-icon: #ff8c00;    /* dark: dark orange */
-    --gdbv-eraser-icon: #ff69b4;  /* dark: hotpink */
+/* The canvas toolbar's icons at one size (18 px; they ran from 17 to 22), so the cluster reads as one set (the user,
+   2026-10-29: "a bit off"). */
+.gdbv-toolbar-group .gdbv-ico {
+    width: 18px;
+    height: 18px;
 }
 
-/* Add-component, style and grid toolbar icons: soften them from the high-contrast body-emphasis color
-   to a muted gray in light mode only, so they don't read as harshly. Dark mode keeps the bright color. */
-:root:not([data-bs-theme="dark"]) .gdbv-icon-soft {
-    color: #6c757d !important;
+/* The chain fills less of its box than the other tools' pictures fill theirs, so it is drawn larger to look as big
+   (2026-11-04, the user), its margin taking back the size so the button stays as tall as the others. */
+.gdbv-toolbar-group .gdbv-ico.gdbv-link-ico {
+    width: 22px;
+    height: 22px;
+    margin: -2px;
+}
+
+/* And the two that fill more of theirs drawn smaller (2026-11-06, the user: the bin and the grid "clearly bigger than the
+   rest"): the others draw 14 to 15 px of their 18, the bin 17 tall and the grid all 18, a whole square that reads larger
+   still; the grid a touch up again from 13.5 (the same night, the user). Their margins give the room back, so the buttons
+   keep their size. */
+.gdbv-toolbar-group .gdbv-ico.gdbv-trash-ico {
+    width: 15px;
+    height: 15px;
+    margin: 1.5px;
+}
+
+.gdbv-toolbar-group .gdbv-ico.gdbv-grid-ico {
+    width: 14.5px;
+    height: 14.5px;
+    margin: 1.75px;
+}
+
+.gdbv-toolbar-group > .btn.active,
+.gdbv-toolbar-group > .gdbv-grid-tool > .btn.active {
+    --gdbv-link-icon: var(--gdbv-accent);
+}
+
+/* The workspace's query tabs, in the bar's tab look (2026-10-29, the user: they were "very badly visible"): the one in
+   front in the card's color with the accent along its top and a line around it. A tab behind has a shade of its own, a
+   step darker on hover, so where each is shows (2026-11-03, the user), and stands on the card's line, which runs on
+   under it; the one in front reaches over that line and opens into the card. Each stands as low as the one in front, so
+   the row keeps its height, and a tab behind leaves its lowest pixel clear for the line. The + after them is no tab, and
+   keeps no shade until hovered. */
+.gdbv-ws-tabs .nav-link {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    border-radius: var(--gdbv-radius) var(--gdbv-radius) 0 0;
+    color: var(--gdbv-fg-2);
+    font-weight: 500;
+}
+
+.gdbv-ws-tabs .nav-link:not(.active) {
+    padding-bottom: calc(0.4rem - 1px);
+    border-bottom: 1px solid transparent;
+    background-clip: padding-box;
+}
+
+.gdbv-ws-tabs .nav-link:not(.active):not(.gdbv-ws-add) {
+    background-color: var(--gdbv-s3);
+}
+
+/* The + is narrower than a tab with a name (2026-11-03, the user). */
+.gdbv-ws-tabs .nav-link.gdbv-ws-add {
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+}
+
+.gdbv-ws-tabs .nav-link:hover {
+    border-color: transparent;
+    background-color: var(--gdbv-s3);
+    color: var(--gdbv-fg);
+}
+
+.gdbv-ws-tabs .nav-link:not(.active):not(.gdbv-ws-add):hover {
+    background-color: color-mix(in srgb, var(--gdbv-fg) 8%, var(--gdbv-s3));
+}
+
+.gdbv-ws-tabs .nav-link.active,
+[data-gdbv-tint="on"] .gdbv-ws-tabs .nav-link.active {
+    border-color: var(--gdbv-line);
+    background-color: var(--gdbv-s1);
+    box-shadow: inset 0 2px 0 var(--gdbv-accent);
+    color: var(--gdbv-fg);
+}
+
+/* The standalone viewer's tab strip (2026-11-03, the user): over the graph's column, the query tabs, a gap of at least
+   2rem that no number of them and no narrowing takes away (they wrap first), then the connection and Import/Export,
+   which end at the graph's card's right edge. The spacer after them is as wide as the divider and the sidebar beside
+   it, read from the same --sidebar-w the split is sized by, so the strip keeps to the column as the divider moves. The
+   card is squared at its top right, under the last tab, as at its top left under the first. */
+.gdbv-tabstrip-row {
+    flex-wrap: nowrap !important;
+    gap: 0 !important;
+}
+
+.gdbv-tabstrip-row > .flex-grow-1 {
+    flex-grow: 0 !important;
+}
+
+.gdbv-tabstrip-gap {
+    flex: 1 0 2rem;
+}
+
+.gdbv-tabstrip-side {
+    display: none;
+}
+
+@media (min-width: 992px) {
+    .gdbv-tabstrip-side {
+        display: flex;
+        align-items: flex-end;
+        flex: 0 0 calc(var(--sidebar-w, 33.333%) + 8px);
+        min-width: calc(23.4375rem + 8px);
+        padding-left: 8px;
+    }
+}
+
+/* The sidebar's own tabs (Query, Generated, Examples, History) over its card, as the query tabs are over the graph's
+   (2026-11-03, the user): in the standalone viewer's strip in the place kept for them, and in Treeality's row in a slot
+   as wide as the sidebar, the row's 8px gap being the divider's, with the connection and Import/Export after them, or
+   above them where both do not fit. The card is squared at its top left, under the first. In the stacked layout they
+   stay in the card. */
+.gdbv-editor-slot {
+    display: flex;
+    flex-wrap: wrap-reverse;
+    align-items: flex-start;
+    column-gap: 0.5rem;
+    margin-left: auto;
+}
+
+.gdbv-editor-slot-tabs {
+    display: none;
+}
+
+@media (min-width: 992px) {
+    .gdbv-editor-slot {
+        flex: 0 0 var(--sidebar-w, 33.333%);
+        min-width: 23.4375rem;
+    }
+
+    .gdbv-editor-slot-tabs {
+        display: block;
+    }
+
+    .gdbv-page:not(.gdbv-embedded) .split-side > .card {
+        border-top-left-radius: 0;
+    }
+}
+
+.gdbv-tabstrip-side > .gdbv-ws-tabs,
+.gdbv-editor-slot-tabs > .gdbv-ws-tabs {
+    flex-wrap: nowrap;
+}
+
+/* The sidebar's lines between the database's buttons, the tabs and the new component (2026-11-03, the user): the cards'
+   own line color, with room each side. */
+.gdbv-side-rule {
+    margin: 0.5rem 0;
+    border-color: var(--bs-border-color);
+    opacity: 1;
+}
+
+/* The element panel's In and Out lists (2026-11-03, the user): a darker line under each heading, a light one under each
+   connection, and the whole row shaded under the pointer, so which one a remove belongs to shows. */
+.gdbv-conn-head {
+    display: block;
+    margin-bottom: 0;
+    padding-bottom: 0.2rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--gdbv-fg) 35%, transparent);
+}
+
+.gdbv-conn-row {
+    padding: 0.2rem 0.25rem;
+    border-bottom: 1px solid var(--bs-border-color-translucent);
+}
+
+.gdbv-conn-row:hover {
+    background-color: color-mix(in srgb, var(--gdbv-fg) 7%, transparent);
+}
+
+/* The selected element's card in parts, each a card of its own: the label and properties, the viewer's properties, In,
+   Out and Add connection (2026-11-05, the user). Lighter than the card around them: an outline, with no fill or shadow. */
+.gdbv-element-section {
+    padding: 0.5rem 0.75rem;
+    border: var(--bs-border-width) solid var(--bs-border-color-translucent);
+    border-radius: var(--gdbv-radius);
+}
+
+.gdbv-element-section + .gdbv-element-section {
+    margin-top: 0.5rem;
+}
+
+/* A list's last row needs no line under it, the card's edge being one. */
+.gdbv-element-section > .gdbv-conn-row:last-child {
+    border-bottom: 0;
+}
+
+/* The selected element's card: down to the new component, scrolling inside itself when it holds more (2026-11-03, the
+   user). Stacked, the column has no height to fill, so the card keeps its old cap there. */
+.gdbv-element-card {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    max-height: 50vh;
+}
+
+@media (min-width: 992px) {
+    .gdbv-element-card {
+        max-height: none;
+    }
+}
+
+/* In the card, where they stay small. */
+.gdbv-editor-card-tabs .nav-link {
+    padding: 0.25rem 0.5rem;
+}
+
+/* The tabs' toolbars and contents in one box of one height, so a switch of tab moves nothing below it (2026-11-03, the
+   user): a toolbar row, the 15em editor and a line of help under it, the tallest of them. The examples and the history,
+   which have no toolbar, fill the box rather than leave its foot empty. */
+.gdbv-editor-pane {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    height: calc(15em + 3.75rem + var(--gdbv-editor-extra, 0px));
+    overflow-y: auto;
+}
+
+/* The handle under that box, sizing it (2026-11-05, the user): over its foot and taking no room of its own, so the box's
+   default height leaves everything under it where it was. The grip turns the accent while the drag is stuck at the default. */
+.gdbv-editor-resize {
+    position: relative;
+    z-index: 11;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    height: 12px;
+    /* Centered on the line under the pane, 1px high, when an element's card has one. */
+    margin: -5.5px 0 -6.5px;
+    cursor: row-resize;
+    touch-action: none;
+}
+
+/* Examples and History, where that line has 1rem over it. */
+.gdbv-editor-resize.is-over-room {
+    margin: 10.5px 0 -22.5px;
+}
+
+.gdbv-editor-resize-grip {
+    width: 42px;
+    height: 4px;
+    border-radius: 2px;
+    background-color: var(--bs-border-color);
+    transition: background-color 0.12s;
+}
+
+.gdbv-editor-resize:hover .gdbv-editor-resize-grip,
+.gdbv-editor-resize.is-dragging .gdbv-editor-resize-grip {
+    background-color: var(--bs-primary);
+}
+
+.gdbv-editor-resize.is-default .gdbv-editor-resize-grip {
+    background-color: var(--gdbv-accent);
+    box-shadow: 0 0 0 2px rgba(var(--gdbv-accent-rgb), 0.3);
+}
+
+.gdbv-editor-pane > .border.rounded {
+    flex: 1 1 auto;
+    height: auto !important;
+    min-height: 0;
+}
+
+.gdbv-page:has(.gdbv-tabstrip-row) .split-main > .card {
+    border-top-right-radius: 0;
+}
+
+/* Its connection and Import/Export tabs: each its icon then its words, the host cut short past 22rem. */
+.gdbv-viewer-tabs {
+    flex: none;
+    flex-wrap: nowrap;
+    gap: 2px;
+    border-bottom: 0;
+}
+
+.gdbv-viewer-tabs .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    max-width: 22rem;
+}
+
+.gdbv-viewer-tabs .nav-link > .bi,
+.gdbv-viewer-tabs .gdbv-conn-ico {
+    font-size: 1rem;
+    line-height: 1;
+}
+
+/* The connections, one after another (the multiple-connections spec, 2026-11-03): each one's tab, its query tabs and its
+   +, wrapping tab by tab as the query tabs alone did, with a little room before each connection after the first. */
+.gdbv-conn-groups {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    min-width: 0;
+}
+
+.gdbv-conn-groups > .nav {
+    display: contents;
+}
+
+.gdbv-conn-groups > .gdbv-viewer-tabs:not(:first-child) > .nav-item {
+    margin-left: 0.75rem;
+}
+
+/* A connection's query tabs and + are lower than its tab, standing on the same line, so they read as its (2026-11-03,
+   the user). */
+.gdbv-conn-groups > .gdbv-ws-tabs:not(.gdbv-viewer-tabs) .nav-link {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+}
+
+.gdbv-conn-groups > .gdbv-ws-tabs:not(.gdbv-viewer-tabs) .nav-link:not(.active) {
+    padding-bottom: calc(0.2rem - 1px);
+}
+
+/* The add-connection button: the plug with a small + at its top right, shaded as Import/Export is beside it, and with
+   less room on its sides than a tab with words (2026-11-03, the user). */
+.gdbv-viewer-tabs .nav-link.gdbv-add-conn {
+    gap: 0;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+}
+
+.gdbv-viewer-tabs .nav-link.gdbv-add-conn > .gdbv-add-conn-plus {
+    align-self: flex-start;
+    margin-left: -0.15rem;
+    font-size: 0.75rem;
+}
+
+/* The connection's or Import/Export's content, in front, over the graph's card: the card's whole box, scrolling on its
+   own, above the canvas's banners and pickers; the canvas stays as it was underneath. One under a dialog's 1055, so
+   About and the other dialogs open over it rather than behind it (2026-11-03, the user). */
+.gdbv-setup-in-card {
+    position: absolute;
+    inset: 0;
+    z-index: 1054;
+    overflow: auto;
+    border-radius: inherit;
+    background-color: var(--bs-card-bg);
+}
+
+/* The connection's form in the card: sections as wide as their fields and padding, so the lines under its strip and
+   over its buttons end where the sections' own do (2026-11-03, the user). */
+.gdbv-conn-sections {
+    max-width: calc(820px + 2rem);
+}
+
+.gdbv-setup-in-card > .modal-content {
+    min-height: 100%;
+    border: 0;
+    border-radius: inherit;
+    box-shadow: none;
+}
+
+/* The graph's card squared at its top left, where the first query tab, of which there is always at least one, stands on
+   it: rounded, the corner left a notch between the tab and the card (2026-11-02, the user). An embedded viewer has no
+   tabs above its card, and keeps the corner. */
+.gdbv-page:not(.gdbv-embedded) .split-main > .card {
+    border-top-left-radius: 0;
+}
+
+/* Add-component, style and grid toolbar icons: muted, as the look's ghost icon buttons are, in both themes. */
+.gdbv-icon-soft {
+    color: var(--gdbv-fg-2) !important;
 }
 
 /* Draws attention to the top-bar connection button when a user action needs a live connection. */
@@ -104,24 +1422,79 @@ html, body {
     align-items: stretch;
 }
 
-.gdbv-toolbar-group > .btn {
+/* The grid's button stands in a wrapper of its own, for its Grid size panel (2026-11-06), and is styled as the others. */
+.gdbv-toolbar-group > .btn,
+.gdbv-toolbar-group > .gdbv-grid-tool > .btn {
     border: 0;
     border-radius: 0;
     padding-left: 0.45rem;
     padding-right: 0.45rem;
 }
 
-.gdbv-toolbar-group > .btn + .btn {
+.gdbv-toolbar-group > .btn + .btn,
+.gdbv-toolbar-group > * + .gdbv-grid-tool > .btn {
     border-left: 1px solid var(--bs-border-color);
 }
 
-.gdbv-toolbar-group > .btn:hover {
+.gdbv-toolbar-group > .btn:hover,
+.gdbv-toolbar-group > .gdbv-grid-tool > .btn:hover {
     background-color: var(--bs-tertiary-bg);
 }
 
-.gdbv-toolbar-group > .btn.active {
-    background-color: var(--bs-secondary-bg);
-    box-shadow: inset 0 0 0 2px var(--bs-border-color);
+/* The + and − beside a saved list's dropdown (connections, queries, AI models): the field's own background and border,
+   so the three read as one control, with the + green and the − red (2026-11-02, the user, where both were filled). The
+   element panel's add and remove buttons wear it too (2026-11-03, the user). */
+.gdbv-pick-add,
+.gdbv-pick-remove {
+    --gdbv-pick-border: var(--bs-border-color);
+    --gdbv-pick-bg: var(--bs-body-bg);
+    --bs-btn-bg: var(--gdbv-pick-bg);
+    --bs-btn-border-color: var(--gdbv-pick-border);
+    --bs-btn-hover-bg: var(--bs-tertiary-bg);
+    --bs-btn-hover-border-color: var(--gdbv-pick-border);
+    --bs-btn-active-bg: var(--bs-secondary-bg);
+    --bs-btn-active-border-color: var(--gdbv-pick-border);
+    --bs-btn-disabled-bg: var(--gdbv-pick-bg);
+    --bs-btn-disabled-border-color: var(--gdbv-pick-border);
+    --bs-btn-disabled-opacity: 0.45;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    font-weight: 600;
+}
+
+/* GitHub's greens and the app's alert red, each bright enough for its theme: Bootstrap's own green is too dark on a dark
+   field. The glyphs are thin lines, so they are drawn a little heavier. */
+.gdbv-pick-add {
+    --gdbv-pick-color: #1a7f37;
+}
+
+[data-bs-theme="dark"] .gdbv-pick-add {
+    --gdbv-pick-color: #3fb950;
+}
+
+.gdbv-pick-remove {
+    --gdbv-pick-color: var(--gdbv-alert);
+}
+
+.gdbv-pick-add,
+.gdbv-pick-remove {
+    --bs-btn-color: var(--gdbv-pick-color);
+    --bs-btn-hover-color: var(--gdbv-pick-color);
+    --bs-btn-active-color: var(--gdbv-pick-color);
+    --bs-btn-disabled-color: var(--gdbv-pick-color);
+}
+
+.gdbv-pick-add .bi,
+.gdbv-pick-remove .bi {
+    -webkit-text-stroke: 0.6px currentColor;
+}
+
+/* A tool that is on (grid, add, delete, link): a fill a shade deeper than the hover's, and no ring, which looked off
+   (2026-11-02, the user). Drawn from the theme's emphasis color, so it darkens in a light theme and lightens in a dark one. */
+.gdbv-toolbar-group > .btn.active,
+.gdbv-toolbar-group > .gdbv-grid-tool > .btn.active {
+    background-color: color-mix(in srgb, var(--bs-emphasis-color) 14%, transparent);
+    box-shadow: none;
 }
 
 /* Query-limit warning: the label goes red and pulses a couple of times when the limit is high enough to
@@ -148,10 +1521,25 @@ html, body {
         flex-direction: row;
         gap: 0;
         align-items: stretch;
-        /* Definite height (not just the inline min-height) so that when a sidebar panel overflows it
-           scrolls inside its own box instead of stretching the row and pushing a scrollbar onto the
-           whole page. Only on the side-by-side layout; the stacked mobile layout keeps min-height. */
-        height: calc(100vh - 123px);
+    }
+    /* The viewer's page is as tall as the window under the bar, a column: what stands above the cards, the workspace's
+       row of tabs and any warning, as tall as it comes, and the cards the rest. A row of query tabs on two lines makes
+       the cards shorter rather than pushing them past the window's bottom (2026-11-03, the user). A definite height (not
+       just the inline min-height, which this overrules), so a sidebar panel that overflows scrolls inside its own box
+       instead of stretching the row and pushing a scrollbar onto the whole page. Only on the side-by-side layout; the
+       stacked mobile layout keeps the min-height. */
+    .gdbv-page:not(.gdbv-embedded):has(> .split-row) {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 57px);/*the bar (49) and the room above the page (8); the page's own padding is the 8 below*/
+    }
+    .gdbv-page:not(.gdbv-embedded) > .split-row {
+        flex: 1 1 0;
+        min-height: 0 !important;
+    }
+    /* Full width: the bar alone is above the page, whose own padding is the room above its row, with none below. */
+    .gdbv-page.gdbv-fullscreen:not(.gdbv-embedded):has(> .split-row) {
+        height: calc(100vh - 49px);
     }
     .split-main {
         flex: 1 1 0;
@@ -182,10 +1570,44 @@ html, body {
         display: flex;
         align-items: center;
         justify-content: center;
-        flex: 0 0 14px;
+        flex: 0 0 8px;/*14px until 2026-10-29 (the user: a little less)*/
         align-self: stretch;
         cursor: col-resize;
         touch-action: none;
+    }
+    /* The page's edge handles (2026-10-29): one in each side margin, the row's full height, dragging the page's edge
+       on that side toward the window's. Not in full width, where the cards are at the window's edges already. */
+    .split-row {
+        position: relative;
+    }
+    .split-edge {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 14px;
+        cursor: col-resize;
+        touch-action: none;
+    }
+    .split-edge-left {
+        right: 100%;
+    }
+    .split-edge-right {
+        left: 100%;
+    }
+    .split-edge .split-gutter-grip {
+        opacity: 0;
+        transition: opacity 0.12s, background-color 0.12s;
+    }
+    .split-edge:hover .split-gutter-grip,
+    .split-edge:active .split-gutter-grip {
+        opacity: 1;
+        background-color: var(--bs-primary);
+    }
+    .gdbv-fullscreen .split-edge {
+        display: none;
     }
     .split-gutter-grip {
         width: 4px;
@@ -200,12 +1622,19 @@ html, body {
     }
 }
 
-/* Light mode: darken the main body text for legibility. Muted/secondary text
-   (query limit, "(offline …)", tips, etc.) uses --bs-secondary-color and is left
-   lighter on purpose to signify it's less important. */
-:root:not([data-bs-theme="dark"]) {
-    --bs-body-color: #000000;
-    --bs-body-color-rgb: 0, 0, 0;
+/* The viewer embedded in another site (2026-10-21, Embed.razor): the results card alone, as wide and as tall as the
+   frame, with the query side and the gutter before it left out. The page's own padding is the frame's margin. */
+.gdbv-embedded .split-gutter,
+.gdbv-embedded .split-side {
+    display: none !important;
+}
+.gdbv-embed {
+    padding: 0.5rem 0.5rem 0;
+}
+@media (min-width: 992px) {
+    .gdbv-embedded .split-row {
+        height: calc(100vh - 1rem);
+    }
 }
 
 /* A disabled button and an enabled one were telling the same story. Bootstrap fades a disabled
@@ -249,67 +1678,14 @@ fieldset:disabled .btn[class*="btn-outline-"] {
     justify-content: center;
 }
 
-/* The three ways of filling the source box stand side by side, so they are the same height whichever
-   one you look at first. */
-.gdbv-source-text,
-.gdbv-dropzone {
-    height: 9.5em;
-}
-
-.gdbv-source-text {
-    resize: vertical;
-}
-
-/* A plain panel that happens to be a drop target. The file input covering it is what actually catches
-   the file; this is only what you see. */
-.gdbv-dropzone {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 0.5rem;
-    border: 1px dashed var(--bs-border-color);
-    border-radius: var(--bs-border-radius);
-    color: var(--bs-secondary-color);
-}
-
-.gdbv-dropzone:hover,
-.gdbv-dropzone-over {
-    border-color: var(--bs-primary);
-    color: var(--bs-body-color);
-}
-
-/* Stretched over the panel and invisible: a native file input already accepts a dropped file, so this
-   is drag-and-drop and click-to-browse from one element rather than two that have to agree. */
-.gdbv-dropzone-input {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0;
-    cursor: pointer;
-}
-
 h1:focus {
     outline: none;
 }
 
-a, .btn-link {
-    color: #0071c1;
-}
-
-.btn-primary {
-    color: #fff;
-    background-color: #1b6ec2;
-    border-color: #1861ac;
-}
-
 /* Renders an outline button in its filled hover style by default (Load DB, Schema, Debug):
    point the default color variables at the button's hover variables. !important so these win over
-   the higher-specificity [data-bs-theme=dark] .btn-outline-* rules (otherwise the text stays the
-   un-filled color and vanishes on the filled background). */
+   any later, more specific .btn-outline-* rule (otherwise the text stays the un-filled color and
+   vanishes on the filled background). */
 .btn-hover-default {
     --bs-btn-bg: var(--bs-btn-hover-bg) !important;
     --bs-btn-border-color: var(--bs-btn-hover-border-color) !important;
@@ -334,8 +1710,6 @@ a, .btn-link {
     --bs-btn-disabled-color: var(--bs-primary) !important;
 }
 
-/* Toolbar label text (Style, Data model): #dee2e6 reads well on the dark buttons, but is nearly
-   invisible on the light-mode outline buttons — swap to a readable dark gray there. */
 /* The connection's address preview. Muted, because it is derived rather than typed, but readable:
    it is the line that says what the Connect button is about to dial. */
 .gdbv-url-preview {
@@ -356,25 +1730,41 @@ a, .btn-link {
     padding: 0.1rem 0.35rem;
 }
 
-/* The property row's minus and the add-connection plus. Both stand beside a full-height input, so they
-   share that height already; this only makes them the same width as each other. Deliberately NOT applied
-   to the buttons that remove a connection — those sit in a small text line, where a full-height block
-   would tower over the row it belongs to. */
-.gdbv-row-btn {
-    height: 31px;
-    min-width: 31px;
+/* The style rows' minus and the add-property and add-connection plus: square, as tall as the small input beside them
+   (Bootstrap's own height for one; 31px stood taller, 2026-11-03, the user). With no padding the glyph is in the middle,
+   where a button puts its content of itself. Deliberately NOT
+   applied to the buttons that remove a connection — those sit in a small text line, where a full-height block would
+   tower over the row it belongs to. */
+/* A checkbox on its row's foot, the box and its label both down on the line the row's buttons stand on (2026-11-04,
+   the user). Bootstrap floats the box into the check's left padding, where it would be cut off once laid out in a row. */
+.gdbv-check-foot {
+    display: flex;
+    align-self: flex-end;
+    gap: 0.35em;
+    min-height: 0;
     padding-left: 0;
-    padding-right: 0;
+}
+
+.gdbv-check-foot .form-check-input {
+    float: none;
+    margin: 0;
+}
+
+.gdbv-check-foot .form-check-label {
+    line-height: 1;
+}
+
+.gdbv-row-btn {
+    height: calc(1.5em + 0.5rem + calc(var(--bs-border-width) * 2));
+    min-width: calc(1.5em + 0.5rem + calc(var(--bs-border-width) * 2));
+    padding: 0;
     flex-shrink: 0;
 }
 
-/* The buttons floating over the editors. An outline button has no background, so over code its glyph
-   competes with whatever token happens to be behind it — a trash icon on top of a red string literal is
-   nearly invisible. Give them the page's own background, mostly opaque, so they read as controls sitting
-   above the text rather than as more of it. */
-.gdbv-editor-float > .btn {
-    --bs-btn-bg: rgba(var(--bs-body-bg-rgb), 0.88);
-    backdrop-filter: blur(2px);
+/* Square in a small input group too, where Bootstrap's button padding outranks the rule above and widened it. */
+.input-group-sm > .btn.gdbv-row-btn {
+    width: calc(1.5em + 0.5rem + calc(var(--bs-border-width) * 2));
+    padding: 0;
 }
 
 /* The property panel's header row. A long element id used to squeeze the buttons beside it until their
@@ -388,23 +1778,6 @@ a, .btn-link {
 .gdbv-element-id {
     min-width: 0;
     overflow-wrap: anywhere;
-}
-
-.gdbv-btn-label { color: #dee2e6; }
-:root[data-bs-theme="light"] .gdbv-btn-label {
-    color: #495057;
-}
-
-/* Light mode: fill the neutral (outline-secondary) buttons — zoom −/+, center, filter, style,
-   Data model, etc. — with a light gray on hover/active instead of Bootstrap's default dark-gray,
-   and keep their text dark so it stays readable. Matches the Data model button. */
-:root[data-bs-theme="light"] .btn-outline-secondary {
-    --bs-btn-hover-bg: #e9ecef;
-    --bs-btn-hover-border-color: #ced4da;
-    --bs-btn-hover-color: #495057;
-    --bs-btn-active-bg: #dee2e6;
-    --bs-btn-active-border-color: #ced4da;
-    --bs-btn-active-color: #495057;
 }
 
 /* Monochrome action icons: alpha-masked so each one takes its button's text color
@@ -432,16 +1805,18 @@ a, .btn-link {
 .btn-ico.ico-save    { -webkit-mask-image: url('../icons/saveFile.png');   mask-image: url('../icons/saveFile.png'); }
 .btn-ico.ico-copy    { -webkit-mask-image: url('../icons/copy.png');       mask-image: url('../icons/copy.png'); }
 .btn-ico.ico-program { -webkit-mask-image: url('../icons/program.png');    mask-image: url('../icons/program.png'); }
+/* A globe with an x at its foot: offline (2026-11-05, the user). */
+.btn-ico.ico-offline {
+    --gdbv-offline-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.2' stroke-linecap='round'%3E%3Cpath d='M9 13.6A6.4 6.4 0 1 1 13.6 9M1.2 7.4h12.4M7.4 1C5 3.2 5 11.6 7.4 13.8M7.4 1c1.7 1.6 2.3 4 2.3 6.4M10.8 10.8l4.2 4.2M15 10.8l-4.2 4.2'/%3E%3C/svg%3E");
+    -webkit-mask-image: var(--gdbv-offline-icon);
+    mask-image: var(--gdbv-offline-icon);
+}
 
 /* Focus ring. On buttons it shows only for keyboard focus (:focus-visible) so a mouse click doesn't
    leave a blue outline lingering until the next click; form fields keep it on any focus so the active
    field stays marked. */
 .btn:focus-visible, .btn-link.nav-link:focus-visible {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
-}
-
-.form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
+  box-shadow: 0 0 0 3px var(--bs-focus-ring-color);
 }
 
 .content {
@@ -449,11 +1824,11 @@ a, .btn-link {
 }
 
 .valid.modified:not([type=checkbox]) {
-    outline: 1px solid #26b050;
+    outline: 1px solid var(--gdbv-accent);
 }
 
 .invalid {
-    outline: 1px solid red;
+    outline: 1px solid var(--gdbv-alert);
 }
 
 .validation-message {
@@ -502,14 +1877,14 @@ a, .btn-link {
 
     .loading-progress circle {
         fill: none;
-        stroke: #e0e0e0;
+        stroke: var(--gdbv-s3);
         stroke-width: 0.6rem;
         transform-origin: 50% 50%;
         transform: rotate(-90deg);
     }
 
         .loading-progress circle:last-child {
-            stroke: #1b6ec2;
+            stroke: var(--gdbv-accent);
             stroke-dasharray: calc(3.141 * var(--blazor-load-percentage, 0%) * 0.8), 500%;
             transition: stroke-dasharray 0.05s ease-in-out;
         }
@@ -527,14 +1902,28 @@ a, .btn-link {
 
 /*The host page renders the boot indicator alongside <Routes>, which stays empty until the WebAssembly
   runtime has started — prerendering is off, so there is nothing to replace it. MainLayout's .page wrapper
-  is the first thing the started app puts on the page, so it doubles as the signal to hide the indicator.*/
+  is the first thing the started app puts on the page, so it doubles as the signal to hide the indicator,
+  and EmbedLayout's .gdbv-embed is the embedded viewer's, which has no .page: until 2026-10-31 the indicator
+  stood at 100% over every embedded viewer.*/
 #app:has(.page) > .loading-progress,
-#app:has(.page) > .loading-progress-text {
+#app:has(.page) > .loading-progress-text,
+#app:has(.gdbv-embed) > .loading-progress,
+#app:has(.gdbv-embed) > .loading-progress-text {
     display: none;
 }
 
+/* Inline code as a chip on the raised surface, in the page's text color, so it reads in both themes; in a block it is
+   the block's own. */
 code {
-    color: #c02d76;
+    color: var(--gdbv-fg);
+    background: var(--gdbv-s3);
+    padding: 0.1em 0.3em;
+    border-radius: var(--gdbv-radius-sm);
+}
+
+pre code {
+    padding: 0;
+    background: none;
 }
 
 .form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {
@@ -546,58 +1935,56 @@ code {
     text-align: start;
 }
 
-/* Dark mode: the default primary blue (#0d6efd / #0071c1) is hard to read on a dark
-   background. Lighten the blue text/links/outline-buttons and bump the weight a touch
-   so things like "Load DB", "Edit", the mode buttons and "About" stay legible. */
-[data-bs-theme="dark"] a,
-[data-bs-theme="dark"] .btn-link,
-[data-bs-theme="dark"] .text-primary {
-    color: #6ea8fe !important;
-    font-weight: 500;
-}
-
-[data-bs-theme="dark"] .btn-outline-primary {
-    --bs-btn-color: #6ea8fe;
-    --bs-btn-border-color: #6ea8fe;
-    --bs-btn-hover-bg: #6ea8fe;
-    --bs-btn-hover-color: #04132b;
-    --bs-btn-hover-border-color: #6ea8fe;
-    --bs-btn-active-bg: #6ea8fe;
-    --bs-btn-active-border-color: #6ea8fe;
-    font-weight: 500;
-}
-
-[data-bs-theme="dark"] .nav-tabs .nav-link {
-    color: #6ea8fe;
-    font-weight: 500;
-}
-/*The selected tab (both the main query/data-model tabs and the Query/Generated/Examples/History
-  sub-tabs) reads white so it stands out from the blue inactive ones on the dark tab strip.*/
-[data-bs-theme="dark"] .nav-tabs .nav-link.active {
-    color: #fff;
-}
 /*Query debugger: highlight each traversal step in the editor; the focused step is stronger.*/
 .debug-step {
-    background: rgba(13, 110, 253, 0.12);
-    border-bottom: 1px dashed rgba(13, 110, 253, 0.6);
+    background: rgba(var(--gdbv-accent-rgb), 0.12);
+    border-bottom: 1px dashed rgba(var(--gdbv-accent-rgb), 0.6);
     cursor: pointer;
 }
 
 .debug-step-active {
-    background: rgba(253, 126, 20, 0.30);
-    border-bottom: 2px solid rgba(253, 126, 20, 0.9);
+    background: rgba(var(--gdbv-accent-rgb), 0.3);
+    border-bottom: 2px solid var(--gdbv-accent);
 }
 
 /*The nested sub-traversal step the cursor stepped into (sits inside the active step's range).*/
 .debug-step-cursor {
-    background: rgba(25, 135, 84, 0.38);
-    border-bottom: 2px solid rgba(25, 135, 84, 0.95);
+    background: var(--gdbv-shared-bg);
+    border-bottom: 2px solid var(--gdbv-shared);
 }
 
-/*Small badge behind just the ladybug icon in the debugger title, in the Debug button's blue (#6ea8fe),
+/*A step's count, drawn after it in the query (MonacoInterop.setDebug): a gray pill, red where everything is lost.*/
+.debug-step-count {
+    margin-left: 0.3em;
+    padding: 0 0.35em;
+    border-radius: 0.6em;
+    background: var(--gdbv-badge-bg);
+    font-size: 0.85em;
+}
+
+.debug-step-count-zero {
+    background: var(--gdbv-alert);
+    color: var(--gdbv-alert-fg);
+}
+
+.debug-step-count-error {
+    background: rgba(var(--bs-danger-rgb), 0.2);
+    color: var(--gdbv-alert);
+}
+
+/*A step's sample in its traverser summary: wrapped, so two of them side by side never widen the steps table past its
+  card and push the counts out of sight.*/
+.debug-sample {
+    max-height: 200px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/*Small badge behind just the ladybug icon in the debugger title, in the accent,
   so the icon's black outline reads — no full title-bar background.*/
 .gdbv-debug-badge {
-    background-color: #6ea8fe;
+    background-color: var(--gdbv-accent);
     border-radius: 0.3rem;
     padding: 0.15rem 0.3rem;
 }
@@ -627,17 +2014,68 @@ code {
     overflow-wrap: break-word;
 }
 
-/*The gdbv* column headers carry the same blue as the "Additional properties" link that reveals them
-  (the .btn-link / a color above), so the two read as one feature and stand apart from the real data
+/* A header's right edge sizes its column, as a spreadsheet's does (2026-11-05, the user): a line shows under the pointer. */
+.gdbv-data-table th {
+    position: relative;
+}
+
+.gdbv-col-grip {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 7px;
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 2;
+}
+
+.gdbv-col-grip:hover::after,
+.gdbv-col-resizing .gdbv-col-grip:active::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 2px;
+    background-color: var(--bs-primary);
+}
+
+.gdbv-col-resizing {
+    cursor: col-resize;
+    user-select: none;
+}
+
+/* Once a column is sized, every column keeps the width it was given and a cell's words wrap within it, however long. */
+.gdbv-data-table.is-sized {
+    table-layout: fixed;
+    min-width: 0;
+}
+
+.gdbv-data-table.is-sized td,
+.gdbv-data-table.is-sized th {
+    max-width: none;
+    overflow-wrap: anywhere;
+}
+
+/* A cell being measured for its column's fit: on one line, and any width. */
+.gdbv-data-table td.is-measured,
+.gdbv-data-table th.is-measured,
+.gdbv-data-table .is-measured * {
+    white-space: nowrap;
+}
+
+/*The gdbv* column headers carry the same color as the "Additional properties" link that reveals them
+  (the accent, as links are), so the two read as one feature and stand apart from the real data
   columns' black.
   The shade is hard-coded rather than inherited: the header keeps Bootstrap's .table-light background,
-  which stays light in BOTH themes, so it needs the link's light-mode blue either way. Following the
-  theme would swap in the dark-mode blue (#6ea8fe) — lightened for dark cards — which washes out
-  against this permanently light header, as --bs-secondary-color did. Keep in step with the link color
-  above. Only the headers are colored: the body cells keep the row's own text color, which a colored
-  label row sets for contrast.*/
+  which stays light in BOTH themes, so it needs the light theme's accent either way. Following the
+  theme would swap in the dark theme's lighter green, which washes out against this permanently light
+  header, as --bs-secondary-color did. Keep in step with the light token sheet's --gdbv-accent. Only the
+  headers are colored: the body cells keep the row's own text color, which a colored label row sets for
+  contrast.*/
 .gdbv-data-table th.gdbv-extra-col {
-    color: #0071c1;
+    color: #1a7f4b;
 }
 
 /*The linked image / 3D model previewed under its URL, once the column's "preview" box is ticked. Both
@@ -654,7 +2092,7 @@ code {
     height: 170px;
     object-fit: scale-down;
     border-radius: 4px;
-    background: rgba(127, 127, 127, 0.08);
+    background: var(--gdbv-s2);
 }
 
 /*The AI popups. Windows, not modals: fixed where they were dragged, resized from the corner grip, and
@@ -675,9 +2113,10 @@ code {
     position: absolute;
     /*Set in from the corner rather than pressed against it, and big enough to aim at. It has to stay
       clear of whatever sits at the bottom of the window: the Ask AI composer keeps a right margin for
-      it (see .gdbv-dialog-composer), which is what lets this be a target rather than a sliver.*/
-    right: 6px;
-    bottom: 6px;
+      it (see .gdbv-dialog-composer), which is what lets this be a target rather than a sliver. 1px in, where it was 6px,
+      to sit closer to the corner (2026-11-05 and 06, the user).*/
+    right: 1px;
+    bottom: 1px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -689,6 +2128,43 @@ code {
     /*Above the footer buttons it overlaps, and never selectable as text mid-drag.*/
     z-index: 1;
     user-select: none;
+}
+
+/*A window with no footer row, AI settings, ends its scrolling body above the grip, so the grip never sits on the
+  scrollbar's end (2026-11-02, the user); the strip it leaves is the grip's own. The grip is the last child. Ask AI's
+  body does not scroll, its conversation does, and its composer keeps clear of the grip already.*/
+.gdbv-dialog:not(.gdbv-ai-window) > .card-body:nth-last-child(2) {
+    margin-bottom: 30px;
+}
+
+/* Find coordinates: no grip and no footer, so as much room under its content as at its sides; the window is as tall
+   as that content up to its max-height, and the list's card takes what is left and scrolls inside, its header kept in
+   sight (2026-11-06, the user). */
+.gdbv-geocode-window > .card-body {
+    overflow: hidden !important;
+}
+
+.gdbv-geocode-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.gdbv-geocode-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.gdbv-geocode-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background-color: var(--bs-tertiary-bg);
+}
+
+.gdbv-geocode-scroll tbody tr:last-child td {
+    border-bottom: 0;
 }
 
 .gdbv-dialog-resize:hover {
@@ -716,15 +2192,6 @@ code {
    outline buttons. It was bg-primary-subtle, which is Bootstrap's, and in the dark theme that is a navy
    sitting so close to the panel behind it that the bubble barely read as one. Tinted rather than solid,
    so the text keeps the body color and stays legible in both themes. */
-/* The knowledge-graph panel's instruction box and the row of controls beneath it, kept the same width
-   so the dropdowns at the right of the row end exactly where the box above them ends. The floor is
-   there because the Generate button grows a long label while it runs ("Extracting piece 1 of 12…"),
-   which at a narrower cap pushed the dropdowns onto a second row halfway through a generation. */
-.gdbv-kg-actions {
-    max-width: 65%;
-    min-width: min(34rem, 100%);
-}
-
 /*The row along the bottom of a dialog stops short of the resize grip in the corner, so the grip has
   room to be a real target and the last control in the row keeps all of itself.*/
 .gdbv-dialog-composer {
@@ -733,11 +2200,6 @@ code {
 
 .gdbv-chat-user {
     background-color: rgba(var(--bs-primary-rgb), 0.18);
-}
-
-[data-bs-theme="dark"] .gdbv-chat-user {
-    /* #6ea8fe is the blue the dark theme already lightens links and outline buttons to, below. */
-    background-color: rgba(110, 168, 254, 0.25);
 }
 
 .gdbv-chat-assistant {
@@ -768,28 +2230,1650 @@ code {
     overflow: auto;
 }
 
+/*Ask AI, as GDS Viewer's AI assistant looks (2026-11-01, the user: "the styling, everything"). Its rules are GDS
+  Viewer's (wwwroot/css/app.css, .aiWindow onward) in this app's theme: Bootstrap's own colors in place of its fixed ones,
+  so the dark theme and both light ones take it as they are, and gdbv-ai- before each name, so GDS Viewer's own rules
+  cannot meet these if it runs inside Treeality as a plugin.*/
+.gdbv-ai-window.gdbv-dialog {
+    border-radius: 6px;
+}
+
+.gdbv-ai-window > .gdbv-dialog-header {
+    padding: 0.3em 0.5em 0.3em 0.9em;
+    background-color: var(--bs-tertiary-bg);
+}
+
+/*A window's or popup's picture before its title, in the app's accent: the one on the button or menu row that opens it
+  (Ask AI's spark first; every popup's, 2026-11-04, the user).*/
+.gdbv-title-icon {
+    display: inline-flex;
+    margin-right: 0.4em;
+    color: var(--bs-primary);
+    vertical-align: -2px;
+}
+
+/*A popup's title bar as slim as the floating windows' (AI settings'): their header's padding and tint, the title at the
+  body's size, semibold, after its icon (2026-11-04, the user; About's stood 63px tall with a 20px title). A bar that is
+  a plain strip rather than a modal-header rounds its top as the popup does.*/
+.gdbv-popup-bar {
+    padding: 0.5rem 1rem;
+    background-color: var(--gdbv-s2);
+    border-top-left-radius: var(--bs-modal-inner-border-radius, 0);
+    border-top-right-radius: var(--bs-modal-inner-border-radius, 0);
+}
+
+/* A close button rings for the keyboard, not after the mouse (2026-11-04, the user): Bootstrap rings any focus, so a
+   press dragged off it and let go elsewhere left it ringed. */
+.btn-close:focus:not(:focus-visible) {
+    box-shadow: none;
+}
+
+/* A popup that ends in its tinted panel rounds the panel's foot as its own (2026-11-04, the user's screenshot of Share):
+   square, the panel's corners stood out past the popup's round ones. */
+.modal-content > .gdbv-tint-panel:last-child {
+    border-bottom-left-radius: var(--bs-modal-inner-border-radius, 0);
+    border-bottom-right-radius: var(--bs-modal-inner-border-radius, 0);
+}
+
+.gdbv-popup-title {
+    margin: 0;
+    font-size: var(--bs-body-font-size);
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+/*The body never scrolls, its conversation does; its sides as wide as the room under its box.*/
+.gdbv-ai-window > .card-body {
+    gap: 0.5em;
+    padding: 0.5em 1.4em 1.4em 1.4em;
+    overflow: hidden;
+}
+
+/*With the costs on a line under the box, that line is most of the room under it: only a little more under the line, so
+  the box, the line and the window's foot together are a little more than the sides, and the corner's resize grip stays
+  clear of the line, which sits inside the side's room (2026-11-05, the user: the foot was twice the sides).*/
+.gdbv-ai-window > .card-body:has(.gdbv-ai-meter) {
+    padding-bottom: 0.5em;
+}
+
+/*The conversation and the files panel, in one row with a divider between them (2026-11-02, GDS Viewer's). Positioned, so
+  a file held over the row lights it whole, and a container, so a window too narrow for both puts the panel over the
+  conversation instead of squeezing it.*/
+.gdbv-ai-row {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 8em;
+    display: flex;
+    container-type: inline-size;
+}
+
+/*The conversation: a scrolling column that takes whatever height the window has left, and the width the panel leaves.*/
+.gdbv-ai-transcript {
+    flex: 1 1 0;
+    min-width: 8em;
+    overflow-y: auto;
+    padding: 0.6em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    font-size: 0.9em;
+}
+
+.gdbv-ai-intro {
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-intro p {
+    margin: 0 0 0.7em 0;
+}
+
+.gdbv-ai-intro-warning {
+    color: var(--bs-warning-text-emphasis);
+}
+
+/*The examples an empty conversation offers: quiet pills, each putting its words in the box.*/
+.gdbv-ai-examples {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em;
+    margin: 0 0 0.9em 0;
+}
+
+.gdbv-ai-example {
+    padding: 0.3em 0.75em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 999px;
+    background: var(--bs-tertiary-bg);
+    color: var(--bs-body-color);
+    font: inherit;
+    font-size: 0.95em;
+    text-align: left;
+    cursor: pointer;
+}
+
+.gdbv-ai-example:hover {
+    border-color: rgba(var(--bs-primary-rgb), 0.5);
+    background: rgba(var(--bs-primary-rgb), 0.1);
+}
+
+/* A wizard in an AI chat window, a card in its conversation (AiChatWizard, 2026-11-05, the user). */
+.gdbv-ai-wizard {
+    margin-bottom: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--gdbv-radius);
+    background-color: var(--bs-body-bg);
+}
+
+.gdbv-ai-wizard-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.gdbv-ai-wizard-title {
+    font-weight: 600;
+}
+
+.gdbv-ai-wizard-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    margin: 0 0 1rem;
+    padding: 0 0 0.75rem;
+    border-bottom: 1px solid var(--bs-border-color);
+    list-style: none;
+}
+
+.gdbv-ai-wizard-step-button {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--bs-secondary-color);
+}
+
+/* A step that can be gone to looks it: the pointer, and its name underlined under it. */
+.gdbv-ai-wizard-step-button:not(:disabled) {
+    cursor: pointer;
+}
+
+.gdbv-ai-wizard-step-button:not(:disabled):hover > span:last-child {
+    text-decoration: underline;
+}
+
+.gdbv-ai-wizard-step.is-current .gdbv-ai-wizard-step-button {
+    color: var(--bs-body-color);
+    font-weight: 600;
+}
+
+.gdbv-ai-wizard-step-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 50%;
+    font-size: 0.85em;
+    font-weight: 600;
+}
+
+.gdbv-ai-wizard-step.is-current .gdbv-ai-wizard-step-number,
+.gdbv-ai-wizard-step.is-done .gdbv-ai-wizard-step-number {
+    border-color: var(--gdbv-accent);
+    background-color: var(--gdbv-accent);
+    color: #fff;
+}
+
+/* The knowledge-graph wizard's own inputs (KgWizard). */
+.gdbv-kg-wizard-text {
+    height: 11rem;
+    resize: vertical;
+}
+
+.gdbv-kg-wizard-sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.gdbv-kg-wizard-source {
+    flex: 1 1 14rem;
+    min-width: 0;
+}
+
+.gdbv-kg-wizard-review {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.35rem 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.gdbv-kg-wizard-review dt {
+    font-weight: 500;
+}
+
+.gdbv-kg-wizard-review dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.gdbv-ai-wizard-foot {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+/*A button that reads as a link.*/
+.gdbv-ai-link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--bs-link-color);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.gdbv-ai-turn {
+    display: flex;
+    margin-bottom: 0.6em;
+}
+
+.gdbv-ai-turn-user {
+    justify-content: flex-end;
+}
+
+.gdbv-ai-bubble {
+    max-width: 85%;
+    padding: 0.4em 0.65em;
+    border-radius: 6px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.gdbv-ai-bubble-user {
+    background-color: rgba(var(--bs-primary-rgb), 0.16);
+}
+
+/*A question with files: the chips over the bubble, both against the right, as the bubble alone is.*/
+.gdbv-ai-question {
+    max-width: 85%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.25em;
+}
+
+.gdbv-ai-question > .gdbv-ai-bubble {
+    max-width: 100%;
+}
+
+/*A question's files over its words, and the ones waiting over the box: chips with the name, and a cross where it can be
+  taken off.*/
+.gdbv-ai-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+}
+
+.gdbv-ai-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3em;
+    max-width: 18em;
+    padding: 1px 4px 1px 7px;
+    border: 1px solid rgba(var(--bs-primary-rgb), 0.45);
+    border-radius: 10px;
+    background: rgba(var(--bs-primary-rgb), 0.08);
+    font-size: 0.8em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gdbv-ai-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gdbv-ai-chip-size {
+    color: var(--bs-secondary-color);
+}
+
+/*Unticked in the files panel: still on screen, and no longer sent.*/
+.gdbv-ai-chip-off {
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+/*In the box, and not something the model picked can be sent: the line under the chips says why.*/
+.gdbv-ai-chip-blocked {
+    border-color: rgba(var(--bs-danger-rgb), 0.6);
+    background: rgba(var(--bs-danger-rgb), 0.08);
+}
+
+.gdbv-ai-chip-remove {
+    flex: none;
+    padding: 0 2px;
+    border: none;
+    background: none;
+    color: var(--bs-secondary-color);
+    font-size: 1.15em;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.gdbv-ai-chip-remove:hover {
+    color: var(--bs-danger);
+}
+
+/*The panel's divider: a strip the width of the gap over the box, a line down it under the pointer, dragged to size the
+  panel (attachSplits in FloatingDialogInterop.js). What takes the pointer is 14px, reaching over the edges on either
+  side, so the divider is no harder to catch than a wider one.*/
+.gdbv-ai-split {
+    position: relative;
+    flex: 0 0 0.5em;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.gdbv-ai-split::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    z-index: 1;
+    width: 14px;
+    margin-left: -7px;
+}
+
+.gdbv-ai-split::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 50%;
+    width: 2px;
+    margin-left: -1px;
+    border-radius: 1px;
+    background: transparent;
+}
+
+.gdbv-ai-split:hover::before,
+.gdbv-ai-split.gdbv-ai-split-dragging::before {
+    background: rgba(var(--bs-primary-rgb), 0.5);
+}
+
+/*The panel's arrow, which collapses it and opens it again: a small tab centered in the window's margin on the panel's
+  side, the same place whether the panel is open or not. The row is the conversation's, so the margin is just outside
+  it: half the body's 1.4em side padding out, less half the tab.*/
+.gdbv-ai-split-toggle {
+    position: absolute;
+    top: 50%;
+    right: calc(-0.7em - 7px);
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    width: 14px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: var(--bs-secondary-color);
+    line-height: 0;
+    transform: translateY(-50%);
+    cursor: pointer;
+}
+
+.gdbv-ai-split-toggle > svg {
+    display: block;
+    width: 10px;
+    height: 10px;
+}
+
+/*The bare arrow, no box round it (2026-11-05, the user): it shows only to open a closed panel.*/
+.gdbv-ai-split-toggle:hover {
+    color: var(--bs-body-color);
+}
+
+/*A side panel's first row, its cross at the right end of it: the chats' New chat, the files' heading.*/
+.gdbv-ai-panel-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5em;
+}
+
+.gdbv-ai-panel-close {
+    flex: none;
+    margin-top: 0.35em;
+    font-size: 0.6em;
+}
+
+/*The chats' arrow, in the window's margin on the left, as the files' is on the right.*/
+.gdbv-ai-split-toggle.gdbv-ai-split-toggle-left {
+    right: auto;
+    left: calc(-0.7em - 7px);
+}
+
+/*How many files the conversation holds, on the arrow while the panel is collapsed.*/
+.gdbv-ai-split-toggle > .gdbv-ai-count {
+    top: -10px;
+    right: -6px;
+}
+
+/*A file held over the conversation, which is where it would go: into the box for the next question. Nothing takes the
+  pointer, or the overlay would be an element the drag has to enter and leave.*/
+.gdbv-ai-drop.gdbv-drop-over::after {
+    content: "Drop to attach to your question";
+    position: absolute;
+    inset: 0;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--bs-primary);
+    border-radius: 6px;
+    background: rgba(var(--bs-primary-rgb), 0.08);
+    color: var(--bs-primary);
+    font-size: 1.1em;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+.gdbv-ai-prompt.gdbv-drop-over {
+    outline: 2px dashed var(--bs-primary);
+    outline-offset: 1px;
+}
+
+/*The files panel: what the conversation sends, ticked or not, and what waits for the next question.*/
+.gdbv-ai-files {
+    flex: 0 1 var(--gdbv-ai-files-width, 15em);
+    min-width: 7em;
+    overflow-y: auto;
+    padding: 0.4em 0.55em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    background: var(--bs-body-bg);
+    font-size: 0.85em;
+}
+
+.gdbv-ai-files-head {
+    margin: 0.15em 0 0.3em 0;
+    color: var(--bs-secondary-color);
+    font-size: 0.9em;
+    font-weight: 600;
+}
+
+.gdbv-ai-files-none {
+    margin-bottom: 0.7em;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-file-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+    margin-bottom: 0.25em;
+}
+
+.gdbv-ai-file-row:last-of-type {
+    margin-bottom: 0.7em;
+}
+
+.gdbv-ai-file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gdbv-ai-file-size {
+    flex: none;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-file-off .gdbv-ai-file-name {
+    color: var(--bs-secondary-color);
+    text-decoration: line-through;
+}
+
+.gdbv-ai-files-weight {
+    margin-top: 0.4em;
+    color: var(--bs-secondary-color);
+}
+
+/*The chats panel down the window's left (2026-11-02, GDS Viewer's), the Claude app's sidebar in small: New chat at the top,
+  then a row for each chat kept, its title over the database and the time, with Save as text and the bin at the row's end,
+  shown under the pointer and on the chat on screen. The bin asks in the row itself rather than in a dialog.*/
+.gdbv-ai-chats {
+    display: flex;
+    flex: 0 1 var(--gdbv-ai-chats-width, 14em);
+    flex-direction: column;
+    gap: 0.1em;
+    min-width: 7em;
+    overflow-y: auto;
+    padding: 0.4em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    background: var(--bs-body-bg);
+    font-size: 0.85em;
+}
+
+/*Quiet, in the gray of the panel's other words, so it does not outweigh the chats under it.*/
+.gdbv-ai-chats-new {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 0.4em;
+    margin-bottom: 0.3em;
+    padding: 0.3em 0.5em;
+    border: none;
+    border-radius: 7px;
+    background: none;
+    color: var(--bs-secondary-color);
+    font: inherit;
+    font-size: 0.95em;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.gdbv-ai-chats-new > svg {
+    width: 12px;
+    height: 12px;
+}
+
+.gdbv-ai-chats-new:hover:not(:disabled) {
+    background: var(--bs-tertiary-bg);
+    color: var(--bs-body-color);
+}
+
+.gdbv-ai-chats-new:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.gdbv-ai-chats-head {
+    margin: 0.2em 0.5em;
+    color: var(--bs-secondary-color);
+    font-size: 0.9em;
+    font-weight: 600;
+}
+
+.gdbv-ai-chat-item {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 0.1em;
+    padding: 0.3em 0.25em 0.3em 0.5em;
+    border-radius: 7px;
+    cursor: pointer;
+}
+
+.gdbv-ai-chat-item:hover,
+.gdbv-ai-chat-item:focus-visible {
+    background: var(--bs-tertiary-bg);
+    outline: none;
+}
+
+.gdbv-ai-chat-item.gdbv-ai-chat-item-on {
+    background: rgba(var(--bs-primary-rgb), 0.12);
+}
+
+/*Another chat while an answer is coming, which it would leave without.*/
+.gdbv-ai-chat-item.gdbv-ai-chat-item-off {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.gdbv-ai-chat-text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.gdbv-ai-chat-title,
+.gdbv-ai-chat-when {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gdbv-ai-chat-when {
+    color: var(--bs-secondary-color);
+    font-size: 0.85em;
+}
+
+.gdbv-ai-chat-button {
+    display: none;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--bs-secondary-color);
+    cursor: pointer;
+}
+
+.gdbv-ai-chat-button > svg {
+    width: 14px;
+    height: 14px;
+}
+
+.gdbv-ai-chat-item:hover > .gdbv-ai-chat-button,
+.gdbv-ai-chat-item:focus-within > .gdbv-ai-chat-button,
+.gdbv-ai-chat-item-on > .gdbv-ai-chat-button {
+    display: inline-flex;
+}
+
+.gdbv-ai-chat-button:hover:not(:disabled) {
+    background: var(--bs-secondary-bg);
+    color: var(--bs-body-color);
+}
+
+/*The bin, red under the pointer.*/
+.gdbv-ai-chat-button.gdbv-ai-chat-delete:hover:not(:disabled) {
+    background: var(--bs-danger);
+    color: #fff;
+}
+
+.gdbv-ai-chat-button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.gdbv-ai-chat-deleting {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35em;
+    background: rgba(var(--bs-danger-rgb), 0.08);
+    cursor: default;
+}
+
+.gdbv-ai-chat-ask-buttons {
+    display: flex;
+    gap: 0.35em;
+}
+
+.gdbv-ai-chat-delete-yes,
+.gdbv-ai-chat-delete-no {
+    padding: 0.15em 0.6em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    background: var(--bs-body-bg);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.gdbv-ai-chat-delete-yes {
+    border-color: var(--bs-danger);
+    background: var(--bs-danger);
+    color: #fff;
+}
+
+.gdbv-ai-chats-problem {
+    margin-top: 0.4em;
+    padding: 0 0.5em;
+    color: var(--bs-danger-text-emphasis);
+}
+
+.gdbv-ai-chats-kept {
+    margin-top: auto;
+    padding: 0.6em 0.5em 0.1em;
+    color: var(--bs-secondary-color);
+    font-size: 0.85em;
+}
+
+/*Too narrow for all three: each panel lies over the conversation from its edge, its divider beside it.*/
+@container (max-width: 34em) {
+    .gdbv-ai-chats {
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 2;
+        width: min(var(--gdbv-ai-chats-width, 14em), 80%);
+        box-shadow: 4px 0 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .gdbv-ai-split[data-split="chats"] {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: min(var(--gdbv-ai-chats-width, 14em), 80%);
+        z-index: 3;
+    }
+
+    .gdbv-ai-files {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 2;
+        width: min(var(--gdbv-ai-files-width, 15em), 80%);
+        box-shadow: -4px 0 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .gdbv-ai-split[data-split="files"] {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: min(var(--gdbv-ai-files-width, 15em), 80%);
+        z-index: 3;
+    }
+}
+
+.gdbv-ai-bubble-assistant {
+    background-color: rgba(var(--bs-body-color-rgb), 0.07);
+}
+
+/*The query an answer proposed, with what can be done with it under it.*/
+.gdbv-ai-proposed {
+    margin: -0.3em 0 0.6em 0;
+}
+
+.gdbv-ai-proposed-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4em;
+}
+
+/*A call the model made: amber for one that read, red for one that changed the graph, which cannot be undone here.*/
+.gdbv-ai-card {
+    margin-bottom: 0.6em;
+    padding: 0.45em 0.6em;
+    border: 1px solid;
+    border-radius: 4px;
+}
+
+.gdbv-ai-card-read {
+    border-color: rgba(var(--bs-warning-rgb), 0.7);
+    background-color: rgba(var(--bs-warning-rgb), 0.1);
+}
+
+.gdbv-ai-card-change {
+    border-color: rgba(var(--bs-danger-rgb), 0.6);
+    background-color: rgba(var(--bs-danger-rgb), 0.08);
+}
+
+.gdbv-ai-card-title {
+    margin-bottom: 0.35em;
+    font-weight: 600;
+}
+
+.gdbv-ai-badge {
+    margin-left: 0.4em;
+    padding: 0 0.4em;
+    border-radius: 3px;
+    background-color: var(--bs-secondary);
+    color: #fff;
+    font-size: 0.8em;
+    font-weight: 600;
+}
+
+.gdbv-ai-code {
+    max-height: 12em;
+    margin: 0 0 0.4em 0;
+    padding: 0.35em 0.5em;
+    overflow: auto;
+    border: 1px solid var(--bs-border-color-translucent);
+    border-radius: 3px;
+    background-color: rgba(var(--bs-body-bg-rgb), 0.7);
+    font-size: 0.85em;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.gdbv-ai-code-refused {
+    border-color: rgba(var(--bs-danger-rgb), 0.5);
+}
+
+.gdbv-ai-card-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+}
+
+.gdbv-ai-card-note {
+    margin-bottom: 0.3em;
+    color: var(--bs-secondary-color);
+    font-size: 0.9em;
+}
+
+/*What the model was shown, so the person sees the same picture. Small: it is a record, not the view.*/
+.gdbv-ai-picture {
+    display: block;
+    max-width: 100%;
+    max-height: 16em;
+    border: 1px solid var(--bs-border-color-translucent);
+    border-radius: 3px;
+}
+
+/*A proposed graph's card (2026-11-02): what using it does, said before the script it stages, and Use at the end of the row.*/
+.gdbv-ai-graph-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em 0.75em;
+    align-items: baseline;
+    margin-bottom: 0.4em;
+}
+
+.gdbv-ai-graph-warnings {
+    margin-bottom: 0.4em;
+    padding: 0.35em 0.5em;
+    border: 1px solid rgba(var(--bs-warning-rgb), 0.45);
+    border-radius: 3px;
+    background-color: rgba(var(--bs-warning-rgb), 0.08);
+    color: var(--bs-warning-text-emphasis);
+    font-size: 0.85em;
+}
+
+/*Taller than a query's: the script of a graph runs to hundreds of lines, and a few of them say only that it exists.*/
+.gdbv-ai-graph-script {
+    max-height: 20em;
+}
+
+.gdbv-ai-graph .gdbv-ai-card-buttons {
+    align-items: center;
+}
+
+.gdbv-ai-turn-error {
+    margin-bottom: 0.6em;
+    padding: 0.4em 0.6em;
+    border: 1px solid rgba(var(--bs-danger-rgb), 0.45);
+    border-radius: 4px;
+    background-color: rgba(var(--bs-danger-rgb), 0.08);
+    color: var(--bs-danger-text-emphasis);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/*A run paused at the cap on rounds with nothing wrong: plain, not red, with Continue at its end.*/
+.gdbv-ai-turn-paused {
+    display: flex;
+    align-items: center;
+    gap: 0.8em;
+    margin-bottom: 0.6em;
+    padding: 0.4em 0.6em;
+    border: 1px solid rgba(var(--bs-primary-rgb), 0.35);
+    border-radius: 4px;
+    background-color: rgba(var(--bs-primary-rgb), 0.07);
+    overflow-wrap: anywhere;
+}
+
+.gdbv-ai-turn-paused > span {
+    flex: 1;
+}
+
+/*A compaction's briefing, in place of the conversation before it: green, as nothing else in the conversation is. What it
+  folded away is hidden until asked for, and dimmed while shown, since none of it is sent (2026-11-02, GDS Viewer's).*/
+.gdbv-ai-summary {
+    margin-bottom: 0.6em;
+    padding: 0.45em 0.6em;
+    border: 1px solid rgba(var(--bs-success-rgb), 0.55);
+    border-radius: 4px;
+    background-color: rgba(var(--bs-success-rgb), 0.07);
+}
+
+.gdbv-ai-summary-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8em;
+    margin-bottom: 0.25em;
+}
+
+.gdbv-ai-summary-title {
+    flex: 1 1 auto;
+    font-weight: 600;
+}
+
+.gdbv-ai-summary-note {
+    margin-bottom: 0.35em;
+    color: var(--bs-secondary-color);
+    font-size: 0.9em;
+}
+
+.gdbv-ai-summary-files {
+    margin: 0.35em 0 0 0;
+}
+
+.gdbv-ai-summary-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.gdbv-ai-earlier {
+    opacity: 0.55;
+}
+
+.gdbv-ai-earlier.gdbv-ai-folded {
+    display: none;
+}
+
+/*The suggestion to compact, over the box: what the history costs every question, and what compacting it costs once.*/
+.gdbv-ai-suggest {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35em 0.8em;
+    padding: 0.35em 0.6em;
+    border: 1px solid rgba(var(--bs-success-rgb), 0.45);
+    border-radius: 4px;
+    background: rgba(var(--bs-success-rgb), 0.07);
+    font-size: 0.85em;
+}
+
+.gdbv-ai-suggest-text {
+    flex: 1 1 20em;
+}
+
+.gdbv-ai-thinking {
+    color: var(--bs-secondary-color);
+    font-style: italic;
+}
+
+/*A line from the page rather than either side: where a kept chat was opened again.*/
+.gdbv-ai-turn-note {
+    margin: 0.6em 0;
+    padding: 0.3em 0.6em;
+    border-left: 3px solid var(--bs-border-color);
+    color: var(--bs-secondary-color);
+    font-style: italic;
+}
+
+/*What a run was billed for, under the answer it ended.*/
+.gdbv-ai-usage {
+    margin: -0.35em 0 0.6em 0.2em;
+    color: var(--bs-secondary-color);
+    font-size: 0.8em;
+}
+
+/*The box and what goes with the next question, in one rounded frame: the words on top, and a slim row of borderless
+  controls along the frame's foot. The frame takes the box's focus ring, since the box inside it has no border.*/
+.gdbv-ai-box {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25em;
+    padding: 0.45em 0.45em 0.35em 0.75em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    background: var(--bs-body-bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    cursor: text;
+}
+
+.gdbv-ai-box:focus-within {
+    border-color: rgba(var(--bs-primary-rgb), 0.5);
+    box-shadow: 0 0 0 3px rgba(var(--bs-primary-rgb), 0.12);
+}
+
+.gdbv-ai-prompt {
+    width: 100%;
+    padding: 0.2em 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--bs-body-color);
+    outline: none;
+    resize: none;
+    font: inherit;
+    font-size: 0.95em;
+    line-height: 1.4;
+}
+
+/*A hairline between the words and the row under them.*/
+.gdbv-ai-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.15em;
+    margin-left: -0.35em;
+    padding-top: 0.3em;
+    border-top: 1px solid var(--bs-border-color-translucent);
+    cursor: default;
+}
+
+.gdbv-ai-bar-end {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.15em;
+    min-width: 0;
+    margin-left: auto;
+}
+
+.gdbv-ai-bar .gdbv-ai-select,
+.gdbv-ai-model-toggle {
+    max-width: 13em;
+    padding: 4px 2px 4px 6px;
+    border: none;
+    border-radius: 7px;
+    background-color: transparent;
+    color: var(--bs-secondary-color);
+    font: inherit;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+.gdbv-ai-bar .gdbv-ai-select:hover,
+.gdbv-ai-model-toggle:hover,
+.gdbv-ai-model-toggle-on {
+    background-color: rgba(var(--bs-body-color-rgb), 0.07);
+}
+
+.gdbv-ai-bar .gdbv-ai-select:focus-visible,
+.gdbv-ai-model-toggle:focus-visible {
+    outline: 2px solid rgba(var(--bs-primary-rgb), 0.5);
+}
+
+.gdbv-ai-bar .gdbv-ai-select option {
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+}
+
+/*The model's button: the name, the effort beside it in gray, a bolt while fast mode is on, and an arrow; the name cut
+  short before anything else is.*/
+.gdbv-ai-model-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    min-width: 0;
+    max-width: 18em;
+    padding: 4px 4px 4px 7px;
+    white-space: nowrap;
+}
+
+.gdbv-ai-model-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--bs-body-color);
+}
+
+.gdbv-ai-model-effort {
+    flex: none;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-model-fast {
+    flex: none;
+    width: 13px;
+    height: 13px;
+    color: #e8890c;
+}
+
+.gdbv-ai-model-arrow {
+    flex: none;
+    width: 13px;
+    height: 13px;
+}
+
+.gdbv-ai-bar-button {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 7px;
+    background: none;
+    color: var(--bs-secondary-color);
+    cursor: pointer;
+}
+
+.gdbv-ai-bar-button > svg {
+    width: 16px;
+    height: 16px;
+}
+
+.gdbv-ai-bar-button:hover {
+    background: rgba(var(--bs-body-color-rgb), 0.07);
+    color: var(--bs-body-color);
+}
+
+.gdbv-ai-bar-button.gdbv-ai-bar-button-on {
+    background: rgba(var(--bs-primary-rgb), 0.12);
+    color: var(--bs-primary);
+}
+
+/*The microphone (2026-11-02, GDS Viewer's): red while it listens or records, breathing while the provider writes it out,
+  and dimmed in a browser with no recognizer while it is set to the browser's: still there to point at, for what it says.*/
+.gdbv-ai-bar-button.gdbv-ai-mic {
+    margin-left: 0.15em;
+}
+
+.gdbv-ai-bar-button.gdbv-ai-mic-on,
+.gdbv-ai-bar-button.gdbv-ai-mic-on:hover {
+    background: rgba(var(--bs-danger-rgb), 0.12);
+    color: var(--bs-danger);
+}
+
+.gdbv-ai-bar-button.gdbv-ai-mic-busy {
+    animation: gdbv-ai-mic-breathing 1.2s ease-in-out infinite;
+}
+
+@keyframes gdbv-ai-mic-breathing {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+.gdbv-ai-bar-button.gdbv-ai-mic-off {
+    opacity: 0.45;
+}
+
+/*The microphone's level meter: thin gray bars in the box's top right corner, over the words' line rather than in the row
+  of controls, so nothing there moves, and the words kept clear of it while it is up. SpeechInterop.js sets the heights as
+  the sound comes in, over a quiet floor so the trace reads as one in a silence.*/
+.gdbv-ai-mic-level {
+    position: absolute;
+    top: 0.5em;
+    right: 0.6em;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 20px;
+    pointer-events: none;
+}
+
+.gdbv-ai-box-listening > .gdbv-ai-prompt {
+    padding-right: 72px;
+}
+
+.gdbv-ai-mic-level-bar {
+    width: 2px;
+    height: 15%;
+    border-radius: 1px;
+    background: var(--bs-secondary-color);
+    transition: height 60ms linear;
+}
+
+/*The camera's card over the box: the picture live, as large as the window's width lets it be, the shutter under it and a
+  cross over its corner.*/
+.gdbv-ai-camera {
+    position: relative;
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 0.4em;
+    padding: 0.5em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 6px;
+    background: var(--bs-tertiary-bg);
+}
+
+.gdbv-ai-camera-video {
+    width: 100%;
+    max-height: 32vh;
+    border-radius: 4px;
+    background: #212529;
+    object-fit: contain;
+}
+
+.gdbv-ai-camera-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5em;
+    min-height: 32px;
+}
+
+/*A round shutter in Send's color, the one thing in the card to press, a size up from the row's buttons.*/
+.gdbv-ai-camera-shutter {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--bs-primary);
+    color: #fff;
+    cursor: pointer;
+}
+
+.gdbv-ai-camera-shutter > svg {
+    width: 16px;
+    height: 16px;
+}
+
+.gdbv-ai-camera-shutter:hover {
+    filter: brightness(0.92);
+}
+
+/*The cross over the picture's corner, light on its dark ground in either theme.*/
+.gdbv-ai-bar-button.gdbv-ai-camera-close {
+    position: absolute;
+    top: 0.85em;
+    right: 0.85em;
+    width: 24px;
+    height: 24px;
+    background: rgba(255, 255, 255, 0.85);
+    color: #495057;
+}
+
+.gdbv-ai-bar-button.gdbv-ai-camera-close:hover {
+    background: #fff;
+    color: #212529;
+}
+
+.gdbv-ai-count {
+    position: absolute;
+    top: -6px;
+    right: -7px;
+    min-width: 15px;
+    padding: 0 3px;
+    border-radius: 8px;
+    background: var(--bs-primary);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 15px;
+    text-align: center;
+}
+
+/*Send and Stop, one button at the end of the row: an arrow up, or a square while an answer is coming.*/
+.gdbv-ai-send {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-left: 0.25em;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: var(--bs-primary);
+    color: #fff;
+    cursor: pointer;
+}
+
+.gdbv-ai-send > svg {
+    width: 14px;
+    height: 14px;
+}
+
+.gdbv-ai-send:hover:not(:disabled) {
+    filter: brightness(0.9);
+}
+
+.gdbv-ai-send:disabled {
+    background: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+    cursor: default;
+}
+
+.gdbv-ai-send.gdbv-ai-stopping {
+    background: var(--bs-secondary);
+}
+
+/*The menus over the conversation's foot: the model's at the right, the tools' at the right, the commands' at the left.*/
+.gdbv-ai-model-menu,
+.gdbv-ai-tool-picker,
+.gdbv-ai-slash-menu {
+    position: absolute;
+    bottom: 0;
+    z-index: 3;
+    max-height: 100%;
+    overflow-y: auto;
+    border: 1px solid var(--bs-border-color);
+    background: var(--bs-body-bg);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.gdbv-ai-model-menu:focus,
+.gdbv-ai-tool-picker:focus {
+    outline: none;
+}
+
+.gdbv-ai-model-menu {
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    width: min(18em, 100%);
+    padding: 0.35em;
+    border-radius: 10px;
+    font-size: 0.9em;
+}
+
+.gdbv-ai-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    width: 100%;
+    padding: 0.28em 0.6em;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--bs-body-color);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.gdbv-ai-menu-item:hover,
+.gdbv-ai-menu-item:focus-visible {
+    background: rgba(var(--bs-body-color-rgb), 0.07);
+    outline: none;
+}
+
+.gdbv-ai-menu-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gdbv-ai-menu-value {
+    flex: none;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-menu-check,
+.gdbv-ai-menu-chevron {
+    flex: none;
+    width: 15px;
+    height: 15px;
+}
+
+.gdbv-ai-menu-check {
+    color: var(--bs-primary);
+}
+
+.gdbv-ai-menu-chevron {
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-menu-back {
+    gap: 0.35em;
+    font-weight: 600;
+}
+
+.gdbv-ai-menu-line {
+    flex: none;
+    height: 1px;
+    margin: 0.3em 0.4em;
+    background: var(--bs-border-color-translucent);
+}
+
+.gdbv-ai-menu-group,
+.gdbv-ai-menu-note {
+    padding: 0.3em 0.6em 0.1em 0.6em;
+    color: var(--bs-secondary-color);
+    font-size: 0.85em;
+}
+
+.gdbv-ai-menu-group {
+    font-weight: 600;
+}
+
+.gdbv-ai-menu-note {
+    padding-bottom: 0.35em;
+}
+
+/*A switch for fast mode: a pill with a knob, the accent and to the right when on.*/
+.gdbv-ai-switch {
+    position: relative;
+    flex: none;
+    width: 30px;
+    height: 17px;
+    border-radius: 9px;
+    background: var(--bs-secondary-bg);
+    transition: background-color 120ms ease;
+}
+
+.gdbv-ai-switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 120ms ease;
+}
+
+.gdbv-ai-switch-on {
+    background: var(--bs-primary);
+}
+
+.gdbv-ai-switch-on::after {
+    transform: translateX(13px);
+}
+
+/*The tool picker: the tools the model may use in this conversation, and Compact with what it costs.*/
+.gdbv-ai-tool-picker {
+    right: 0;
+    width: min(25em, 100%);
+    padding: 0.5em 0.65em;
+    border-radius: 6px;
+    font-size: 0.85em;
+}
+
+.gdbv-ai-picker-head {
+    margin-bottom: 0.3em;
+    font-weight: 600;
+}
+
+.gdbv-ai-picker-tool {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    margin: 0.15em 0;
+    cursor: pointer;
+}
+
+.gdbv-ai-picker-note {
+    margin: 0.4em 0 0.6em 0;
+    color: var(--bs-secondary-color);
+}
+
+/*A group of tools in the picker, by what they do, with all and none beside its name.*/
+.gdbv-ai-picker-group {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em;
+    margin: 0.35em 0 0.1em 0;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-picker-group-name {
+    font-weight: 600;
+}
+
+.gdbv-ai-picker-action {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+}
+
+.gdbv-ai-picker-price {
+    color: var(--bs-secondary-color);
+}
+
+/*The slash commands' list: over the conversation's foot at the left, just above the box a slash opens it from. The
+  marked row in a pale accent; one that cannot run now, dimmed.*/
+.gdbv-ai-slash-menu {
+    left: 0;
+    width: min(30em, 100%);
+    padding: 0.3em;
+    border-radius: 8px;
+    font-size: 0.85em;
+}
+
+.gdbv-ai-slash-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75em;
+    padding: 0.3em 0.55em;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.gdbv-ai-slash-item-on {
+    background: rgba(var(--bs-primary-rgb), 0.12);
+}
+
+.gdbv-ai-slash-name {
+    flex: 0 0 6.5em;
+    font-family: var(--bs-font-monospace);
+    color: var(--bs-body-color);
+}
+
+.gdbv-ai-slash-says {
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-ai-slash-item-off .gdbv-ai-slash-name {
+    color: var(--bs-tertiary-color);
+}
+
+.gdbv-ai-form-warning {
+    color: var(--bs-warning-text-emphasis);
+    font-size: 0.85em;
+}
+
+.gdbv-ai-form-error {
+    color: var(--bs-danger-text-emphasis);
+    font-size: 0.85em;
+}
+
+/*The (i) in the box's row, the card it shows above itself while pointed at, and the line under the box a press on it
+  keeps the same on: what the next request will cost, what has been spent, and the rates.*/
+.gdbv-ai-meter-holder {
+    position: relative;
+    flex: none;
+}
+
+.gdbv-ai-meter-card {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    z-index: 3;
+    display: none;
+    flex-direction: column;
+    gap: 0.3em;
+    width: max-content;
+    max-width: min(24em, 80vw);
+    padding: 0.5em 0.7em;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 8px;
+    background: var(--bs-body-bg);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    color: var(--bs-secondary-color);
+    font-size: 0.85em;
+    cursor: default;
+}
+
+/*A bridge over the gap to the (i), so the pointer can go up to the rates link without the card going.*/
+.gdbv-ai-meter-card::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    left: 0;
+    top: 100%;
+    height: 8px;
+}
+
+.gdbv-ai-meter-holder:hover > .gdbv-ai-meter-card,
+.gdbv-ai-meter-holder:has(:focus-visible) > .gdbv-ai-meter-card {
+    display: flex;
+}
+
+.gdbv-ai-meter-card > .gdbv-ai-meter-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3em;
+}
+
+.gdbv-ai-meter-note {
+    order: 1;
+    font-size: 0.9em;
+}
+
+.gdbv-ai-meter {
+    margin-top: -0.2em;
+    padding: 0 0.75em;
+    color: var(--bs-secondary-color);
+    font-size: 0.8em;
+}
+
+.gdbv-ai-meter > .gdbv-ai-meter-lines {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.2em 1em;
+}
+
+.gdbv-ai-meter .gdbv-ai-spent {
+    margin-left: auto;
+}
+
+.gdbv-ai-rates {
+    color: inherit;
+}
+
 /* The toggle beneath the 2D mode button (plain 2D or the Map), opened on hover or focus. The top
    padding is the bridge the pointer crosses from the button down to the toggle without leaving the
-   group that shows it. */
+   group that shows it.
+   Its z-index is Bootstrap's popover layer, 1070, because it opens down over the canvas and the canvas
+   keeps its own notices high: the uncommitted-changes banner and the no-visual notice sit at 1040 and
+   the link picker at 1050, and at 30 the toggle opened underneath the banner. 1070 is also above the AI
+   windows (1060) and below the full-screen view (1090), and the filter menu beside it already uses 1080. */
 .gdbv-mode-popover {
     position: absolute;
     top: 100%;
     left: 0;
-    z-index: 30;
+    z-index: 1070;
     padding-top: 0.35rem;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.25rem;
 }
 
-.gdbv-mode-popover > .btn-group {
+/* One panel with a row for each choice, its name before it (2026-11-05, the user: three boxes floating one under the
+   other). The choices line up in a column, each as wide as it needs. */
+.gdbv-mode-panel {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
+    justify-items: start;
+    column-gap: 0.75rem;
+    row-gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
     background: var(--bs-body-bg);
     border: 1px solid var(--bs-border-color);
-    border-radius: 0.375rem;
-    padding: 0.25rem;
-    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.25);
+    border-radius: var(--gdbv-radius);
+    box-shadow: var(--gdbv-shadow-menu);
     white-space: nowrap;
+}
+
+.gdbv-mode-row-label {
+    font-size: var(--gdbv-fs-sm);
+    font-weight: 600;
+    color: var(--bs-secondary-color);
 }
 
 /* The map layer: a canvas just behind the 2D graph's container while the Map is on (CytoscapeInterop.js). */
@@ -799,4 +3883,1020 @@ code {
     width: 100%;
     height: 100%;
     pointer-events: none;
+}
+
+/* A row in the top bar's menus and the board's layout picker: short, with a little room at the sides (2026-10-25).
+   It also sets the padding a .dropdown-item has nowhere but inside a .dropdown-menu, which these menus are not. */
+.gdbv-menu-row {
+    padding: 0.3rem 0.75rem;
+}
+
+/* A right-click's menu on a graph item (2026-11-04, the user), at the pointer and over everything, the full-screen
+   view's 1090 included, since it opens from a canvas that may be full screen. The sheet under it is clear and takes the
+   next press elsewhere. */
+.gdbv-element-menu-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 1094;
+}
+
+.gdbv-element-menu {
+    position: fixed;
+    z-index: 1095;
+    width: max-content;
+    min-width: 0;
+    max-width: 12rem;
+}
+
+/* As narrow as its widest row, no wider, its head and rows starting near its left edge (2026-11-06, the user, twice: it was
+   wide and half empty, and the rows stood in from the head). */
+.gdbv-element-menu-head {
+    font-size: 0.85em;
+    padding: 0 0.6rem 0 0.5rem;
+}
+
+/* Its rows close together, starting where its head does, and their icons in the toolbar's gray (2026-11-05, the user).
+   The menus' rule that indents a row with an icon to the settings' column comes later and would win at equal weight. */
+.gdbv-element-menu .gdbv-menu-row.gdbv-menu-row.gdbv-menu-row {
+    padding: 0.15rem 0.6rem 0.15rem 0.5rem;
+}
+
+.gdbv-element-menu .gdbv-menu-row:not(.text-danger):not(:disabled) .gdbv-menu-row-icon {
+    color: var(--gdbv-fg-2);
+}
+
+/* Show details on canvas (2026-11-06, the user): a vertex drawn as a small element card instead of its box, by
+   CytoscapeInterop.js's makeDetailsCard, over the vertex, which is sized to it and draws nothing itself. A head in the
+   vertex's color, as its box was: its label and id small over its name. Under it a row for each property, the key muted
+   in a column of its own and the value beside it, cut short at the card's width. Selected, it is drawn as a selected
+   vertex is: the head orange and a red ring. */
+.gdbv-canvas-details {
+    position: absolute;
+    box-sizing: border-box;
+    width: max-content;
+    min-width: 72px;
+    max-width: 200px;
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.35;
+    text-align: left;
+    color: var(--bs-body-color);
+    background: var(--bs-body-bg);
+    border: 1px solid var(--gdbv-details-color);
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+    transform-origin: center center;
+    pointer-events: none;
+    user-select: none;
+}
+
+.gdbv-canvas-details.is-selected {
+    border-color: #dc3545;
+    box-shadow: 0 0 0 1px #dc3545, 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+
+.gdbv-canvas-details-head {
+    padding: 3px 8px 4px;
+    color: #fff;
+    background: var(--gdbv-details-color);
+}
+
+.gdbv-canvas-details.is-selected .gdbv-canvas-details-head {
+    background: #fd7e14;
+}
+
+.gdbv-canvas-details-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 8px;
+    line-height: 1.3;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+
+.gdbv-canvas-details-kind,
+.gdbv-canvas-details-id,
+.gdbv-canvas-details-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gdbv-canvas-details-title {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.gdbv-canvas-details-rows {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+}
+
+.gdbv-canvas-details-key,
+.gdbv-canvas-details-value {
+    padding: 2px 8px;
+    white-space: nowrap;
+    border-top: 1px solid var(--bs-border-color-translucent);
+}
+
+.gdbv-canvas-details-rows > :nth-child(-n + 2) {
+    border-top: 0;
+}
+
+.gdbv-canvas-details-key {
+    padding-right: 0;
+    font-size: 9px;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-canvas-details-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gdbv-canvas-details-more {
+    padding: 1px 8px 3px;
+    font-size: 9px;
+    color: var(--bs-secondary-color);
+    border-top: 1px solid var(--bs-border-color-translucent);
+}
+
+/* The saved-list picker of Connections and AI models (2026-11-04, the user's "option 1"): the chosen entry's name in a
+   field-like head, and under it a menu of the entries, each with Rename, Duplicate and Delete shown on hover, and New at
+   the end. Names alone, each starting where New's plus does, the head's too (the same evening, the user). */
+.gdbv-picker {
+    position: relative;
+    max-width: 420px;
+}
+
+.gdbv-picker-head-row {
+    display: flex;
+}
+
+/* A button at the head's end is joined to it (HeadEnd, Connections' Save). */
+.gdbv-picker-head:not(:last-child) {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+/* Save with something to save: orange until it is saved (2026-11-05, the user). White on this orange reads in both themes. */
+.gdbv-btn-unsaved {
+    --bs-btn-color: #fff;
+    --bs-btn-bg: #c2570c;
+    --bs-btn-border-color: #c2570c;
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: #a8490a;
+    --bs-btn-hover-border-color: #a8490a;
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: #a8490a;
+    --bs-btn-active-border-color: #a8490a;
+    --bs-btn-focus-shadow-rgb: 194, 87, 12;
+}
+
+.gdbv-picker-head-row > .btn {
+    margin-left: -1px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.gdbv-picker-head {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.05rem 0.4rem 0.05rem 0.75rem;
+    border: 1px solid var(--gdbv-line);
+    border-radius: var(--bs-border-radius);
+    background-color: var(--bs-body-bg);
+}
+
+.gdbv-picker-head.is-invalid {
+    border-color: var(--bs-form-invalid-border-color);
+}
+
+.gdbv-picker-face {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    text-align: left;
+}
+
+.gdbv-picker-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gdbv-picker-name-box.gdbv-picker-name-box {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-weight: 600;
+}
+
+/* The name box is the head, so the head shows the focus rather than a box drawn inside a box (2026-11-05, the user). */
+.gdbv-picker-head:focus-within:has(.gdbv-picker-name-box) {
+    border-color: var(--gdbv-accent);
+}
+
+.gdbv-picker-act {
+    --bs-btn-padding-x: 0.35rem;
+    --bs-btn-padding-y: 0.1rem;
+    --bs-btn-border-color: transparent;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-picker-act:hover {
+    background-color: var(--gdbv-s2);
+    color: var(--bs-body-color);
+}
+
+.gdbv-picker-delete:hover {
+    color: var(--bs-danger);
+}
+
+.gdbv-picker-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 1094;
+}
+
+.gdbv-picker-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 0.25rem);
+    z-index: 1095;
+    padding: 0.25rem;
+    max-height: 22rem;
+    overflow-y: auto;
+    border: 1px solid var(--gdbv-line);
+    border-radius: var(--bs-border-radius);
+    background-color: var(--bs-body-bg);
+    box-shadow: var(--bs-box-shadow);
+}
+
+/* A row's buttons hold their place hidden until the row is hovered: shown and hidden with display, they made the
+   hovered row taller and moved the rows under it (2026-11-04, the user). The hover is a wash of the text's color,
+   plain to see on the menu's tint, where the panel's own shade had been the menu's. */
+.gdbv-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.4rem 0.3rem 0.5rem;
+    border-radius: var(--bs-border-radius-sm);
+    cursor: pointer;
+}
+
+.gdbv-picker-row.is-selected {
+    background-color: color-mix(in srgb, var(--bs-body-color) 6%, transparent);
+}
+
+.gdbv-picker-row:hover {
+    background-color: color-mix(in srgb, var(--bs-body-color) 11%, transparent);
+}
+
+.gdbv-picker-row-acts {
+    display: flex;
+    flex-shrink: 0;
+    visibility: hidden;
+}
+
+.gdbv-picker-row:hover .gdbv-picker-row-acts,
+.gdbv-picker-row:focus-within .gdbv-picker-row-acts {
+    visibility: visible;
+}
+
+.gdbv-picker-empty {
+    padding: 0.4rem 0.5rem;
+    color: var(--bs-secondary-color);
+}
+
+.gdbv-picker-add {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    margin-top: 0.25rem;
+    padding: 0.4rem 0.5rem;
+    border: 0;
+    border-top: 1px solid var(--gdbv-line-2);
+    border-radius: 0;
+    background: none;
+    color: var(--bs-link-color);
+    text-align: left;
+}
+
+.gdbv-picker-add:hover {
+    background-color: color-mix(in srgb, var(--bs-body-color) 11%, transparent);
+}
+
+/* The Style window in tabs (2026-11-04, the user's pick of three layouts). Its stylesheets' menu is the saved pickers',
+   opened from a button at the right and as wide as a name and the box to save one under. */
+.gdbv-style-sheets {
+    flex: 0 0 auto;
+}
+
+.gdbv-style-sheets .gdbv-picker-menu {
+    left: auto;
+    right: 0;
+    width: 18rem;
+}
+
+.gdbv-style-sheets-save {
+    margin-top: 0.25rem;
+    padding: 0.25rem;
+}
+
+/* Its tables on the window's own color, where Bootstrap's painted them in the page's gray (2026-11-05, the user), right
+   under the tabs. A vertex label's row has its opener first, narrow, and opens onto a row of its shape, icon and 3D
+   model. Its tabs are the workspace's (gdbv-ws-tabs), the one in front with the accent along its top. */
+.gdbv-style-table {
+    --bs-table-bg: transparent;
+}
+
+.gdbv-style-table .gdbv-style-expand-col {
+    width: 2rem;
+    padding-right: 0;
+}
+
+/* Show details on canvas: its name on one line, as the other columns' are, its switch under the start of it (2026-11-06,
+   the user: on two lines with a small box centered under them it looked shoved in). */
+.gdbv-style-table .gdbv-style-details-col {
+    white-space: nowrap;
+}
+
+/* One vertex's style and its position, each in a card of its own (2026-11-06, the user). The table's lines stop at the
+   card's padding, and its last row has none under it. */
+.gdbv-style-card > .card-body {
+    padding: 0.5rem 0.75rem 0.65rem;
+}
+
+.gdbv-style-card .gdbv-style-table > tbody > tr:last-child > td {
+    border-bottom: 0;
+}
+
+/* VR / AR over the 3D graph, and the map's layers button: glass the graph shows through, readable over a dark scene or a light
+   one (2026-11-05, the user). */
+.gdbv-xr-btn,
+.gdbv-glass-btn {
+    --bs-btn-color: var(--bs-body-color);
+    --bs-btn-bg: rgba(var(--bs-body-bg-rgb), 0.55);
+    --bs-btn-border-color: rgba(var(--bs-body-color-rgb), 0.2);
+    --bs-btn-hover-color: var(--bs-body-color);
+    --bs-btn-hover-bg: rgba(var(--bs-body-bg-rgb), 0.8);
+    --bs-btn-hover-border-color: rgba(var(--bs-body-color-rgb), 0.3);
+    --bs-btn-active-color: var(--bs-body-color);
+    --bs-btn-active-bg: rgba(var(--bs-body-bg-rgb), 0.9);
+    --bs-btn-active-border-color: rgba(var(--bs-body-color-rgb), 0.3);
+    backdrop-filter: blur(6px);
+}
+
+/* The map's layers menu, inside the canvas however short it is: it scrolls rather than running off the bottom. */
+.gdbv-layers-menu {
+    max-height: calc(100% - 60px);
+    overflow-y: auto;
+    padding: 0.25rem 0;
+    font-size: var(--gdbv-fs-sm);
+}
+
+/* Tight rows (2026-11-05, the user: too much room up and down): a choice is a line of small type, its group's name sits
+   right on it, and a divider is little more than its line. */
+.gdbv-layers-menu .dropdown-item {
+    padding: 0.15rem 0.75rem;
+}
+
+.gdbv-layers-menu .dropdown-item-text {
+    padding: 0.15rem 0.75rem;
+}
+
+/* High resolution, a choice of the satellite earth's, under it and in from it (2026-11-06, the user). */
+.gdbv-layers-menu .dropdown-item.gdbv-layers-sub {
+    padding-left: 1.75rem;
+}
+
+.gdbv-layers-menu .dropdown-header {
+    padding: 0.25rem 0.75rem 0.05rem;
+    font-size: var(--gdbv-fs-xs, 11px);
+}
+
+.gdbv-layers-menu .dropdown-divider {
+    margin: 0.25rem 0;
+}
+
+/* The map's layers button: square, as high as the zoom buttons under it, with an icon a little larger than a small
+   button's (2026-11-05, the user). */
+.gdbv-canvas-square {
+    width: calc(1.5em + 0.5rem + 2px);
+    height: calc(1.5em + 0.5rem + 2px);
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.gdbv-canvas-square > .bi {
+    font-size: 0.95rem;
+    line-height: 1;
+}
+
+/* Find a place, the button under the layers button on the Map and the Globe (2026-11-06, the user), and the box it opens
+   to its left: a small button is 1.3125rem high with its padding and 2px of border, and the two stand 6px apart. */
+.gdbv-place-btn,
+.gdbv-place-box {
+    position: absolute;
+    top: calc(20px + 1.8125rem);
+    z-index: 22;
+}
+
+.gdbv-place-btn {
+    right: 12px;
+}
+
+.gdbv-place-box {
+    right: calc(18px + 1.8125rem);
+    width: min(340px, calc(100% - 3rem - 30px));
+    padding: 0.5rem;
+    font-size: var(--gdbv-fs-sm);
+}
+
+/* What was found: its name in a line or two at most, its coordinates under it. */
+.gdbv-place-found {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* The Globe's pin, its point on the place; the Map draws its own on the earth's layer. */
+.gdbv-place-pin {
+    position: absolute;
+    transform: translate(-50%, -100%);
+    line-height: 0;
+    pointer-events: none;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+}
+
+/* The coverage line's cross, small enough to sit on its first line. */
+.gdbv-geo-status-close {
+    font-size: 0.55rem;
+    margin-top: 0.3rem;
+}
+
+/* The canvas's zoom and re-center buttons: square glass, their glyphs in the buttons' gray as the toolbar's were. */
+.gdbv-canvas-zoom > .btn {
+    --bs-btn-color: var(--gdbv-fg-2);
+    width: calc(1.5em + 0.5rem + 2px);
+}
+
+/* Styling's rows a little lower (2026-11-05, the user): less room over and under each, and its boxes, swatches and buttons
+   24px where a small box is 28px. */
+.gdbv-style-table > :not(caption) > * > * {
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+}
+
+.gdbv-style-table .form-control-sm,
+.gdbv-style-table .form-select-sm,
+.gdbv-style-table .input-group-sm > .form-control,
+.gdbv-style-table .input-group-sm > .form-select {
+    min-height: calc(1.5em + 0.25rem + calc(var(--bs-border-width) * 2));
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+}
+
+.gdbv-style-table .btn-sm,
+.gdbv-style-table .input-group-sm > .btn {
+    --bs-btn-font-size: var(--gdbv-fs-sm);
+    --bs-btn-padding-y: 0.125rem;
+}
+
+.gdbv-style-table .gdbv-picker-act {
+    --bs-btn-padding-y: 0;
+}
+
+/* A block, as the boxes beside it are: inline, it stood on the text's line and that line's room under it made the row taller. */
+.gdbv-style-table .form-control-color.gdbv-swatch {
+    display: block;
+    width: calc(1.5em + 0.25rem + calc(var(--bs-border-width) * 2));
+    height: calc(1.5em + 0.25rem + calc(var(--bs-border-width) * 2));
+}
+
+/* A color to pick is a square the color fills to its edges, as tall as the boxes beside it, where Bootstrap's was a wide
+   box with the color inset in it (2026-11-05, the user). */
+.form-control-color.gdbv-swatch {
+    width: calc(1.5em + 0.5rem + calc(var(--bs-border-width) * 2));
+    height: calc(1.5em + 0.5rem + calc(var(--bs-border-width) * 2));
+    padding: 0;
+    border: 0;
+    border-radius: var(--bs-border-radius-sm);
+    overflow: hidden;
+}
+
+.form-control-color.gdbv-swatch::-webkit-color-swatch {
+    border-radius: 0;
+}
+
+.form-control-color.gdbv-swatch::-moz-color-swatch {
+    border-radius: 0;
+}
+
+/* The account menu's sections share a left column for their picture or icon (2026-10-26): the avatar, the gear, the
+   person with a gear, the door. The icon is centered in a box as wide as the avatar, and the text follows after a gap. */
+.gdbv-menu-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 2.2rem;
+    font-size: 0.95rem;
+}
+
+.gdbv-menu-lead {
+    gap: 0.7rem;
+}
+
+/* The arrow that leads a row whose choices fly out beside it, smaller than the label it points from. */
+.gdbv-menu-arrow {
+    font-size: 0.65em;
+}
+
+/* A row led by an arrow keeps it as far from its edge and from what follows in every menu: Appearance's from its icon
+   as Theme's from its label, with less room at the edge than a row's own (2026-11-03, the user). The arrow has a width
+   of its own, so the settings rows without one indent by it and the gap, and their icons stand in Appearance's column. */
+.gdbv-menu-row:has(> .gdbv-menu-arrow) {
+    padding-left: 0.5rem;
+}
+
+.gdbv-menu-row > .gdbv-menu-arrow {
+    width: 0.5rem;
+    flex: none;
+}
+
+.gdbv-menu-row:has(> .gdbv-menu-row-icon):not(:has(> .gdbv-menu-arrow)) {
+    padding-left: 1.5rem;
+}
+
+/* The bar's tabs (2026-10-28): each plugin page visited opens as one after the app's name, a shortcut back to it, and
+   closes on its x. They stand on the bar's bottom edge, rounded at the top and open at the bottom, so they read as tabs;
+   the one being looked at is the page's own color, so it opens into the page below, with the accent along its top. The
+   strip never pushes the rest of the bar onto a line of its own: it takes the room there is, up to what its tabs need,
+   and past that the tabs narrow and cut their titles short. */
+.gdbv-bar-tabs {
+    display: flex;
+    align-items: flex-end;
+    align-self: flex-end;
+    flex: 1 1 0;
+    gap: 2px;
+    min-width: 0;
+    max-width: max-content;
+    /* Down through the bar's own padding and over its line, which the tab in front hides at its foot. */
+    margin-bottom: -9px;
+    overflow: hidden;
+}
+
+.gdbv-bar-tab {
+    display: flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 4.5rem;
+    max-width: 15rem;
+    height: 37px;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    border-radius: var(--gdbv-radius) var(--gdbv-radius) 0 0;
+    background-color: transparent;
+    font-size: var(--gdbv-fs);
+    font-weight: 500;
+}
+
+.gdbv-bar-tab:not(.active) {
+    border-bottom: 1px solid transparent;
+    background-clip: padding-box;
+}
+
+.gdbv-bar-tab:hover {
+    background-color: var(--gdbv-s3);
+}
+
+.gdbv-bar-tab.active {
+    border-color: var(--gdbv-line);
+    background-color: var(--gdbv-bg);
+    box-shadow: inset 0 2px 0 var(--gdbv-accent);
+}
+
+.gdbv-bar-tab-link {
+    display: flex;
+    align-items: center;
+    flex: 1 1 auto;
+    gap: 0.45rem;
+    min-width: 0;
+    height: 100%;
+    padding: 0 0.25rem 0 0.75rem;
+    color: var(--gdbv-fg-2);
+    text-decoration: none;
+}
+
+.gdbv-bar-tab-link:hover,
+.gdbv-bar-tab.active .gdbv-bar-tab-link {
+    color: var(--gdbv-fg);
+}
+
+.gdbv-bar-tab .gdbv-page-icon {
+    width: 1rem;
+    height: 1rem;
+    font-size: 1rem;
+}
+
+
+.gdbv-bar-tab-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gdbv-bar-tab-close {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    margin: 0 0.3rem 0 0.1rem;
+    padding: 0;
+    border: 0;
+    border-radius: var(--gdbv-radius-sm);
+    background: none;
+    color: var(--gdbv-fg-3);
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.gdbv-bar-tab-close:hover {
+    background-color: var(--gdbv-s3);
+    color: var(--gdbv-fg);
+}
+
+/* A plugin page's icon, small, in the tabs and the Plugins button's menu. */
+.gdbv-page-icon {
+    flex: 0 0 auto;
+    width: 1rem;
+    height: 1rem;
+    font-size: 0.95rem;
+    line-height: 1;
+}
+
+/* A drawn icon where a glyph would stand (the viewer's): cut out of the text color through its own shape, so it sits
+   among the glyphs as one of them instead of in its own colors (2026-10-29). */
+.gdbv-page-icon-drawn {
+    display: inline-block;
+    background-color: currentColor;
+    -webkit-mask: var(--gdbv-icon) center / contain no-repeat;
+    mask: var(--gdbv-icon) center / contain no-repeat;
+}
+
+/* The setup dialogs the viewer's page opens (2026-10-29): the connection form and Import / Export, which stood as
+   cards above the workspace. The pill that opens the first wears a dot in the connection's color. */
+.gdbv-setup-dialog {
+    margin-top: 4.5rem;
+}
+
+.gdbv-setup-dialog > .modal-content {
+    border-color: var(--gdbv-line);
+    box-shadow: var(--gdbv-shadow-lg, 0 1rem 3rem rgba(0, 0, 0, 0.25));
+}
+
+/* The query sidebar's limit labels: two short lines in small type, fitting the small input group's height without
+   stretching it (2026-10-29). */
+.input-group-sm > .input-group-text.gdbv-limit-label {
+    padding: 0 0.35rem;
+    font-size: 0.66rem;
+    line-height: 1.1;
+    text-align: center;
+}
+
+.gdbv-conn-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    max-width: 11rem;/*18 until the user found it too long (2026-10-29)*/
+}
+
+.gdbv-conn-ico {
+    flex: 0 0 auto;
+    font-size: 1.05em;
+    line-height: 1;
+}
+
+/* A plug with a red × at its foot: not connected. */
+.gdbv-plug-off {
+    position: relative;
+    display: inline-block;
+}
+
+.gdbv-plug-off .bi-x-lg {
+    position: absolute;
+    right: -0.45em;
+    bottom: -0.2em;
+    font-size: 0.62em;
+    font-weight: 700;
+    color: var(--gdbv-alert);
+}
+
+/* The host, cut short with an ellipsis rather than pushing the button wide (the whole is on hover). */
+.gdbv-conn-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gdbv-plugin-menu {
+    min-width: 14rem;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+/* What the viewer page used to say inline (2026-10-28): its small print on the type scale, pointers and the nudge that
+   sits an inline icon on the text's baseline. */
+.gdbv-text { font-size: var(--gdbv-fs); }
+.gdbv-text-sm { font-size: var(--gdbv-fs-sm); }
+.gdbv-text-xs { font-size: var(--gdbv-fs-xs); }
+.gdbv-text-lg { font-size: var(--gdbv-fs-lg); }
+.gdbv-text-soft { font-size: var(--gdbv-fs-sm); opacity: 0.75; }
+.gdbv-pointer { cursor: pointer; }
+.gdbv-help { cursor: help; line-height: 0; }
+.gdbv-ico { vertical-align: -0.15em; }
+
+/* The VR / AR viewer: a dark backdrop in either theme, and the card with the QR code white in either, since a phone
+   scans the code on it; its text is the light theme's. */
+.gdbv-lightbox { position: fixed; inset: 0; z-index: 1090; display: flex; flex-direction: column; background: rgba(0, 0, 0, 0.88); }
+/* The card stands in from the corner rather than in it, smaller, beside the graph (2026-11-03, the user: it sat too far
+   off to the side). */
+.gdbv-lightbox-card { position: absolute; top: 2rem; right: 2rem; width: 280px; max-width: 40vw; padding: 1rem; border-radius: var(--gdbv-radius-lg); background: rgba(255, 255, 255, 0.96); color: #1f2328; box-shadow: var(--gdbv-shadow-menu); }
+
+/*
+    The guided tour (GuidedTour.razor, 2026-11-03, GDS Viewer's brought across): the page held still under a clear
+    layer, a shade over it with a hole where the part a step is about shows through, and a card beside it.
+    TourInterop.js cuts the hole and puts the card where the part is.
+
+    Over everything the viewer opens, the showcase's 2000 included. The shade lets every click through to the clear
+    layer under it, so the hole is something to look through and not a way in - the page stays as the tour found it.
+*/
+.gdbv-tour-blocker {
+    position: fixed;
+    inset: 0;
+    z-index: 2100;
+}
+
+.gdbv-tour-shade {
+    position: fixed;
+    inset: 0;
+    z-index: 2101;
+    background: rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+    transition: clip-path 0.2s ease;
+}
+
+/*On a dark page the light shade's dimming hardly shows, and nor does the hole in it.*/
+[data-bs-theme="dark"] .gdbv-tour-shade {
+    background: rgba(0, 0, 0, 0.7);
+}
+
+/*Out of sight until TourInterop.js has put it beside its part, so it never shows anywhere it was not put.*/
+.gdbv-tour-card {
+    position: fixed;
+    z-index: 2102;
+    visibility: hidden;
+    width: min(92vw, 22rem);
+    padding: 0.9rem 1rem 0.75rem;
+    border-radius: var(--bs-border-radius-lg);
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border: 1px solid var(--bs-border-color);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+    outline: none;
+}
+
+.gdbv-tour-close {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    font-size: 0.75rem;
+}
+
+.gdbv-tour-title {
+    margin-bottom: 0.35rem;
+    padding-right: 1.5rem;
+    font-weight: 600;
+}
+
+.gdbv-tour-text {
+    color: var(--bs-secondary-color);
+    line-height: 1.45;
+}
+
+.gdbv-tour-foot {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.85rem;
+}
+
+.gdbv-tour-count {
+    margin-right: auto;
+    color: var(--bs-secondary-color);
+    font-size: 0.85em;
+}
+
+.gdbv-tour-button {
+    min-width: 2.25rem;
+}
+
+/*
+    The pictures on a few of the tour's cards - see TourPicture. Node colors are the theme's own, and each moving
+    picture starts again from its beginning when its card comes up, since the element is new.
+*/
+.gdbv-tour-picture {
+    margin: 0.3rem 0 0.6rem;
+}
+
+.gdbv-tour-picture > svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+}
+
+/* A page's own stop's picture (TourStop.Picture), an image or a drawing, laid out as the viewer's are. */
+.gdbv-tour-figure > img,
+.gdbv-tour-figure > svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 0.3rem 0 0.6rem;
+}
+
+.gdbv-tour-panel {
+    fill: var(--bs-tertiary-bg);
+    stroke: var(--bs-border-color);
+}
+
+.gdbv-tour-label {
+    fill: var(--bs-secondary-color);
+    font-size: 11px;
+    text-anchor: middle;
+}
+
+.gdbv-tour-code {
+    fill: var(--bs-body-color);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 9px;
+}
+
+.gdbv-tour-edge {
+    stroke: var(--bs-secondary-color);
+    stroke-opacity: 0.6;
+    stroke-width: 1.5;
+}
+
+.gdbv-tour-rule {
+    stroke: var(--bs-border-color);
+    fill: none;
+}
+
+.gdbv-tour-cell {
+    fill: var(--bs-secondary-color);
+    fill-opacity: 0.35;
+}
+
+.gdbv-tour-node-a { fill: var(--bs-primary); }
+.gdbv-tour-node-b { fill: var(--bs-success); }
+.gdbv-tour-node-c { fill: var(--bs-warning); }
+
+.gdbv-tour-chip {
+    fill: var(--bs-body-bg);
+    stroke: var(--bs-border-color);
+}
+
+.gdbv-tour-bubble {
+    fill: var(--bs-primary);
+    fill-opacity: 0.15;
+    stroke: var(--bs-primary);
+    stroke-opacity: 0.4;
+}
+
+.gdbv-tour-say {
+    fill: var(--bs-body-color);
+    font-size: 11px;
+}
+
+.gdbv-tour-spark {
+    font-size: 12px;
+}
+
+/*3D: the three turn a little either way, as the 3D view does when it is dragged.*/
+.gdbv-tour-spin {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: gdbv-tour-spin 4s ease-in-out infinite alternate;
+}
+
+@keyframes gdbv-tour-spin {
+    from { transform: rotate(-12deg) scale(0.95); }
+    to { transform: rotate(12deg) scale(1.05); }
+}
+
+/*Editing: the node comes, the edge is drawn to it, and the change waits as a query.*/
+.gdbv-tour-pop {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: gdbv-tour-pop 4s ease-out infinite;
+}
+
+@keyframes gdbv-tour-pop {
+    0%, 10% { transform: scale(0); }
+    20%, 100% { transform: scale(1); }
+}
+
+.gdbv-tour-link {
+    stroke-dasharray: 1;
+    animation: gdbv-tour-link 4s ease-out infinite;
+}
+
+@keyframes gdbv-tour-link {
+    0%, 25% { stroke-dashoffset: 1; }
+    45%, 100% { stroke-dashoffset: 0; }
+}
+
+.gdbv-tour-staged {
+    animation: gdbv-tour-show 4s ease-out infinite;
+}
+
+@keyframes gdbv-tour-show {
+    0%, 50% { opacity: 0; }
+    62%, 100% { opacity: 1; }
+}
+
+/*Ask AI: the words, then the query.*/
+.gdbv-tour-answer {
+    animation: gdbv-tour-show 4s ease-out infinite;
+}
+
+/*Less motion asked for: each picture as it ends, held.*/
+@media (prefers-reduced-motion: reduce) {
+    .gdbv-tour-spin,
+    .gdbv-tour-pop,
+    .gdbv-tour-link,
+    .gdbv-tour-staged,
+    .gdbv-tour-answer {
+        animation: none;
+    }
+}
+
+/*A part's name in AI settings, the size of a small heading, with its icon in front (2026-11-03, as GDS Viewer's).*/
+.gdbv-ai-settings-title {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+}
+
+/* Google's credit in the canvas corner (2026-11-07): the clear space its Map Tiles API policies ask around its logo, 10 px
+   beside and above and 5 below; the logo 18 px high, inside the 16 to 19 asked; the dark gray logo on the light theme's
+   plain box and the white one on the dark theme's. The box is translucent, the logo is not. */
+.gdbv-google-credit {
+    padding: 10px 10px 5px 10px;
+    gap: 10px;
+    background: rgba(var(--bs-body-bg-rgb), 0.92);
+}
+
+.gdbv-google-logo {
+    height: 18px;
+    width: auto;
+    flex: none;
+}
+
+.gdbv-google-logo-on-dark {
+    display: none;
+}
+
+[data-bs-theme="dark"] .gdbv-google-logo-on-light {
+    display: none;
+}
+
+[data-bs-theme="dark"] .gdbv-google-logo-on-dark {
+    display: inline;
 }

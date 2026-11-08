@@ -176,7 +176,7 @@ public partial class Home
         if (data.ValueKind == JsonValueKind.Undefined)
             return;
 
-        geoCoverage = GraphDataConverter.GeoCoverage(data);
+        geoCoverage = GraphDataConverter.GeoCoverage(data, labelStyles);
     }
 
     //Whether the 3D "Label options" dropdown is open. Transient view state, so it is a plain field rather
@@ -227,6 +227,20 @@ public partial class Home
 
         await SaveTabsAsync();
         await GraphView.Set3dNodeDrawDistanceAsync(draw3dNodeDistance);
+    }
+
+    //Node size on map, the smallest and largest (2026-11-06, the user): on the Map and the Globe the nodes keep one size
+    //on the screen as the view zooms, and this sets that size, in place of the node distance's slider.
+    public const int MapNodeSizeLeast = 25;
+    public const int MapNodeSizeMost = 300;
+
+    private async Task OnMapNodeSizeChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+            mapNodeSize = Math.Clamp(value, MapNodeSizeLeast, MapNodeSizeMost);
+
+        await SaveTabsAsync();
+        await GraphView.SetMapNodeSizeAsync(mapNodeSize);
     }
 
     //The Map and the Globe are the 2D and 3D views under a geographic layout, not views of their own:
@@ -346,16 +360,350 @@ public partial class Home
         StateHasChanged();
     }
 
+    //Where the earth comes from: the built-in images, or the tile server set in Settings under Map tiles (2026-11-05). Read
+    //before each draw and again whenever the setting changes, so a map on screen changes its earth at once.
+    private MapTileSettings mapTiles = new();
+
+    //How the tile server is answering, as the canvases report it: null until a tile has come or failed, then "ready" or
+    //"failed" (one failed and none has come).
+    private string mapTilesState;
+
+    //Why Google's tiles cannot be drawn, when its session could not be had (2026-11-07): said in the canvas corner, the
+    //built-in earth drawn meanwhile.
+    private string mapTilesProblem;
+
+    //What the canvases are told: null for the built-in earth, else the template and the key that goes into it. Google's
+    //template is its tiles under the session made for it; with no session there is nothing to draw from.
+    private object TileSource()
+    {
+        if (!mapTiles.IsOn)
+            return null;
+
+        if (mapTiles.IsGoogle)
+        {
+            if (string.IsNullOrEmpty(mapTiles.Session))
+                return null;
+
+            return new { template = GoogleMapTiles.TilesTemplate(mapTiles.Session), key = mapTiles.Key, viewport = true, keep = mapTiles.KeepInMemory };
+        }
+
+        return new { template = mapTiles.Url, key = mapTiles.Key, keep = mapTiles.KeepInMemory };
+    }
+
+    //What the earth's tiles come from, the memory switch aside, so a change of it alone can be told apart.
+    private string TilesDrawnFrom()
+    {
+        if (!TilesDrawn)
+            return "";
+
+        return $"{mapTiles.Provider}\n{mapTiles.Url}\n{mapTiles.Key}\n{mapTiles.Session}";
+    }
+
+    //Whether the earth is drawn from tiles now: a server chosen, and for Google a session to draw under.
+    private bool TilesDrawn => TileSource() != null;
+
+    //The setting as it is to be drawn: for Google with its session made ready, or why it could not be.
+    private async Task ReadMapTilesAsync()
+    {
+        var (settings, problem) = await Shell.MapTiles.ReadyAsync(Http, CultureInfo.CurrentUICulture, DateTimeOffset.UtcNow);
+
+        mapTiles = settings;
+        mapTilesProblem = problem;
+    }
+
+    private async Task OnMapTilesChangedAsync()
+    {
+        var before = TilesDrawnFrom();
+
+        await ReadMapTilesAsync();
+
+        //The memory switch alone changes no tile: what the canvases said of them, and Google's copyright, stand.
+        if (TilesDrawnFrom() != before)
+        {
+            mapTilesState = null;
+            googleViewAsked = null;
+            googleCopyright = "";
+        }
+
+        await GraphView.SetMapTilesAsync(TileSource());
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public void OnMapTiles(string state)
+    {
+        mapTilesState = state;
+        StateHasChanged();
+    }
+
+    //The view Google's copyright was last asked for, and what Google answered: the words beside its logo (2026-11-07).
+    private GoogleTileView googleViewAsked;
+    private string googleCopyright = "";
+
+    ///<summary>
+    ///A canvas drawing Google's tiles says what it shows, a moment after the view settles (geoTileViewReporter): its
+    ///copyright is asked of Google for that view, as Google's policies ask it be shown, and only the answer for the view
+    ///still asked about is drawn. The view moving is also the page in use, so a session near its end is made again here
+    ///and the canvases given its tiles.
+    ///</summary>
+    [JSInvokable]
+    public async Task OnMapTileView(int zoom, double west, double east, double north, double south)
+    {
+        if (!mapTiles.IsOn || !mapTiles.IsGoogle)
+            return;
+
+        var session = mapTiles.Session;
+
+        await ReadMapTilesAsync();
+
+        if (mapTiles.Session != session)
+            await GraphView.SetMapTilesAsync(TileSource());
+
+        if (string.IsNullOrEmpty(mapTiles.Session))
+            return;
+
+        var view = new GoogleTileView(zoom, west, east, north, south);
+
+        if (view == googleViewAsked)
+            return;
+
+        googleViewAsked = view;
+
+        var (copyright, problem) = await GoogleMapTiles.ViewportAsync(Http, mapTiles.Session, mapTiles.Key, view, CancellationToken.None);
+
+        if (problem != null || view != googleViewAsked)
+            return;
+
+        googleCopyright = copyright;
+        StateHasChanged();
+    }
+
+    //The provider's credit in the canvas's other corner: above the 3D view's VR / AR button, and clear of the
+    //graticule's bottom row of degrees on the map, as the coverage line is.
+    //Map tiles' window, opened from the Map's and the Globe's dropdown.
+    private bool showMapTiles;
+
+    private void OpenMapTiles()
+    {
+        show2dOptions = false;
+        show3dOptions = false;
+        showLayers = false;
+        showMapTiles = true;
+    }
+
+    //The layers menu in the Map's and the Globe's top right corner.
+    private bool showLayers;
+
+    //Find a place, the button under the layers button (2026-11-06, the user): what is typed is looked up at the geocoder only
+    //when Enter or the button says so, the view is taken to what it found with a pin on it, and its coordinates are there
+    //to copy. The pin stays until the box is closed.
+    private bool showPlaceSearch;
+    private string placeQuery = "";
+    private bool placeSearching;
+    private GeoHit placeHit;
+    private bool placeCopied;
+    private bool focusPlaceBox;
+    private ElementReference placeBox;
+    private CancellationTokenSource placeCancel;
+
+    //The geocoder Map settings names (2026-11-06, the user), read as the box opens so the line under it says where the words go.
+    private string placeGeocoder = Geocoding.DefaultEndpoint;
+
+    //The place found, as latitude and longitude in the invariant degrees the viewer stores.
+    private string PlaceCoordinates => $"{Geocoding.Degrees(placeHit.Latitude)}, {Geocoding.Degrees(placeHit.Longitude)}";
+
+    private async Task TogglePlaceSearchAsync()
+    {
+        showLayers = false;
+
+        if (showPlaceSearch)
+            await ClosePlaceSearchAsync();
+        else
+        {
+            showPlaceSearch = true;
+            focusPlaceBox = true;
+            placeGeocoder = await Shell.Geocoder.GetAsync();
+        }
+    }
+
+    //Closes the box and takes the pin away, from both views: one may have been found on the Map and the Globe be up now.
+    private async Task ClosePlaceSearchAsync()
+    {
+        showPlaceSearch = false;
+        placeCancel?.Cancel();
+
+        try
+        {
+            await JS.InvokeVoidAsync("clearCytoscapePlace");
+        }
+        catch { }
+
+        try
+        {
+            await JS.InvokeVoidAsync("graph3DInterop.clearGlobePlace");
+        }
+        catch { }
+    }
+
+    private void OnPlaceInput(ChangeEventArgs e)
+    {
+        placeQuery = e.Value?.ToString() ?? "";
+    }
+
+    private async Task OnPlaceKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SearchPlaceAsync();
+        else if (e.Key == "Escape")
+            await ClosePlaceSearchAsync();
+    }
+
+    //One lookup, the newest only: a search started while another is on its way cancels it.
+    private async Task SearchPlaceAsync()
+    {
+        var query = placeQuery.Trim();
+
+        if (query.Length == 0)
+            return;
+
+        placeCancel?.Cancel();
+        placeCancel = new CancellationTokenSource();
+
+        var cancel = placeCancel;
+
+        placeSearching = true;
+        placeHit = null;
+        placeCopied = false;
+        StateHasChanged();
+
+        GeoHit hit;
+
+        try
+        {
+            placeGeocoder = await Shell.Geocoder.GetAsync();
+            hit = await Geocoding.LookupAsync(Http, placeGeocoder, query, cancel.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            if (cancel == placeCancel)
+                placeSearching = false;
+        }
+
+        if (cancel != placeCancel || !showPlaceSearch)
+            return;
+
+        placeHit = hit;
+
+        if (hit.Located)
+            await GoToPlaceAsync();
+    }
+
+    //Takes the view that is up to the place found and pins it there.
+    private async Task GoToPlaceAsync()
+    {
+        if (placeHit == null || !placeHit.Located)
+            return;
+
+        try
+        {
+            if (IsMap)
+                await JS.InvokeVoidAsync("showCytoscapePlace", placeHit.Latitude, placeHit.Longitude, placeHit.Span);
+            else if (IsGlobe)
+                await JS.InvokeVoidAsync("graph3DInterop.showGlobePlace", placeHit.Latitude, placeHit.Longitude, placeHit.Span);
+        }
+        catch { }
+    }
+
+    private async Task CopyPlaceAsync()
+    {
+        if (placeHit == null || !placeHit.Located)
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", PlaceCoordinates);
+            placeCopied = true;
+        }
+        catch { }
+    }
+
+    //The built-in earth in the look chosen: a tile server kept is kept for later, as Map tiles' Built-in map keeps it.
+    private async Task ChooseBuiltInLayerAsync(string style)
+    {
+        showLayers = false;
+
+        await Shell.MapTiles.SetBuiltInAsync(true);
+        await SetMapStyle(style);
+    }
+
+    //High resolution in the layers menu, ticked or not. Ticked again after its download failed, it stays ticked and is tried
+    //again, as choosing it again always did.
+    private async Task ToggleHighResolutionAsync()
+    {
+        showLayers = false;
+
+        if (mapDetail == HighDetail && detailedEarth != "failed")
+            await SetMapDetail(StandardDetail);
+        else
+            await SetMapDetail(HighDetail);
+    }
+
+    //A free server, drawn from at once. It takes the place of a server of one's own, as choosing it in Map tiles does.
+    private async Task ChooseTileLayerAsync(MapTilePreset preset)
+    {
+        showLayers = false;
+
+        var problem = await Shell.MapTiles.SetAsync(preset.Url, null);
+
+        if (problem == null)
+            await Shell.MapTiles.SetBuiltInAsync(false);
+    }
+
+    //Where the canvas's zoom buttons stand: in 3D well over VR / AR, in that corner too (2026-11-05, the user: a bit more room
+    //between them), and over the grid's ruler in 2D.
+    private string ZoomControlsBottom
+    {
+        get
+        {
+            if (visualizationMode == 3)
+                return "60px";
+            else if (gridMode)
+                return "30px";
+
+            return "12px";
+        }
+    }
+
+    private string TileCreditBottom
+    {
+        get
+        {
+            if (IsMap && gridMode)
+                return "30px";
+
+            return "12px";
+        }
+    }
+
     //What the geographic layout found in the loaded graph: how many vertices it could place, out of how
     //many there are. Refreshed by the render, for the sentence beside the layout picker.
     private (int Located, int Total) geoCoverage;
+
+    //What the coverage line said when its cross put it away; it comes back once it says something else.
+    private string geoStatusDismissed;
+
+    private string GeoStatusKey => GeoStatus + "|" + EarthStatus;
 
     private string GeoStatus
     {
         get
         {
             if (geoCoverage.Located == 0)
-                return "No vertex carries a latitude and longitude — under lat/latitude and lon/lng/longitude, or a single location, coordinates or point property.";
+                return "No vertex carries a latitude and longitude — under lat/latitude and lon/lng/longitude, or a single location, coordinates or point property. Name the properties under Coordinates in the Style dialog if they are called something else.";
 
             if (geoCoverage.Located < geoCoverage.Total)
                 return $"{geoCoverage.Located} of {geoCoverage.Total} vertices carry coordinates; the rest are hidden here.";
@@ -371,13 +719,28 @@ public partial class Home
     {
         get
         {
+            //From tiles, the only thing to say is that none are coming: a wrong URL, or a server that does not let
+            //another site read its tiles, which the browser refuses without saying why; or, from Google, that it would
+            //make no session, in its own words, or sent no tiles under the one it made.
+            if (mapTiles.IsOn)
+            {
+                if (mapTilesProblem != null)
+                    return $"{mapTilesProblem} The built-in map is drawn meanwhile. Check the key under Settings, Map settings.";
+
+                if (mapTilesState == "failed" && mapTiles.IsGoogle)
+                    return "Google sent no tiles. Check under Settings, Map settings that the key may use the Map Tiles API, and that its project has billing on.";
+                else if (mapTilesState == "failed")
+                    return "The tile server sent no tiles. Check its URL under Settings, Map settings, and that it lets other sites read its tiles (CORS).";
+
+                return null;
+            }
+
             if (mapStyle == OutlineStyle || mapDetail != HighDetail)
                 return null;
 
             if (detailedEarth == "loading")
                 return "Downloading the high-resolution earth (3.7 MB); the standard one shows until it arrives.";
-
-            if (detailedEarth == "failed")
+            else if (detailedEarth == "failed")
                 return "The high-resolution earth could not be downloaded, so this is the standard one. Choose High resolution again to retry.";
 
             return null;
@@ -406,19 +769,16 @@ public partial class Home
 
             return;
         }
-
-        if (mode == GlobeMode)
+        else if (mode == GlobeMode)
         {
             visualizationMode = 3;
             g3dLayout = GlobeLayout;
 
             return;
         }
-
-        if (mode == 2 && cy2dLayout == GeoLayout)
+        else if (mode == 2 && cy2dLayout == GeoLayout)
             cy2dLayout = "cose";
-
-        if (mode == 3 && g3dLayout == GlobeLayout)
+        else if (mode == 3 && g3dLayout == GlobeLayout)
             g3dLayout = "force";
 
         visualizationMode = mode;
@@ -467,12 +827,12 @@ public partial class Home
 
             if (visualizationMode == 2)
             {
-                var elementsJson = GraphDataConverter.ToCytoscapeJson(effective, labelStyles, edgeColorMode, edgeColors);
+                var elementsJson = GraphDataConverter.ToCytoscapeJson(effective, labelStyles, edgeColorMode, edgeColors, ActiveOverlay(), edgeDetails);
                 await JS.InvokeVoidAsync("syncCytoscapeGraph", elementsJson);
             }
             else if (visualizationMode == 3)
             {
-                var graphJson = GraphDataConverter.ToForceGraphJson(effective, labelStyles, edgeColorMode, edgeColors);
+                var graphJson = GraphDataConverter.ToForceGraphJson(effective, labelStyles, edgeColorMode, edgeColors, ActiveOverlay(), edgeDetails);
                 await JS.InvokeVoidAsync("graph3DInterop.syncData", graphJson);
             }
         }
@@ -491,8 +851,15 @@ public partial class Home
     {
         var data = EffectiveData();
 
+        //A result the viewer cannot read is drawn as nothing, but it is the tab's result all the same, and kept with
+        //it as a drawn one is at the end of the draw, so the tab reopens on it after a reload.
         if (data.ValueKind == JsonValueKind.Undefined)
+        {
+            if (ResultProblem() != null)
+                await SaveTabsAsync();
+
             return;
+        }
 
         selectedElement = null;
         hasPropertyChanges = false;
@@ -504,6 +871,20 @@ public partial class Home
         await Task.Yield();
         StateHasChanged();
         await Task.Delay(50);
+
+        //Read the graph again on the far side of the wait. Anything staged while this render was in
+        //flight - a delete pressed a moment after whatever started it - belongs to the graph this is
+        //about to draw, and drawing what was read BEFORE the wait puts that edit silently back on the
+        //canvas. It stays staged and still commits, so the canvas ends up disagreeing with what Commit
+        //would do: the one thing previewing exists not to do. Found 2026-09-16, where it showed up as a
+        //Delete that appeared to do nothing at all.
+        data = EffectiveData();
+
+        if (data.ValueKind == JsonValueKind.Undefined)
+            return;
+
+        //And the geographic sentence counts the same graph the draw is using, for the same reason.
+        RefreshGeoCoverage();
 
         try
         {
@@ -521,21 +902,29 @@ public partial class Home
             if (ShowGraphCanvas && visualizationMode == 2)
             {
                 await JS.InvokeVoidAsync("setCytoscapeDotNetRef", SelfRef());
-                var elementsJson = GraphDataConverter.ToCytoscapeJson(data, labelStyles, edgeColorMode, edgeColors);
+                var elementsJson = GraphDataConverter.ToCytoscapeJson(data, labelStyles, edgeColorMode, edgeColors, ActiveOverlay(), edgeDetails);
+                await ReadMapTilesAsync();
+                await JS.InvokeVoidAsync("setCytoscapeMapTiles", TileSource());
                 await JS.InvokeVoidAsync("setCytoscapeMapStyle", mapStyle);
                 await JS.InvokeVoidAsync("setCytoscapeMapDetail", mapDetail, false);
+                await JS.InvokeVoidAsync("setCytoscapeMapNodeSize", mapNodeSize);
                 await JS.InvokeVoidAsync("drawCytoscapeGraph", elementsJson, "cyGraph", cy2dLayout);
 
-                //A redraw builds a fresh Cytoscape instance, so re-apply grid mode if it's on.
+                //A redraw builds a fresh Cytoscape instance, so re-apply grid mode if it's on, at its size.
+                await JS.InvokeVoidAsync("setCytoscapeGridSize", gridSize);
+
                 if (gridMode)
                     await JS.InvokeVoidAsync("setCytoscapeGridMode", true);
             }
             else if (show3d)
             {
                 await JS.InvokeVoidAsync("graph3DInterop.setDotNetRef", SelfRef());
-                var graphJson = GraphDataConverter.ToForceGraphJson(data, labelStyles, edgeColorMode, edgeColors);
+                var graphJson = GraphDataConverter.ToForceGraphJson(data, labelStyles, edgeColorMode, edgeColors, ActiveOverlay(), edgeDetails);
+                await ReadMapTilesAsync();
+                await JS.InvokeVoidAsync("graph3DInterop.setGlobeTiles", TileSource());
                 await JS.InvokeVoidAsync("graph3DInterop.setGlobeStyle", mapStyle);
                 await JS.InvokeVoidAsync("graph3DInterop.setGlobeDetail", mapDetail, false);
+                await JS.InvokeVoidAsync("graph3DInterop.setGlobeNodeSize", mapNodeSize);
                 await JS.InvokeVoidAsync("graph3DInterop.drawGraph", "graph3d", graphJson, g3dLayout);
                 await JS.InvokeVoidAsync("graph3DInterop.setLabelVisibility", show3dVertexLabels, show3dEdgeLabels, show3dProps);
                 await JS.InvokeVoidAsync("graph3DInterop.setLabelDrawDistance", draw3dLabelDistance);
@@ -576,7 +965,7 @@ public partial class Home
     #region Saved node positions
 
     //Captures the current node arrangement from the live 2D / 3D view and stages property-set
-    //queries (gdbvX / gdbvY / gdbvZ) into the Generated buffer for the user to review and commit.
+    //queries (gdbvX / gdbvY in 2D, gdbvX3d / gdbvY3d / gdbvZ3d in 3D) into the Generated buffer for the user to review and commit.
     private async Task SavePositionsAsync()
     {
         var json = await GraphView.GetPositionsAsync();
@@ -706,7 +1095,8 @@ public partial class Home
                     continue;
 
                 double? z = null;
-                if (zKey != null && n.Properties.TryGetValue(zKey, out var zs)
+                if (zKey != null
+                    && n.Properties.TryGetValue(zKey, out var zs)
                     && double.TryParse(zs, NumberStyles.Any, CultureInfo.InvariantCulture, out var zv))
                     z = zv;
 

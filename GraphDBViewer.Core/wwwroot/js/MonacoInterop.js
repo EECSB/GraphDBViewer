@@ -67,8 +67,8 @@ window.monacoInterop = (function () {
         //importScripts the real workerMain with the right base URL.
         window.MonacoEnvironment = {
             getWorkerUrl: function () {
-                const js = "self.MonacoEnvironment={baseUrl:'" + monacoRootUrl() + "'};" +
-                    "importScripts('" + vs + "/base/worker/workerMain.js');";
+                const js = `self.MonacoEnvironment={baseUrl:'${monacoRootUrl()}'};
+                    importScripts('${vs}/base/worker/workerMain.js');`;
                 return URL.createObjectURL(new Blob([js], { type: 'text/javascript' }));
             }
         };
@@ -82,6 +82,7 @@ window.monacoInterop = (function () {
                     registerDql();
                     registerJsonView();
                     registerGunJs();
+                    watchTheme();
                     resolve();
                 });
             });
@@ -637,6 +638,21 @@ window.monacoInterop = (function () {
         return 'vs';
     }
 
+    //The editors follow the page's theme on their own: the attribute the shell sets (data-bs-theme) is watched, so a
+    //change reaches an editor made before it, whichever way the attribute was set. Theme changes are global to Monaco,
+    //so one call restyles the query editor and the results viewer both.
+    let themeWatch = null;
+
+    function watchTheme() {
+        if (themeWatch)
+            return;
+
+        themeWatch = new MutationObserver(function () {
+            monaco.editor.setTheme(currentTheme());
+        });
+        themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-bs-theme'] });
+    }
+
     return {
         //Creates (or recreates) the single editor inside the given element and binds it to a
         //Blazor component reference; content changes are pushed back via OnMonacoChanged.
@@ -694,12 +710,11 @@ window.monacoInterop = (function () {
                     return;
 
                 const offset = editor.getModel().getOffsetAt(e.target.position);
-                for (let i = 0; i < debugRanges.length; i++) {
+                for (let i = 0; i < debugRanges.length; i++)
                     if (offset >= debugRanges[i].start && offset < debugRanges[i].end) {
                         dotNetRef.invokeMethodAsync('OnDebugStepClicked', i);
                         return;
                     }
-                }
             });
         },
 
@@ -708,15 +723,17 @@ window.monacoInterop = (function () {
                 editor.updateOptions({ readOnly: !!readOnly });
         },
 
-        //Underlines each debuggable step (the active one stronger) and enables click-to-focus. cursorJson, when
-        //set, is the [start,end] of a nested sub-traversal step the cursor stepped into — highlighted distinctly.
+        //Underlines each debuggable step (the active one stronger) and enables click-to-focus. A range's third value,
+        //once the step has run, is its count, drawn after the step: where the traversal grows, thins or loses
+        //everything shows in the query itself. cursorJson, when set, is the [start,end] of a nested sub-traversal step
+        //the cursor stepped into — highlighted distinctly.
         setDebug: function (rangesJson, activeIndex, cursorJson) {
             if (!editor)
                 return;
 
             const parsed = JSON.parse(rangesJson);
             debugRanges = parsed.map(function (r) {
-                return { start: r[0], end: r[1] };
+                return { start: r[0], end: r[1], count: r[2] };
             });
 
             const model = editor.getModel();
@@ -728,9 +745,22 @@ window.monacoInterop = (function () {
                 if (i === activeIndex)
                     cls = 'debug-step debug-step-active';
 
+                const options = { inlineClassName: cls };
+
+                if (r.count !== undefined && r.count !== null) {
+                    let countCls = 'debug-step-count';
+
+                    if (r.count === '0')
+                        countCls = 'debug-step-count debug-step-count-zero';
+                    else if (r.count === 'error')
+                        countCls = 'debug-step-count debug-step-count-error';
+
+                    options.after = { content: r.count, inlineClassName: countCls };
+                }
+
                 return {
                     range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
-                    options: { inlineClassName: cls }
+                    options: options
                 };
             });
 
@@ -799,7 +829,7 @@ window.monacoInterop = (function () {
 
         //Creates (or recreates) a separate READ-ONLY editor for viewing text (the JSON results view).
         //It's independent of the main query editor, so both can be on screen at the same time. Theme
-        //changes are global (monaco.editor.setTheme), so setTheme already covers this one too.
+        //changes are global (monaco.editor.setTheme), so the theme watch covers this one too.
         createViewer: async function (elementId, text) {
             try {
                 await ensureMonaco();
@@ -849,16 +879,6 @@ window.monacoInterop = (function () {
                 viewerEditor.dispose();
                 viewerEditor = null;
             }
-        },
-
-        setTheme: function (isDark) {
-            if (!window.monaco)
-                return;
-
-            if (isDark)
-                monaco.editor.setTheme('vs-dark');
-            else
-                monaco.editor.setTheme('vs');
         },
 
         dispose: function () {

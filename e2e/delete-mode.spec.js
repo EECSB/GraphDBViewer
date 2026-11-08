@@ -6,7 +6,7 @@
 //`tap` node handler (which captures the highlighted group into the click payload) without depending on
 //node coordinates — the offline force layout can stall with every node stacked at the origin.
 const { test, expect } = require('@playwright/test');
-const { gotoApp, loadSampleGraph, cyPositions, waitForStableLayout } = require('./helpers');
+const { gotoApp, loadSampleGraph, expectCanvasHolds, waitForStableLayout } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
     await gotoApp(page);
@@ -31,8 +31,7 @@ test('clicking one of several highlighted nodes deletes the whole group', async 
 
     //Both highlighted nodes (and their incident edges) are staged for deletion and — with preview on —
     //leave the canvas; the three un-highlighted nodes stay. Before the fix only the clicked node was dropped.
-    await expect.poll(async () => (await cyPositions(page)).map(p => p.id).sort())
-        .toEqual(['Acme', 'Carol', 'Globex']);
+    await expectCanvasHolds(page, ['Acme', 'Carol', 'Globex']);
 });
 
 test('clicking a node with nothing else highlighted deletes just that node', async ({ page }) => {
@@ -43,6 +42,5 @@ test('clicking a node with nothing else highlighted deletes just that node', asy
         cy.getElementById('Carol').emit('tap');
     });
 
-    await expect.poll(async () => (await cyPositions(page)).map(p => p.id).sort())
-        .toEqual(['Acme', 'Alice', 'Bob', 'Globex']);
+    await expectCanvasHolds(page, ['Acme', 'Alice', 'Bob', 'Globex']);
 });

@@ -45,7 +45,7 @@
     @if (ShowSsl)
     {
         <div class="form-check form-switch mb-0">
-            <input class="form-check-input" type="checkbox" role="switch" id="@sslToggleId" @bind="Connection.UseSSL" disabled="@Disabled" />
+            <input class="form-check-input" type="checkbox" role="switch" id="@sslToggleId" @bind="Connection.UseSSL" @bind:after="SslChangedAsync" disabled="@Disabled" />
             <label class="form-check-label" for="@sslToggleId">SSL</label>
         </div>
 
@@ -61,7 +61,7 @@
 {
     @* Reached by pressing Server on a build with no host. Rather than hide the choice, the button says
        what the choice would be and where to get it. Nothing on the connection is changed. *@
-    <div class="alert alert-warning mt-2 mb-0 py-2 px-3 gdbv-route-note" style="font-size: 0.8em;">
+    <div class="gdbv-text-sm alert alert-warning mt-2 mb-0 py-2 px-3 gdbv-route-note">
         @* One wrapper, so the box can center what is in it without the text inside becoming rows of its
            own: a flex container turns every child into an item, and the warning sign, the bold lead and
            the sentence after it are three children. *@
@@ -74,7 +74,7 @@
 
 @if (ShowRouteNote)
 {
-<div class="alert alert-warning mt-2 mb-0 py-2 px-3 gdbv-route-note" style="font-size: 0.8em;">
+<div class="gdbv-text-sm alert alert-warning mt-2 mb-0 py-2 px-3 gdbv-route-note">
     <div>
     @if (!ShowRoute)
     {
@@ -85,13 +85,13 @@
     {
         @*The host is there and this account may not use it: the pair of buttons is gone, and the note
           says what would bring it back before it describes the route that is left.*@
-        <span>⚠ Your account cannot route connections through the host — that takes the <code>connections.route</code> permission, which an administrator grants through a role. Your browser opens this connection instead, so the database has to be reachable from this machine and must return CORS headers for this origin (or sit behind a proxy that does). On an https page it must use SSL too.</span>
+        <span>⚠ Your account cannot route connections through the host — that takes the <code>connections.route</code> permission, which an administrator grants through a role. Your browser opens this connection instead, so the database has to be reachable from this machine and must return CORS headers for this origin (or sit behind a proxy that does). On an https page it must use SSL too. If this page is a public website and the database is on this computer or your local network, the browser may also ask for your permission to reach it, and some browsers refuse outright.</span>
     }
     else
     {
         @*Only the browser route is left to describe: the host route says nothing (see ShowRouteNote), and
           it is the only other thing this can be.*@
-        <span>⚠ Your browser opens the connection, so the database has to be reachable from this machine and must return CORS headers for this origin (or sit behind a proxy that does). On an https page it must use SSL too.</span>
+        <span>⚠ Your browser opens the connection, so the database has to be reachable from this machine and must return CORS headers for this origin (or sit behind a proxy that does). On an https page it must use SSL too. If this page is a public website and the database is on this computer or your local network, the browser may also ask for your permission to reach it, and some browsers refuse outright.</span>
     }
     </div>
 </div>
@@ -130,6 +130,12 @@
     ///</summary>
     [Parameter] public EventCallback<bool> OnRouteUnavailable { get; set; }
 
+    ///<summary>
+    ///Raised after the SSL switch is flipped, so the page can keep a saved password to the transport it was
+    ///saved with: the switch writes the connection itself, and the password is the page's to hold back.
+    ///</summary>
+    [Parameter] public EventCallback OnSslChanged { get; set; }
+
     private bool showServerEditionNote;
 
     ///<summary>
@@ -163,11 +169,6 @@
         }
     }
 
-    ///<summary>
-    ///Whether the pair of buttons is worth drawing. True when the host really offers both routes, and also
-    ///on a build with no host that can at least say where to find one — there the Server button explains
-    ///itself instead of connecting. False only when neither holds, which would leave a dead button.
-    ///</summary>
     ///<summary>
     ///Which of the two buttons is lit. Where a host exists that is simply the connection's own route.
     ///Where one does not, the connection is pinned to the browser and cannot say — so the press itself
@@ -213,6 +214,12 @@
         }
     }
 
+    ///<summary>
+    ///Whether the pair of buttons is worth drawing. True when the host really offers both routes, and also
+    ///on a build with no host that can at least say where to find one — there the Server button explains
+    ///itself instead of connecting. False when neither holds, which would leave a dead button, and for an
+    ///account the host would refuse.
+    ///</summary>
     private bool RouteChoiceOffered
     {
         get
@@ -245,6 +252,11 @@
         showServerEditionNote = false;
         Connection.ViaServer = false;
         await OnRouteUnavailable.InvokeAsync(false);
+    }
+
+    private Task SslChangedAsync()
+    {
+        return OnSslChanged.InvokeAsync();
     }
 
     //Unique per instance so the checkbox/label pairing works when more than one renders at once.

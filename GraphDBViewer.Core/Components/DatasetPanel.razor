@@ -17,11 +17,11 @@
 
 <div class="card gdbv-tint p-2" data-testid="dataset-panel" data-dataset="@Key">
     <div class="d-flex align-items-baseline gap-2 flex-wrap">
-        <strong style="font-size: .85rem;">@Title</strong>
+        <strong class="gdbv-text">@Title</strong>
 
         @if (rows != null && rows.Rows.Count > 0)
         {
-            <span class="text-body-secondary" style="font-size: .75rem;">
+            <span class="gdbv-text-sm text-body-secondary">
                 @rows.Rows.Count row@(rows.Rows.Count == 1 ? "" : "s")@(rows.Capped ? ", the most recent" : "")
             </span>
         }
@@ -29,31 +29,38 @@
         @*The window. "Recent" is the default and is not a window at all — the newest rows whenever they
            were — because a sensor that stopped publishing last week should still draw something rather
            than an empty hour.*@
-        <select class="form-select form-select-sm py-0 ms-auto" style="font-size: .72rem; width: auto;" @onchange="WindowChangedAsync" disabled="@busy" data-testid="dataset-window">
+        <select class="gdbv-text-xs w-auto form-select form-select-sm py-0 ms-auto" @onchange="WindowChangedAsync" disabled="@busy" data-testid="dataset-window">
             @foreach (var offered in DatasetsContract.Windows)
             {
                 <option value="@offered.Name" selected="@(offered.Window == window)">@offered.Name</option>
             }
         </select>
 
-        <button type="button" class="btn btn-outline-secondary btn-sm py-0" style="font-size: .72rem;" disabled="@busy" @onclick="LoadAsync" data-testid="dataset-refresh">Refresh</button>
+        <button type="button" class="gdbv-text-xs btn btn-outline-secondary btn-sm py-0" disabled="@busy" @onclick="LoadAsync" data-testid="dataset-refresh">Refresh</button>
     </div>
+
+    @*What the rows leave out, said with them (2026-09-24). One file of a table kept as files that cannot be drawn
+       no longer blanks the rest, and the rest drawn without a word would be taken for the whole dataset.*@
+    @if (rows != null && rows.Problem == null && !string.IsNullOrWhiteSpace(rows.Note))
+    {
+        <p class="gdbv-text-xs text-body-secondary mb-0 mt-1" data-testid="dataset-note">@rows.Note</p>
+    }
 
     @if (busy && rows == null)
     {
-        <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;">Reading…</p>
+        <p class="gdbv-text-sm text-body-secondary mb-0 mt-1">Reading…</p>
     }
     else if (rows != null && rows.Problem != null)
     {
         @*A sentence where the dataset is drawn, never a failure of the page around it: this panel sits
            on a canvas beside things that are working.*@
-        <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;" data-testid="dataset-problem">@rows.Problem</p>
+        <p class="gdbv-text-sm text-body-secondary mb-0 mt-1" data-testid="dataset-problem">@rows.Problem</p>
     }
     else if (rows != null && rows.Rows.Count == 0)
     {
         @if (window == null)
         {
-            <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;" data-testid="dataset-empty">
+            <p class="gdbv-text-sm text-body-secondary mb-0 mt-1" data-testid="dataset-empty">
                 Nothing has arrived yet. The dataset exists and its payload is empty.
             </p>
         }
@@ -61,7 +68,7 @@
         {
             @*A DIFFERENT SENTENCE, and the difference matters: one says the sensor never started, this
                says it has said nothing lately. Collapsing them would hide a line that went quiet.*@
-            <p class="text-body-secondary mb-0 mt-1" style="font-size: .78rem;" data-testid="dataset-quiet">
+            <p class="gdbv-text-sm text-body-secondary mb-0 mt-1" data-testid="dataset-quiet">
                 Nothing in the @WindowName.ToLowerInvariant(). There are readings outside it.
             </p>
         }
@@ -82,7 +89,7 @@
             }
         </svg>
 
-        <div class="d-flex justify-content-between text-body-secondary" style="font-size: .68rem;">
+        <div class="gdbv-text-xs d-flex justify-content-between text-body-secondary">
             <span>@Moment(Low)</span>
             <span>@Span</span>
             <span>@Moment(High_)</span>
@@ -90,7 +97,7 @@
 
         @if (Lines().Count > 1)
         {
-            <div class="d-flex gap-2 flex-wrap mt-1" style="font-size: .68rem;" data-testid="dataset-legend">
+            <div class="gdbv-text-xs d-flex gap-2 flex-wrap mt-1" data-testid="dataset-legend">
                 @foreach (var line in Lines())
                 {
                     <span class="text-body-secondary">
@@ -106,7 +113,7 @@
         @*A table, for a dataset with no ordering column — and for a series of WORDS, which has an order
            but nothing to plot: a chart of "open" and "closed" is a chart of nothing.*@
         <div class="table-responsive mt-1" style="max-height: 9rem;">
-            <table class="table table-sm mb-0" style="font-size: .72rem;" data-testid="dataset-table">
+            <table class="gdbv-text-xs table table-sm mb-0" data-testid="dataset-table">
                 <thead>
                     <tr>
                         @foreach (var column in Columns)
@@ -138,6 +145,16 @@
     ///<summary>Its properties, as the canvas already has them. The declaration is read from here rather than fetched again.</summary>
     [Parameter] public IReadOnlyDictionary<string, string> Properties { get; set; }
 
+    ///<summary>
+    ///Whether the viewer is embedded in another site's page, where the token it reads with reaches the instance graph's
+    ///status and queries and nothing else (ApiTokenAuth.IsEmbedPath), the rows here included. Until 2026-10-31 the panel
+    ///asked anyway and showed the refusal's status line.
+    ///</summary>
+    [Parameter] public bool Embedded { get; set; }
+
+    ///<summary>What the panel says in an embedded viewer instead of asking for rows it would be refused.</summary>
+    public const string EmbeddedSays = "A dataset's rows are not shown in an embedded viewer: the token it reads with reaches the graph and nothing else. Open it in Treeality to see them.";
+
     private DatasetRows rows;
     private bool busy;
     private string loaded;
@@ -150,10 +167,8 @@
         get
         {
             foreach (var offered in DatasetsContract.Windows)
-            {
                 if (offered.Window == window)
                     return offered.Name;
-            }
 
             return "window";
         }
@@ -164,10 +179,8 @@
         var chosen = args.Value?.ToString() ?? "";
 
         foreach (var offered in DatasetsContract.Windows)
-        {
             if (offered.Name == chosen)
                 window = offered.Window;
-        }
 
         await LoadAsync();
     }
@@ -208,6 +221,12 @@
         if (string.IsNullOrWhiteSpace(Key))
             return;
 
+        if (Embedded)
+        {
+            rows = new DatasetRows { Problem = EmbeddedSays };
+            return;
+        }
+
         busy = true;
 
         try
@@ -235,19 +254,15 @@
         }
     }
 
+    ///<summary>
+    ///The declared columns. A dataset whose writer did not declare them draws as a table with no headings, which is
+    ///question 5's stated failure: every writer of a <c>Dataset</c> declares them when it makes one.
+    ///</summary>
     private IReadOnlyList<DatasetColumn> Columns
     {
         get
         {
-            var declared = DatasetVertex.Read(Json());
-
-            if (declared.Count > 0)
-                return declared;
-
-            //A dataset written before the declaration existed, or by something that did not fill it in.
-            //Question 5's stated failure: a table with no headings — except that the READ surface is
-            //uniform, so the honest fallback is the shape it actually answers with.
-            return [new("series", DatasetColumnKinds.Text), new("at", DatasetColumnKinds.Date), new("number", DatasetColumnKinds.Number), new("state", DatasetColumnKinds.Text)];
+            return DatasetVertex.Read(Json());
         }
     }
 
@@ -280,7 +295,7 @@
     {
         get
         {
-            return rows.Rows.Min(one => one.At);
+            return rows.Rows.Min(one => one.ReceivedAt);
         }
     }
 
@@ -288,7 +303,7 @@
     {
         get
         {
-            return rows.Rows.Max(one => one.At);
+            return rows.Rows.Max(one => one.ReceivedAt);
         }
     }
 
@@ -350,9 +365,9 @@
         {
             var points = new List<string>();
 
-            foreach (var row in plotted.Where(one => one.Series == channel).OrderBy(one => one.At))
+            foreach (var row in plotted.Where(one => one.Series == channel).OrderBy(one => one.ReceivedAt))
             {
-                var x = (row.At.ToUnixTimeMilliseconds() - from) * (double)Wide / across;
+                var x = (row.ReceivedAt.ToUnixTimeMilliseconds() - from) * (double)Wide / across;
                 var y = High - (row.Number.Value - least) / tall * High;
 
                 if (flat)
@@ -377,17 +392,25 @@
 
     private static string Cell(DatasetRow row, string column)
     {
+        //A table's row carries its cells by column name; a series' row is the fields below.
+        if (row.Values != null)
+        {
+            if (row.Values.TryGetValue(column ?? "", out var value))
+                return value;
+
+            return "";
+        }
+
         if (column == "series")
             return row.Series;
-
-        if (column == "at")
-            return Moment(row.At);
-
-        if (column == "state")
+        else if (column == "received_at")
+            return Moment(row.ReceivedAt);
+        else if (column == "state")
             return row.State;
-
-        if (column == "number" && row.Number != null)
+        else if (column == "number" && row.Number != null)
             return row.Number.Value.ToString("0.###", CultureInfo.CurrentCulture);
+        else if (column == "recorded_at" && row.RecordedAt != null)
+            return Moment(row.RecordedAt.Value);
 
         return "";
     }

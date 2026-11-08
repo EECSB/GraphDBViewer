@@ -68,6 +68,14 @@ public sealed class InstalledPluginRecord
     [JsonPropertyName("storeSource")]
     public string StoreSource { get; set; }
 
+    ///<summary>
+    ///The sha256 the store gave for the code, which the bytes fetched were checked against at the install; null for an
+    ///install by URL or from a file, where nothing was given to check them by. What tells the host whether code that came
+    ///over plain http was checked (<see cref="PluginInstaller.PlainWarning(InstalledPluginRecord)"/>, 2026-10-04).
+    ///</summary>
+    [JsonPropertyName("sha256")]
+    public string Sha256 { get; set; }
+
     ///<summary>The one hash algorithm the platform uses for plugin bytes.</summary>
     public static string HashOf(byte[] bytes)
     {

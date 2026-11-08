@@ -1,184 +1,47 @@
-﻿@using GraphDBViewerWeb.Code
+@using System.Text.Json
+@using GraphDBViewerWeb.Code
 @inject HttpClient Http
-@inject IJSRuntime JS
 
-@* Self-contained "Ask AI" panel: a running conversation with an AI model about the connected
-   graph, from which a query can be lifted into the editor. The saved AI-model connections live in
-   LlmConnectionPicker / LlmConnectionStore, shared with the other AI features.
+@* Ask AI: a running conversation with an AI model about the connected graph, from which a query can be lifted into the
+   editor or run. The model may ask to run queries against the live graph, and to look at it as the view draws it.
 
-   The model may ask to run a read-only query against the live graph. Nothing runs unattended: each call
-   appears in the conversation as an approval card, and the result of running it — or the fact that it
-   was declined — goes back to the model as the answer to its call. *@
+   Since 2026-11-02 this is the shared AI window (AiChatWindow), the one every plugin's AI uses, with the graph's own
+   given to it: the instructions with the graph's schema and the query language, the query tools and the picture tool,
+   "Use this query" and "Run and answer" under a proposed query and on a call's card, the card's words, /describe and
+   /count, and the graph's labels and keys for speech to expect. Its chats are Ask AI's (ChatStore.AskAi).
 
-<FloatingDialog Visible="Visible"
-                OnClose="OnClose"
-                Title="✨ Ask AI"
-                StorageKey="ask-ai-2"
-                Width="min(980px, 94vw)"
-                Height="min(840px, 92vh)">
+   Since 2026-11-02 knowledge-graph generation is here too, at the user's word to reuse this window rather than keep one of
+   its own: the model proposes a graph it extracted from text (GraphProposalRunner), and the call's card is the preview and
+   Use (GraphProposalCard). *@
 
-    <ChildContent>
-        @* ── The conversation ─────────────────────── *@
-        <div class="border rounded p-2 mb-2 gdbv-chat" @ref="scroller">
-            @if (turns.Count == 0)
-            {
-                <div class="text-body-secondary small">
-                    Ask for a <strong>@NlQueryPrompt.LanguageDisplayName(Language)</strong> query in plain English, then keep talking to refine it.
-                    Your messages and the connected graph's schema are sent to the selected model provider.
-                </div>
-            }
-
-            @foreach (var turn in turns)
-            {
-                @if (turn.Kind == ChatTurn.User)
-                {
-                    <div class="d-flex justify-content-end mb-2">
-                        <div class="rounded p-2 gdbv-chat-bubble gdbv-chat-user">@turn.Text</div>
-                    </div>
-                }
-                else if (turn.Kind == ChatTurn.Assistant)
-                {
-                    <div class="mb-2">
-                        @if (!string.IsNullOrWhiteSpace(turn.Text))
-                        {
-                            <div class="rounded p-2 gdbv-chat-bubble gdbv-chat-assistant">@turn.Text</div>
-                        }
-                        @if (turn.Query != null)
-                        {
-                            <pre class="small border rounded p-2 mt-1 mb-1 gdbv-chat-code">@turn.Query</pre>
-                            <div class="d-flex gap-2 align-items-center flex-wrap">
-                                <button class="btn btn-sm btn-success" @onclick="() => UseQueryAsync(turn.Query)">Use this query →</button>
-
-                                @* Taking a query into the editor and getting an answer to the question are
-                                   different wants, and only one of them was on offer. This asks the model to
-                                   run it and say what came back, so the mode still governs whether that
-                                   stops for a person and the result still lands in the transcript. *@
-                                @if (ToolRunner != null)
-                                {
-                                    <span class="text-body-secondary small">or</span>
-                                    <button class="btn btn-sm btn-success" @onclick="() => RunProposedAsync(turn)" disabled="@generating" title="Run it and answer in words, rather than putting it in the editor">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -1px;" aria-hidden="true"><path d="M10.804 8 5 4.633v6.734zM11.5 8l-6.5 3.774V4.226z"/></svg>
-                                        Run and answer
-                                    </button>
-                                }
-                                @if (IsMutating(turn.Query))
-                                {
-                                    <span class="badge text-bg-warning ms-2">⚠ modifies the graph</span>
-                                }
-                            </div>
-                        }
-                    </div>
-                }
-                else if (turn.Kind == ChatTurn.Tool)
-                {
-                    <div class="card mb-2 @(turn.IsWrite ? "border-danger gdbv-chat-tool-write" : "border-warning gdbv-chat-tool")">
-                        <div class="card-body p-2">
-                            <div class="small fw-semibold mb-1">
-                                @ToolCardTitle(turn)
-                                @if (turn.Auto)
-                                {
-                                    <span class="badge text-bg-secondary ms-1" title="Run without asking, because of the mode set below">auto</span>
-                                }
-                            </div>
-                            <pre class="small border rounded p-2 mb-2 gdbv-chat-code">@turn.Query</pre>
-
-                            @if (turn.Decision == null)
-                            {
-                                <div class="d-flex gap-2 flex-wrap">
-                                    @* The two answers are opposite, so they read as opposite: a tick in green
-                                       against a cross in red. Decline was outline-secondary, which is the
-                                       gray this app uses for a control that cannot be pressed at all. *@
-                                    <button class="btn btn-sm @(turn.IsWrite ? "btn-danger" : "btn-success")" @onclick="() => Decide(turn, true)">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;" aria-hidden="true"><path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z"/></svg>
-                                        @(turn.IsWrite ? "Approve and change the graph" : "Approve and run")
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => Decide(turn, false)">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -1px;" aria-hidden="true"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854z"/></svg>
-                                        Decline
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => UseQueryAsync(turn.Query)" title="Put it in the query editor to run yourself. The model is still waiting for an answer here.">Use this query →</button>
-                                </div>
-                            }
-                            else if (turn.Decision == false)
-                            {
-                                <div class="small text-body-secondary mb-2">Declined. The model was told it was not run.</div>
-                                <button class="btn btn-sm btn-outline-primary" @onclick="() => UseQueryAsync(turn.Query)" title="Put it in the query editor to run yourself">Use this query →</button>
-                            }
-                            else if (turn.Result == null)
-                            {
-                                <div class="small text-body-secondary">Running…</div>
-                            }
-                            else
-                            {
-                                <div class="small text-body-secondary mb-1">Ran. The model was given this result:</div>
-                                <pre class="small border rounded p-2 mb-0 gdbv-chat-code">@turn.Result</pre>
-                            }
-                        </div>
-                    </div>
-                }
-                else
-                {
-                    <div class="alert alert-danger py-2 small mb-2">@turn.Text</div>
-                }
-            }
-
-            @if (generating)
-            {
-                <div class="text-body-secondary small">Thinking…</div>
-            }
-        </div>
-
-        @* ── What to say next ────────────────────────────────────── *@
-        <textarea class="form-control mb-2" rows="1" style="resize: none;" placeholder="e.g. find all products made of metal and the components that compose them" title="Enter sends. Shift+Enter starts a new line." @ref="promptBox" @bind="nlPrompt" @bind:event="oninput" @onkeydown="OnPromptKeyDownAsync"></textarea>
-
-        <div class="d-flex gap-2 align-items-center flex-wrap gdbv-dialog-composer">
-            <button class="btn btn-sm btn-primary" @onclick="SendAsync" disabled="@(selected == null || string.IsNullOrWhiteSpace(nlPrompt) || generating)">Send</button>
-
-            @if (generating)
-            {
-                <button class="btn btn-sm btn-outline-secondary" @onclick="Cancel" title="Cancel generation">Cancel</button>
-            }
-
-            @* How far the model may go on its own. Settable with no database attached: there is nothing
-               for it to run against until there is one, but a control that cannot be moved reads as
-               broken rather than as inapplicable, so it says so in words instead of by refusing. *@
-            <select class="form-select form-select-sm" style="width: auto;" @bind="approvalMode" title="@ApprovalModeHint">
-                <option value="@ToolApprovalMode.Ask">Queries: ask each time</option>
-                <option value="@ToolApprovalMode.AutoRead">Queries: auto-run reads</option>
-                <option value="@ToolApprovalMode.AutoReadWrite">Queries: auto-run reads &amp; writes</option>
-            </select>
-
-            @* Who answers, rather than what is being said to them — so it sits at the far end, away from Send. *@
-            <div class="d-flex gap-2 align-items-center ms-auto">
-                @if (LlmConnection.SupportsEffort(selected))
-                {
-                    @* Only the models that think take an effort level - OpenAI's reasoning families and
-                       Gemini 2.5 and up. The rest reject it rather than ignoring it. *@
-                    <select class="form-select form-select-sm" style="width: auto;" @bind="effort" title="How hard the model should think before answering. Reasoning models only.">
-                        <option value="">Effort: default</option>
-                        <option value="low">Effort: low</option>
-                        <option value="medium">Effort: medium</option>
-                        <option value="high">Effort: high</option>
-                    </select>
-                }
-
-                @* The dropdown alone: this panel is for talking to a model, not for keeping the list of
-                   them, which lives in Settings -> AI settings. *@
-                <LlmConnectionPicker PickOnly="true" SelectedChanged="c => selected = c" />
-
-                @* Last in the row: it throws away everything above, so it is the thing you should have to
-                   travel furthest to reach. Disabled rather than hidden, so the row does not jump. *@
-                <button class="btn btn-sm btn-outline-danger" @onclick="ClearChatAsync" disabled="@(turns.Count == 0)" title="Clear the conversation and start over">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: -2px;">
-                        <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
-                        <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
-                    </svg>
-                </button>
-            </div>
-        </div>
-    </ChildContent>
-
-</FloatingDialog>
+<AiChatWindow @ref="window"
+              Visible="Visible"
+              OnClose="OnClose"
+              Title="AI"
+              StorageKey="ask-ai-4"
+              ChatsName="@ChatStore.AskAi"
+              Instructions="Instructions"
+              Tools="Tools"
+              ToolLabel="ToolLabel"
+              Examples="ExamplePrompts"
+              Intro="Intro"
+              SentNote="What you type and attach, the connected graph's schema, what the queries the assistant runs return, any picture of the graph it takes and any Wikipedia article it reads are sent to the provider of the model picked below. Nothing is sent until you press Send."
+              Placeholder="Ask about the graph, or type / for commands"
+              Commands="Commands"
+              ProposedOf="NlQueryPrompt.ExtractProposedQuery"
+              AnswerActions="AnswerActions"
+              CardActions="CardActions"
+              CardResult="ProposalCard"
+              ToolOptions="GraphOptions"
+              TranscriptPanel="@(wizardOpen ? WizardPanel : null)"
+              CardTitle="ToolCardTitle"
+              ApproveChangeText="Approve and change the graph"
+              AskEachLabel="Ask before every query"
+              ModeHint="ModeHint"
+              Vocabulary="GraphNames"
+              Subject="@Subject"
+              ChatsKeptWhere="@ChatsKeptWhere"
+              OnOpenSettings="OnOpenSettings" />
 
 @code {
     [Parameter] public bool Visible { get; set; }
@@ -187,384 +50,415 @@
     [Parameter] public string Language { get; set; } = "gremlin";
     [Parameter] public EventCallback<string> OnUseQuery { get; set; }
 
+    ///<summary>Opens AI settings, where models are added and changed: Manage models, and the link for a window with none.</summary>
+    [Parameter] public EventCallback OnOpenSettings { get; set; }
+
+    ///<summary>The database the conversation is about, as the bar names it, or empty with none connected: what a chat saved as text says it was about.</summary>
+    [Parameter] public string Subject { get; set; } = "";
+
+    ///<summary>
+    ///Where the host keeps the chats, in its own words after "Kept" (<see cref="ViewerHostOptions.WhereAiChatsAreKept"/>):
+    ///where the storage the host composes puts them. Null says this browser, where the standalone viewer keeps them.
+    ///</summary>
+    [Parameter] public string ChatsKeptWhere { get; set; }
+
     ///<summary>Optional tool runner (e.g. run read-only queries against the live DB) for providers that support tool use.</summary>
     [Parameter] public ILlmToolRunner ToolRunner { get; set; }
 
-    ///<summary>One entry in the conversation, including the ones that are not something anybody said.</summary>
-    private sealed class ChatTurn
-    {
-        public const string User = "user";
-        public const string Assistant = "assistant";
-        public const string Tool = "tool";
-        public const string Error = "error";
-
-        public string Kind { get; set; }
-        public string Text { get; set; }
-
-        ///<summary>The query an assistant turn proposed, or the one a tool turn is asking to run.</summary>
-        public string Query { get; set; }
-
-        ///<summary>What running it returned. Null until it has, and on a turn that was declined.</summary>
-        public string Result { get; set; }
-
-        ///<summary>Null while the card is still waiting to be answered.</summary>
-        public bool? Decision { get; set; }
-
-        ///<summary>Whether the call changes the graph, which is worth showing differently from a read.</summary>
-        public bool IsWrite { get; set; }
-
-        ///<summary>Whether the mode answered for the user. The card is shown either way; only the wording differs.</summary>
-        public bool Auto { get; set; }
-
-        ///<summary>How the waiting tool call is unblocked when one of the buttons is pressed.</summary>
-        public TaskCompletionSource<bool> Gate { get; set; }
-    }
-
-    private readonly List<ChatTurn> turns = new();
-
-    //The connection the picker currently has selected; null when no models exist yet.
-    private LlmConnection selected;
-
-    ///<summary>The chosen reasoning effort, empty for "say nothing and let the model default".</summary>
-    private string effort = "";
+    ///<summary>
+    ///Takes a picture of the graph as the view draws it, for the picture tool (<see cref="GraphPictureRunner"/>), or null
+    ///while nothing is drawn. Offered with the query tools or on its own, as for a graph opened from a file.
+    ///</summary>
+    [Parameter] public Func<CancellationToken, Task<LlmToolOutput>> Look { get; set; }
 
     ///<summary>
-    ///How far the model may go on its own. Deliberately not remembered between page loads: the mode that
-    ///lets it change data unattended is one nobody should find already switched on, and re-arming it is
-    ///one click.
+    ///The language the connected database runs (<see cref="GraphDbProvider.QueryLanguage"/>). The tools are handed
+    ///over only while the editor is set to it: a query in any other language could not run there.
     ///</summary>
-    private ToolApprovalMode approvalMode = ToolApprovalMode.Ask;
+    [Parameter] public string DatabaseLanguage { get; set; }
 
-    private string ApprovalModeHint
+    ///<summary>
+    ///Whether the model is handed the query tools: there is a database to run them against, and the language it is
+    ///asked to write in is that database's own. Gremlin's alone until 2026-10-03; Cypher on Neo4j and Memgraph, AQL
+    ///on ArangoDB and DQL on Dgraph since.
+    ///</summary>
+    private bool OffersTools => ToolRunner != null && Language == DatabaseLanguage;
+
+    ///<summary>The drawing as its render JSON, which a proposed graph's Merge folds against.</summary>
+    [Parameter] public Func<JsonElement> CurrentGraph { get; set; }
+
+    ///<summary>The connected database's language, which a proposed graph's script is written in. Null means Gremlin.</summary>
+    [Parameter] public IGraphQueryBuilder QueryBuilder { get; set; }
+
+    ///<summary>Runs a read against the connected database, for a proposed graph's Match the database, or null with none to ask.</summary>
+    [Parameter] public Func<string, CancellationToken, Task<GraphDbResult>> RunQuery { get; set; }
+
+    ///<summary>Whether a proposed graph may be merged into the drawing: not where nothing can be staged.</summary>
+    [Parameter] public bool CanMerge { get; set; } = true;
+
+    ///<summary>
+    ///Draws a proposed graph and stages its script, in place of the drawing or merged into it, or nothing: the graph tool is
+    ///offered only where the page can use what it proposes. Never commits.
+    ///</summary>
+    [Parameter] public EventCallback<(string Gremlin, bool Merge)> OnUseGraph { get; set; }
+
+    ///<summary>Whether the model may propose a graph drawn from text: wherever the page can draw one, connected or not.</summary>
+    private bool OffersGraphs => OnUseGraph.HasDelegate;
+
+    //The knowledge-graph window's extraction options, back as its checkboxes at the user's word ("do it just like it was",
+    //2026-11-02), in the tool picker: all off, as they were there, and kept while the page is open, as they were.
+    private bool groundInSchema;
+    private bool includeProvenance;
+    private bool includeConfidence;
+    private bool splitLongText;
+    private bool askAgain;
+
+    ///<summary>What the model is asked for when it draws a graph. Grounding needs a schema read, as the window offered it only with one.</summary>
+    private KgExtractionOptions Extraction => new(groundInSchema && Schema != null, includeProvenance, includeConfidence, splitLongText, askAgain);
+
+    private static bool Ticked(ChangeEventArgs e)
     {
-        get
-        {
-            string hint;
-
-            if (approvalMode == ToolApprovalMode.Ask)
-                hint = "The model may ask to run read-only queries. Each one waits for you.";
-            else if (approvalMode == ToolApprovalMode.AutoRead)
-                hint = "Read-only queries run as soon as the model asks. It still cannot change anything.";
-            else
-                hint = "The model runs its own queries, including ones that add, change and delete data. Nothing waits for you and nothing can be undone.";
-
-            if (ToolRunner == null)
-                return "Takes effect once you are connected to a database — until then there is nothing for the model to run. " + hint;
-
-            return hint;
-        }
+        return e.Value is bool on && on;
     }
 
-    private string nlPrompt;
-    private bool generating;
-    private CancellationTokenSource cts;
+    private AiChatWindow window;
 
-    //The card a tool call is currently waiting on, so its result can be written back to the right one.
-    //A single field is enough because the providers' loops run tool calls one after another.
-    private ChatTurn pendingTool;
-
-    private ElementReference scroller;
-    private int scrolledTurns = -1;
-
-    private ElementReference promptBox;
-    private bool composerAttached;
-    private bool composerSized;
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    ///<summary>What an empty conversation offers to start from, each put in the box by a press rather than sent.</summary>
+    private static readonly IReadOnlyList<string> ExamplePrompts = new[]
     {
-        if (!composerAttached)
+        "Find all products made of metal and the components that compose them",
+        "How many vertices of each label are there?",
+        "Which vertices have the most edges?",
+        "Draw a knowledge graph of the people and organizations in this text: "
+    };
+
+    private const string DescribeQuestion = "Describe the connected graph: the kinds of vertices and edges in it, how they connect, and roughly how many of each there are.";
+
+    private const string CountQuestion = "How many vertices and edges of each label are there?";
+
+    private const string MissedQuestion = "Propose only what the last graph you proposed left out of the text: the entities and relationships not in it, with the same ids for the entities that are.";
+
+    ///<summary>Ask AI's own slash commands: questions about the graph, which need the query tools to answer, and the second look a proposed graph is worth.</summary>
+    private IReadOnlyList<AiSlashCommand> Commands => new[]
+    {
+        new AiSlashCommand("describe", "Ask what is in the connected graph, and how it connects", DescribeQuestion, WhyNoQuestion),
+        new AiSlashCommand("count", "Ask how many vertices and edges of each label there are", CountQuestion, WhyNoQuestion),
+        new AiSlashCommand("missed", "Ask what the last proposed graph left out of the text", MissedQuestion, WhyNoGraph)
+    };
+
+    private string WhyNoQuestion()
+    {
+        if (OffersTools)
+            return null;
+
+        return "Connect to a database, with the editor set to its language, first";
+    }
+
+    private string WhyNoGraph()
+    {
+        if (OffersGraphs)
+            return null;
+
+        return "A graph cannot be drawn here";
+    }
+
+    private RenderFragment Intro => @<text>Ask for a <strong>@NlQueryPrompt.LanguageDisplayName(Language)</strong> query in plain English, then keep talking to refine it, or ask about the graph and let the assistant look. @GraphsIntro()</text>;
+
+    private string GraphsIntro()
+    {
+        if (OffersGraphs)
+            return "Or paste or attach a text and ask for a graph of it, previewed before anything is drawn.";
+
+        return "";
+    }
+
+    ///<summary>The instructions for the next question: the graph's schema and language, and the tools on offer.</summary>
+    private string Instructions(ToolApprovalMode mode, IReadOnlySet<string> toolsOff)
+    {
+        return NlQueryPrompt.BuildChatSystemPrompt(Language, Schema, OffersTools, mode, toolsOff, Look != null, OffersGraphs, Extraction);
+    }
+
+    ///<summary>
+    ///The knowledge-graph window's options, in the tool picker under the tools, in its words and stacked as it stacked them:
+    ///what is asked of the model the next time it draws a graph. Drop unconnected entities and Match entities already in the
+    ///database act on what came back, so they are on each graph's card.
+    ///</summary>
+    private RenderFragment GraphOptions => @<text>
+        @if (OffersGraphs)
         {
-            composerAttached = true;
+            <div class="gdbv-ai-picker-head">Drawing a graph from text</div>
 
-            try
+            @if (Schema != null)
             {
-                await JS.InvokeVoidAsync("floatingDialog.attachComposer", promptBox);
+                <label class="gdbv-ai-picker-tool" title="Ask the model to reuse the connected database's vertex/edge labels and property keys instead of inventing its own.">
+                    <input type="checkbox" data-testid="kg-ground" checked="@groundInSchema" @onchange="e => groundInSchema = Ticked(e)" />
+                    <span>Ground labels in the connected schema</span>
+                </label>
             }
-            catch { }
+
+            <label class="gdbv-ai-picker-tool" title="Ask the model for the sentence each entity and relationship came from, kept as a '@(KgGraphParser.SourceSentenceProperty)' property, so you can see why it claimed something.">
+                <input type="checkbox" data-testid="kg-provenance" checked="@includeProvenance" @onchange="e => includeProvenance = Ticked(e)" />
+                <span>Record the source sentence</span>
+            </label>
+
+            <label class="gdbv-ai-picker-tool" title="Ask the model how sure it is of each entity and relationship. Anything under 50% is drawn in gray, so a guess looks like a guess.">
+                <input type="checkbox" data-testid="kg-confidence" checked="@includeConfidence" @onchange="e => includeConfidence = Ticked(e)" />
+                <span>Rate confidence</span>
+            </label>
+
+            <label class="gdbv-ai-picker-tool" title="Have a text longer than about @(KgPrompt.PartChars.ToString("N0")) characters extracted in pieces and merged. A long document otherwise runs past the model's output limit and comes back cut off mid-graph.">
+                <input type="checkbox" data-testid="kg-split" checked="@splitLongText" @onchange="e => splitLongText = Ticked(e)" />
+                <span>Split a long text into pieces</span>
+            </label>
+
+            <label class="gdbv-ai-picker-tool" title="After extracting, ask the model once more what it missed and merge the answer in. Costs a second request.">
+                <input type="checkbox" data-testid="kg-again" checked="@askAgain" @onchange="e => askAgain = Ticked(e)" />
+                <span>Ask once more for anything missed</span>
+            </label>
         }
+    </text>;
 
-        //A hidden window gives its children no height at all, so the first measurement has to wait until
-        //there is something to measure. The panel is hidden rather than unmounted, so that is not the
-        //same moment as the first render.
-        if (Visible && !composerSized)
-        {
-            composerSized = true;
+    ///<summary>
+    ///The tools the next question goes with: the query tools while the editor writes the database's language, the picture
+    ///tool while a graph is drawn, and the graph tool wherever the page can draw what it proposes; null for none.
+    ///</summary>
+    private ILlmToolRunner Tools()
+    {
+        ILlmToolRunner tools = null;
 
-            try
-            {
-                await JS.InvokeVoidAsync("floatingDialog.growComposer", promptBox);
-            }
-            catch { }
-        }
-        else if (!Visible)
-            composerSized = false;
+        if (OffersTools)
+            tools = ToolRunner;
 
-        //Follow the conversation down as it grows, but leave the scroll alone otherwise: yanking it back
-        //while somebody is reading an earlier answer would be worse than not following at all.
-        if (turns.Count == scrolledTurns)
+        if (Look != null)
+            tools = new GraphPictureRunner(tools, Look);
+
+        //A graph drawn from an article wants the article: the window's fetch box, as a tool beside the graph tool.
+        if (OffersGraphs)
+            tools = new WikipediaRunner(new GraphProposalRunner(tools, () => Schema?.EdgeLabels, SourceText, FilesNotRead, Extraction), ReadWikipediaAsync);
+
+        return tools;
+    }
+
+    private async Task<(string Text, string Error)> ReadWikipediaAsync(string article, CancellationToken ct)
+    {
+        return await WikipediaSource.FetchExtractAsync(Http, article, ct);
+    }
+
+    ///<summary>How a graph is asked for: the wizard's question, and the example that puts it in the box.</summary>
+    public const string GraphStart = "Draw a knowledge graph of this text: ";
+
+    private bool wizardOpen;
+
+    private RenderFragment WizardPanel(AiChatPanelState chat)
+    {
+        return @<KgWizard Options="Extraction"
+                          CanGround="Schema != null"
+                          Chat="chat"
+                          OnClose="CloseWizard"
+                          OnOpenSettings="OnOpenSettings"
+                          OnGenerate="GenerateFromWizardAsync" />;
+    }
+
+    ///<summary>
+    ///Opens the wizard at the conversation's end, for the Import panel's Generate with AI (2026-11-05, the user: defined steps and
+    ///inputs, as the knowledge-graph window had). One already open keeps what was filled in.
+    ///</summary>
+    public async Task StartGraphAsync()
+    {
+        if (window == null)
             return;
 
-        scrolledTurns = turns.Count;
+        wizardOpen = true;
 
-        try
-        {
-            await JS.InvokeVoidAsync("floatingDialog.scrollToEnd", scroller);
-        }
-        catch { }
+        StateHasChanged();
+        await Task.Yield();
+
+        await window.ScrollToEndAsync();
     }
 
+    private void CloseWizard()
+    {
+        wizardOpen = false;
+    }
+
+    ///<summary>The wizard's last step: its options become the tool picker's, and its question goes as if typed. The graph comes back on its card.</summary>
+    private async Task GenerateFromWizardAsync((string Question, KgExtractionOptions Options) asked)
+    {
+        groundInSchema = asked.Options.GroundInSchema;
+        includeProvenance = asked.Options.SourceSentence;
+        includeConfidence = asked.Options.Confidence;
+        splitLongText = asked.Options.SplitLongText;
+        askAgain = asked.Options.AskAgain;
+        wizardOpen = false;
+
+        await window.AskAsync(asked.Question);
+    }
+
+    private string SourceText()
+    {
+        return window?.SourceText() ?? "";
+    }
+
+    private bool FilesNotRead()
+    {
+        return window?.SentFilesNotRead() ?? false;
+    }
+
+    ///<summary>The tools as the picker names them.</summary>
+    private static string ToolLabel(LlmTool tool)
+    {
+        if (tool.Name == QueryToolRunner.ReadToolName)
+            return "Run read-only queries to look at the graph";
+        else if (tool.Name == QueryToolRunner.WriteToolName)
+            return "Run queries that change the graph";
+        else if (tool.Name == GraphPictureRunner.LookName)
+            return "Look at the graph as the view draws it";
+        else if (tool.Name == GraphProposalRunner.ProposeName)
+            return "Propose a graph drawn from text, for you to use or not";
+        else if (tool.Name == WikipediaRunner.ReadName)
+            return "Read a Wikipedia article";
+
+        return null;
+    }
+
+    ///<summary>A proposed graph's card: its preview for the mode chosen, and Use. Nothing of its own for any other call.</summary>
+    private RenderFragment ProposalCard(ChatTurn turn)
+    {
+        if (turn.ToolName != GraphProposalRunner.ProposeName)
+            return null;
+
+        return @<GraphProposalCard Turn="turn"
+                                   Schema="Schema"
+                                   SourceText="@SourceText()"
+                                   FilesNotRead="FilesNotRead()"
+                                   CurrentGraph="CurrentGraph"
+                                   QueryBuilder="QueryBuilder"
+                                   RunQuery="RunQuery"
+                                   CanMerge="CanMerge"
+                                   OnUseGraph="OnUseGraph" />;
+    }
+
+    ///<summary>Under a query an answer proposed: into the editor, or run and answered in words, and a warning on a write.</summary>
+    private RenderFragment<ChatTurn> AnswerActions => turn => @<text>
+        <button class="btn btn-sm btn-success" @onclick="() => UseQueryAsync(turn.Query)">Use this query →</button>
+
+        @* Taking a query into the editor and getting an answer to the question are different wants. This asks the model to
+           run it and say what came back, so the rung still governs whether that stops for a person and the result still
+           lands in the transcript. *@
+        @if (OffersTools)
+        {
+            <span class="text-body-secondary small">or</span>
+            <button class="btn btn-sm btn-success" @onclick="() => RunProposedAsync(turn)" disabled="@(window?.Generating ?? false)" title="Run it and answer in words, rather than putting it in the editor">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" class="gdbv-ico" aria-hidden="true"><path d="M10.804 8 5 4.633v6.734zM11.5 8l-6.5 3.774V4.226z"/></svg>
+                Run and answer
+            </button>
+        }
+
+        @if (IsMutating(turn.Query))
+        {
+            <span class="badge text-bg-warning ms-2">⚠ modifies the graph</span>
+        }
+    </text>;
+
+    ///<summary>On a call's card with a query: into the editor, while it waits or once it was declined.</summary>
+    private RenderFragment<ChatTurn> CardActions => turn => @<text>
+        @if (turn.Query != null && turn.Decision == null)
+        {
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => UseQueryAsync(turn.Query)" title="Put it in the query editor to run yourself. The model is still waiting for an answer here.">Use this query →</button>
+        }
+        else if (turn.Query != null)
+        {
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => UseQueryAsync(turn.Query)" title="Put it in the query editor to run yourself">Use this query →</button>
+        }
+    </text>;
+
+    //The guard of the language the query is written in, connected or not: until 2026-10-03 a Gremlin check, which
+    //said nothing about a query in any other language.
     private bool IsMutating(string query)
     {
-        if (Language != "gremlin" || string.IsNullOrEmpty(query))
+        var guard = GraphDbProviders.ForLanguage(Language)?.QueryBuilder;
+
+        if (guard == null || string.IsNullOrEmpty(query))
             return false;
 
-        return GremlinStepParser.IsMutating(query);
+        return guard.IsMutating(query);
     }
 
-    ///<summary>
-    ///Enter sends; Shift+Enter breaks the line.
-    ///
-    ///Only half of that is decided here. The newline itself is refused in JS, because a Blazor handler's
-    ///preventDefault is fixed when the component renders rather than when the key is pressed — by the
-    ///time this method could refuse it, the browser has already typed it.
-    ///</summary>
-    private async Task OnPromptKeyDownAsync(KeyboardEventArgs e)
+    private string ModeHint(ToolApprovalMode mode)
     {
-        if (e.Key != "Enter" || e.ShiftKey)
-            return;
+        string hint;
 
-        await SendAsync();
-    }
+        //The write tool goes out in every mode (BothToolsAreSentOnTheRungThatAsksAboutEverything), so neither of the
+        //first two says the model cannot change anything: a write it asks for runs once a person approves it.
+        if (mode == ToolApprovalMode.Ask)
+            hint = "Each query the model asks to run waits for you, whether it reads or adds, changes or deletes data.";
+        else if (mode == ToolApprovalMode.AutoRead)
+            hint = "Read-only queries run as soon as the model asks. One that adds, changes or deletes data still waits for you.";
+        else
+            hint = "The model runs its own queries, including ones that add, change and delete data. Nothing waits for you and nothing can be undone.";
 
-    private async Task ClearChatAsync()
-    {
-        if (turns.Count == 0)
-            return;
+        if (ToolRunner == null)
+            return "Takes effect once you are connected to a database — until then there is nothing for the model to run. " + hint;
 
-        bool confirmed = await JS.InvokeAsync<bool>("confirm", "Clear the conversation? This can't be undone.");
+        if (!OffersTools)
+            return $"Takes effect once the editor is set to {NlQueryPrompt.LanguageDisplayName(DatabaseLanguage)}, the language this database runs. {hint}";
 
-        if (!confirmed)
-            return;
-
-        //Cancel first: a generation left running would append its answer to a conversation that no longer
-        //has the question in it, and any approval card it is waiting on has just been thrown away.
-        Cancel();
-        turns.Clear();
-        pendingTool = null;
+        return hint;
     }
 
     ///<summary>What the card says happened, which depends on the kind of call and on how it ended.</summary>
     private static string ToolCardTitle(ChatTurn turn)
     {
+        if (turn.ToolName == GraphPictureRunner.LookName)
+            if (turn.Decision == null)
+                return "The model wants to look at the graph";
+            else if (turn.Decision == false)
+                return "The model asked to look at the graph";
+            else
+                return "The model looked at the graph";
+
+        if (turn.ToolName == GraphProposalRunner.ProposeName)
+            if (turn.ResultIsError)
+                return "The model proposed a graph that could not be read";
+            else
+                return "The model proposes a graph";
+
+        if (turn.ToolName == WikipediaRunner.ReadName)
+            if (turn.Decision == null)
+                return "The model wants to read a Wikipedia article";
+            else if (turn.Decision == false)
+                return "The model asked to read a Wikipedia article";
+            else
+                return "The model read a Wikipedia article";
+
         if (turn.Decision == null)
-        {
-            if (turn.IsWrite)
+            if (turn.Changes)
                 return "The model wants to change the graph";
             else
                 return "The model wants to run a read-only query";
-        }
-
-        if (turn.Decision == false)
-        {
-            if (turn.IsWrite)
+        else if (turn.Decision == false)
+            if (turn.Changes)
                 return "The model asked to change the graph";
             else
                 return "The model asked to run a read-only query";
-        }
 
-        if (turn.IsWrite)
+        if (turn.Changes)
             return "The model changed the graph";
         else
             return "The model ran a read-only query";
     }
 
     ///<summary>
-    ///The conversation as the model should see it.
-    ///
-    ///A tool turn is replayed as a user turn rather than dropped. Its result is what the model's own next
-    ///answer was built on, and neither provider's message list can carry a tool exchange across a request
-    ///boundary without rebuilding that provider's wire format from a copy of it. Saying plainly what was
-    ///run and what came back keeps the fact and loses only the shape.
-    ///</summary>
-    private List<LlmMessage> BuildConversation()
-    {
-        var conversation = new List<LlmMessage>();
-
-        foreach (var turn in turns)
-        {
-            if (turn.Kind == ChatTurn.User)
-                conversation.Add(LlmMessage.FromUser(turn.Text));
-            else if (turn.Kind == ChatTurn.Assistant)
-                conversation.Add(LlmMessage.FromAssistant(turn.Text));
-            else if (turn.Kind == ChatTurn.Tool && turn.Decision == true)
-                conversation.Add(LlmMessage.FromUser($"(Earlier you ran this query:\n{turn.Query}\n\nIt returned:\n{turn.Result})"));
-            else if (turn.Kind == ChatTurn.Tool && turn.Decision == false)
-                conversation.Add(LlmMessage.FromUser($"(Earlier you asked to run this query and I declined:\n{turn.Query})"));
-        }
-
-        return conversation;
-    }
-
-    private async Task SendAsync()
-    {
-        if (selected == null || string.IsNullOrWhiteSpace(nlPrompt) || generating)
-            return;
-
-        turns.Add(new ChatTurn { Kind = ChatTurn.User, Text = nlPrompt.Trim() });
-        nlPrompt = "";
-        generating = true;
-        cts?.Dispose();
-        cts = new CancellationTokenSource();
-
-        //Emptied in the page too, so the box shrinks against what is in it now rather than against the
-        //message that has just left it. Nothing fires an input event when C# clears a bound value.
-        try
-        {
-            await JS.InvokeVoidAsync("floatingDialog.resetComposer", promptBox);
-        }
-        catch { }
-
-        try
-        {
-            //Effort is a per-request choice, so it rides on a copy: setting it on the stored connection
-            //would save it against the model for every feature that uses it.
-            var forThisRun = new LlmConnection(selected) { Effort = effort };
-            var provider = LlmProviderFactory.Create(Http, forThisRun);
-            var useTools = ToolRunner != null && Language == "gremlin" && provider is IToolUsingLlmProvider;
-            var system = NlQueryPrompt.BuildChatSystemPrompt(Language, Schema, useTools, approvalMode);
-            var conversation = BuildConversation();
-
-            LlmResult result;
-
-            if (useTools)
-            {
-                var approving = new ApprovingToolRunner(ToolRunner, ApproveAsync, ToolCompletedAsync, approvalMode);
-                result = await ((IToolUsingLlmProvider)provider).CompleteWithToolsAsync(system, conversation, approving, cts.Token);
-            }
-            else
-                result = await provider.CompleteAsync(system, conversation, cts.Token);
-
-            if (result.IsError)
-                turns.Add(new ChatTurn { Kind = ChatTurn.Error, Text = result.Error });
-            else
-            {
-                //The query is shown on its own below, so the bubble keeps only what was said around it.
-                var proposed = NlQueryPrompt.ExtractProposedQuery(result.Text);
-                string prose;
-
-                if (proposed == null)
-                    prose = result.Text;
-                else
-                    prose = LlmText.WithoutFencedBlock(result.Text);
-
-                turns.Add(new ChatTurn { Kind = ChatTurn.Assistant, Text = prose, Query = proposed });
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            turns.Add(new ChatTurn { Kind = ChatTurn.Error, Text = "Generation canceled." });
-        }
-        catch (Exception ex)
-        {
-            //A CORS preflight rejection surfaces as a bare fetch failure — the likeliest real error for
-            //a custom/local endpoint. Name the cause, with the connection card's wording.
-            var message = ex.Message;
-
-            if (ex is HttpRequestException || message.Contains("Failed to fetch"))
-                message += " (If this is a CORS error, the endpoint must allow this origin.)";
-
-            turns.Add(new ChatTurn { Kind = ChatTurn.Error, Text = message });
-        }
-        finally
-        {
-            generating = false;
-            pendingTool = null;
-            cts?.Dispose();
-            cts = null;
-        }
-    }
-
-    ///<summary>
-    ///Puts the model's request on screen, and waits for one of the two buttons to answer it unless the
-    ///mode already has. An auto-approved call still gets a card — a query that runs unwatched is the one
-    ///most worth being able to see afterwards — it just does not stop for anybody.
-    ///</summary>
-    private async Task<bool> ApproveAsync(ToolRunRequest request, CancellationToken ct)
-    {
-        var turn = new ChatTurn
-        {
-            Kind = ChatTurn.Tool,
-            Query = request.Query ?? request.ArgumentsJson,
-            IsWrite = request.IsWrite
-        };
-
-        if (request.AutoApproved)
-        {
-            turn.Auto = true;
-            turn.Decision = true;
-            turns.Add(turn);
-            pendingTool = turn;
-            await InvokeAsync(StateHasChanged);
-
-            return true;
-        }
-
-        //RunContinuationsAsynchronously so completing it from a button handler does not resume the
-        //provider's loop inside that handler's own render.
-        turn.Gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        turns.Add(turn);
-        pendingTool = turn;
-        await InvokeAsync(StateHasChanged);
-
-        //Cancelling while a card is unanswered has to unblock it, or the loop waits for a button that is
-        //no longer reachable. A cancel is not an approval, so it resolves the way declining does.
-        using var registration = ct.Register(() => turn.Gate.TrySetResult(false));
-
-        var approved = await turn.Gate.Task;
-
-        turn.Decision = approved;
-        await InvokeAsync(StateHasChanged);
-
-        return approved;
-    }
-
-    ///<summary>Records what the tool returned on the card that asked for it.</summary>
-    private async Task ToolCompletedAsync(ToolRunRequest request, string result)
-    {
-        if (pendingTool != null)
-            pendingTool.Result = result;
-
-        pendingTool = null;
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private void Decide(ChatTurn turn, bool approved)
-    {
-        turn.Gate?.TrySetResult(approved);
-    }
-
-    private void Cancel()
-    {
-        cts?.Cancel();
-    }
-
-    ///<summary>
-    ///Asks the model to run a query it proposed and report back in words.
-    ///
-    ///Asked for rather than executed here on purpose: the model already holds the tool, so going through
-    ///it keeps one path to the database — the approval mode still decides whether it stops for a person,
-    ///the run still appears in the transcript, and the answer comes back as prose because that is what a
-    ///reply is. Running it behind the model's back would produce a result nobody had explained.
+    ///Asks the model to run a query it proposed and report back in words. Asked for rather than executed here on purpose:
+    ///the model already holds the tool, so going through it keeps one path to the database, the rung still decides whether
+    ///it stops for a person, and the answer comes back as prose because that is what a reply is.
     ///</summary>
     private async Task RunProposedAsync(ChatTurn turn)
     {
-        if (ToolRunner == null || turn == null || string.IsNullOrWhiteSpace(turn.Query) || generating)
+        if (!OffersTools || turn == null || string.IsNullOrWhiteSpace(turn.Query) || window == null)
             return;
 
-        nlPrompt = $"Run this query and tell me what it says, in plain English:{Environment.NewLine}{turn.Query}";
-
-        await SendAsync();
+        await window.AskAsync($"Run this query and tell me what it says, in plain English:{Environment.NewLine}{turn.Query}");
     }
 
     private async Task UseQueryAsync(string query)
@@ -573,5 +467,14 @@
             return;
 
         await OnUseQuery.InvokeAsync(query);
+    }
+
+    ///<summary>The graph's labels and keys, which the provider is told to expect when it writes speech out.</summary>
+    private IEnumerable<string> GraphNames()
+    {
+        if (Schema == null)
+            return Array.Empty<string>();
+
+        return (Schema.VertexLabels ?? new()).Concat(Schema.EdgeLabels ?? new()).Concat(Schema.PropertyKeys ?? new());
     }
 }

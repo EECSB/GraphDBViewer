@@ -59,7 +59,8 @@ public class AboutModalTests : BunitContext
             .Add(c => c.Visible, true)
             .Add(c => c.OnOpenShowcase, () => opened = true));
 
-        cut.FindAll("button").First(b => b.TextContent.Contains("feature showcase")).Click();
+        //A link of About's list since 2026-11-04, where it was a button.
+        cut.Find("[data-testid=about-showcase]").Click();
 
         Assert.True(opened);
     }

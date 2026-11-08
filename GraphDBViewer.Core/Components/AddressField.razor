@@ -1,0 +1,153 @@
+@using GraphDBViewerWeb.Code
+@inject HttpClient Http
+@inject ShellState Shell
+
+@*An address, the same everywhere in the app (Addresses): the text as written, a latitude and a longitude,
+  and a button that finds the two from the text. The button is the only thing here that sends the address
+  anywhere, and the line under it says where, since a geocoder is somebody else's service (Geocoding); a
+  private address says so first. What it finds is shown by name, so a wrong match is caught before the
+  form is saved, and the coordinates stay editable by hand either way. The three inputs carry the data-testid
+  the caller gives and a data-field naming the property, as a generic field of the caller's form would.
+
+  A COORDINATE IS TAKEN WHEN ITS INPUT LETS GO OF IT, not at every key. A number input says its value is empty
+  while what it holds is not yet a number, a lone "-" or "12.", and taken at every key that empty value came
+  back from the form into the input and wiped what was being typed: "-12.5" became "5" (2026-10-03).*@
+<div class="mb-2">
+    <label class="form-label mb-0" style="font-size: .85rem;">@Label</label>
+    <textarea class="form-control form-control-sm" rows="2" value="@Address" disabled="@Disabled" @oninput="AddressInputAsync" data-testid="@TestId" data-field="@Addresses.Text"></textarea>
+
+    <div class="d-flex flex-wrap gap-2 align-items-end mt-1">
+        <div style="flex: 1 1 7rem;">
+            <label class="form-label mb-0" style="font-size: .75rem;">Latitude</label>
+            <input type="number" step="any" min="-90" max="90" class="form-control form-control-sm" value="@Latitude" disabled="@Disabled" @onchange="LatitudeEnteredAsync" data-testid="@TestId" data-field="@Addresses.Latitude" />
+        </div>
+
+        <div style="flex: 1 1 7rem;">
+            <label class="form-label mb-0" style="font-size: .75rem;">Longitude</label>
+            <input type="number" step="any" min="-180" max="180" class="form-control form-control-sm" value="@Longitude" disabled="@Disabled" @onchange="LongitudeEnteredAsync" data-testid="@TestId" data-field="@Addresses.Longitude" />
+        </div>
+
+        @if (!Disabled)
+        {
+            <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@(finding || Addresses.QueryFor(Address) == null)" @onclick="FindAsync" data-testid="@($"{TestId}-find")">
+                @(finding ? "Finding…" : "Find from address")
+            </button>
+        }
+    </div>
+
+    @if (!string.IsNullOrEmpty(found))
+    {
+        <div class="text-body-secondary mt-1" style="font-size: .8rem;" data-testid="@($"{TestId}-found")">Found: @found</div>
+    }
+
+    @if (!string.IsNullOrEmpty(problem))
+    {
+        <div class="text-danger mt-1" style="font-size: .8rem;" data-testid="@($"{TestId}-problem")">@problem</div>
+    }
+
+    @if (!Disabled)
+    {
+        <div class="text-body-secondary" style="font-size: .75rem;" data-testid="@($"{TestId}-where")">
+            @if (Private)
+            {
+                <text>This address is private. Find sends it to @Host to look it up, and the coordinates it finds are private too.</text>
+            }
+            else
+            {
+                <text>Find sends the address to @Host to look it up.</text>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "Address";
+
+    [Parameter] public string Address { get; set; }
+    [Parameter] public EventCallback<string> AddressChanged { get; set; }
+
+    [Parameter] public string Latitude { get; set; }
+    [Parameter] public EventCallback<string> LatitudeChanged { get; set; }
+
+    [Parameter] public string Longitude { get; set; }
+    [Parameter] public EventCallback<string> LongitudeChanged { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    ///<summary>A private address, such as a person's own, which the line under the button warns about.</summary>
+    [Parameter] public bool Private { get; set; }
+
+    ///<summary>The data-testid on the three inputs; the button and the lines under it add a suffix to it.</summary>
+    [Parameter] public string TestId { get; set; } = "address";
+
+    private bool finding;
+    private string found;
+    private string problem;
+
+    //The geocoder Map settings names (2026-11-06, the user): OpenStreetMap's own until it is read.
+    private string endpoint = Geocoding.DefaultEndpoint;
+
+    private string Host => Geocoding.HostOf(endpoint);
+
+    protected override async Task OnInitializedAsync()
+    {
+        endpoint = await Shell.Geocoder.GetAsync();
+    }
+
+    private async Task AddressInputAsync(ChangeEventArgs e)
+    {
+        found = null;
+        problem = null;
+
+        await AddressChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    }
+
+    private Task LatitudeEnteredAsync(ChangeEventArgs e)
+    {
+        return LatitudeChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    }
+
+    private Task LongitudeEnteredAsync(ChangeEventArgs e)
+    {
+        return LongitudeChanged.InvokeAsync(e.Value?.ToString() ?? "");
+    }
+
+    ///<summary>One lookup, of the address as it stands, on the button's word; nothing is saved until the form is.</summary>
+    private async Task FindAsync()
+    {
+        var query = Addresses.QueryFor(Address);
+
+        if (query == null)
+            return;
+
+        finding = true;
+        found = null;
+        problem = null;
+
+        try
+        {
+            endpoint = await Shell.Geocoder.GetAsync();
+
+            var hit = await Geocoding.LookupAsync(Http, endpoint, query, CancellationToken.None);
+
+            if (hit.Error != null)
+                problem = $"The lookup at {Host} failed: {hit.Error}. The coordinates can be typed instead.";
+            else if (!hit.Located)
+                problem = "Nothing was found for this address. Check it, or type the coordinates.";
+            else
+            {
+                found = hit.Found;
+
+                if (string.IsNullOrWhiteSpace(found))
+                    found = $"{Geocoding.Degrees(hit.Latitude)}, {Geocoding.Degrees(hit.Longitude)}";
+
+                await LatitudeChanged.InvokeAsync(Geocoding.Degrees(hit.Latitude));
+                await LongitudeChanged.InvokeAsync(Geocoding.Degrees(hit.Longitude));
+            }
+        }
+        finally
+        {
+            finding = false;
+        }
+    }
+}

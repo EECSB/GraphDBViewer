@@ -156,11 +156,6 @@ public sealed class PluginIdentity
 }
 
 ///<summary>
-///What a plugin id left behind, counted by the host (ADR 0011): the prompt that asks "delete its
-///data?" must name a quantity, because consenting to an amount you cannot see is not consent. The
-///graph half is absent until an instance graph exists to look in.
-///</summary>
-///<summary>
 ///One group of graph labels and who the audit says owns them. An <c>Orphaned</c> group is the point of
 ///the report; every other group is there so a clean answer can be told apart from an unread one.
 ///</summary>
@@ -201,6 +196,11 @@ public sealed class GraphOrphanReport
     public List<GraphLabelGroup> Groups { get; set; } = new();
 }
 
+///<summary>
+///What a plugin id left behind, counted by the host (ADR 0011): the prompt that asks "delete its
+///data?" must name a quantity, because consenting to an amount you cannot see is not consent. The
+///graph half is absent until an instance graph exists to look in.
+///</summary>
 public sealed class PluginLeftovers
 {
     ///<summary>Where the host answers this, for one plugin id: <c>api/plugins/leftovers?id=…</c>.</summary>
@@ -216,6 +216,14 @@ public sealed class PluginLeftovers
 
     ///<summary>How many role claims carry permissions under the plugin's id — grants an administrator made.</summary>
     public int PermissionGrants { get; set; }
+
+    ///<summary>
+    ///How many tokens this instance issued benches to dial in with, on whichever account each hangs from, which
+    ///deleting the configuration revokes: Instruments' alone, whose configuration takes every bench with it and every
+    ///such token in the same commit, counted by the query that revokes them. Null for every other plugin, which
+    ///issues none, and so shows nothing.
+    ///</summary>
+    public int? DialInTokens { get; set; }
 
     ///<summary>Whether an identity marker from an earlier install exists.</summary>
     public bool Identity { get; set; }

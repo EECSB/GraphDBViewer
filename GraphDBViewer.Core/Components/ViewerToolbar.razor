@@ -1,46 +1,61 @@
 @using GraphDBViewerWeb.Code
 
-@* The viewer's half of the top bar: the connection indicator, the import/export toggle and the query
-   limits. Home hands this to the shell through ShellState.Contribute and the shell's TopBar renders it
-   right after the logo (application-shell spec). A component has no element of its own, so these land
-   as direct children of the bar's flex row — exactly where they sat when TopBar rendered them itself. *@
+@* The viewer's setup controls: the connection pill, which doubles as the mode indicator, and Import/Export,
+   each opening its dialog. They stood in the shell's top bar until 2026-10-29 (contributed through ShellState,
+   with a Query settings dropdown beside them); now they sit at the right end of the workspace's own row, since
+   they are the page's and not the shell's, and the query limits moved into the query sidebar.
 
-<button class="btn @ConnectionButtonClass btn-sm @(Pulse ? "gdbv-pulse" : "")" @onclick="OnToggleConnectionCard" title="@(Offline && !IsConnected ? "Offline drawing mode: open the connection card to exit it or connect" : null)">
-    @ConnectionButtonText
-    <span class="ms-1">@(ConnectionCardExpanded ? "▲" : "▼")</span>
-</button>
+   The pill says its state with a plug (the user, the same day): solid and green when connected, with a red × when
+   not, and only the host after it, cut short with an ellipsis when it is long (the whole on hover); the words
+   "Connected" and "Disconnected" are there for screen readers only. Offline mode keeps its name.
 
-<button class="btn btn-outline-secondary btn-sm ms-2 text-body-emphasis" @onclick="OnToggleImportExport">
-    Import / Export
-    <span class="ms-1">@(ImportExportExpanded ? "▲" : "▼")</span>
-</button>
+   As tabs (AsTabs) in the standalone viewer (2026-11-02, the user): the connection and Import/Export as fixed tabs after
+   the query tabs, with no x to close them, and Share left to the bar's icons. A press brings one to the front, its
+   content over the graph's card, and it is drawn as the query tab in front is; behind, as a query tab behind is
+   (2026-11-03). They were the top bar's tabs on 2026-11-02. The page may draw the two apart (Tab), the connection
+   first of all the tabs and Import/Export after the gap (2026-11-03, the user). *@
 
-@* Query settings — the query and expansion limits. These lived as a flyout in the Settings menu until
-   the application-shell feature made that menu shell-only; they are viewer configuration, so they open
-   from the viewer's own toolbar now, in a dropdown of their own. *@
-<div class="position-relative ms-2">
-    <button class="btn btn-outline-secondary btn-sm text-body-emphasis" @onclick="() => showQuerySettings = !showQuerySettings" title="Query and expansion limits">
-        Query settings <span class="ms-1">@(showQuerySettings ? "▲" : "▼")</span>
+@if (AsTabs && Tab == ViewerTab.Connection)
+{
+    <ul class="nav nav-tabs gdbv-ws-tabs gdbv-viewer-tabs" aria-label="The viewer's connection" data-testid="viewer-connection-tab">
+        @ConnectionTabItem
+    </ul>
+}
+else if (AsTabs && Tab == ViewerTab.ImportExport)
+{
+    <ul class="nav nav-tabs gdbv-ws-tabs gdbv-viewer-tabs" aria-label="The viewer's import and export" data-testid="viewer-tabs">
+        @AddConnectionTabItem
+        @ImportExportTabItem
+    </ul>
+}
+else if (AsTabs)
+{
+    <ul class="nav nav-tabs gdbv-ws-tabs gdbv-viewer-tabs" aria-label="The viewer's connection and import" data-testid="viewer-tabs">
+        @ConnectionTabItem
+        @AddConnectionTabItem
+        @ImportExportTabItem
+    </ul>
+}
+else
+{
+    <button class="btn @ConnectionButtonClass btn-sm gdbv-conn-pill" @onclick="OnToggleConnectionCard" title="@ConnectionTitle" data-testid="viewer-connection">
+        @ConnectionIcon
+        <span class="gdbv-conn-label">@LabelText</span>
     </button>
 
-    @if (showQuerySettings)
-    {
-        @* Transparent full-viewport backdrop, the same pattern as the shell's menus: a click anywhere
-           outside the card closes it. *@
-        <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="() => showQuerySettings = false"></div>
+    <button class="btn btn-outline-primary btn-sm @(ImportExportExpanded ? "active" : "")" @onclick="OnToggleImportExport" title="Paste or import a graph, or export the loaded one" data-testid="viewer-import-export">
+        <i class="bi bi-arrow-down-up me-1" aria-hidden="true"></i>Import/Export
+    </button>
 
-        <div class="card position-absolute start-0 mt-1 py-1 shadow" style="z-index: 1080; min-width: 230px;">
-            <label class="d-flex align-items-center justify-content-between px-3 py-2 mb-0" title="Max vertices a query or Load DB pulls from the database (same as the query-limit box by the editor)">
-                <span>Query limit</span>
-                <input class="form-control form-control-sm m-0" type="number" min="1" style="width: 5rem;" value="@QueryLimit" @onchange="OnQueryLimitInput" />
-            </label>
-            <label class="d-flex align-items-center justify-content-between px-3 py-2 mb-0" title="The most neighbors pulled in when you double-click a node to expand it">
-                <span>Expand limit</span>
-                <input class="form-control form-control-sm m-0" type="number" min="1" max="5000" style="width: 5rem;" value="@ExpansionLimit" @onchange="OnExpansionLimitInput" />
-            </label>
-        </div>
+    @* Share (2026-10-31, GDS Viewer's): a link that opens the viewer set up as this one is, or the code that embeds it in
+       another site's page. Only where the host offers it: the standalone viewer does, and Treeality does not. *@
+    @if (ShowShare)
+    {
+        <button class="btn btn-outline-primary btn-sm @(ShareExpanded ? "active" : "")" @onclick="OnToggleShare" title="Share: a link that opens the viewer set up as this one is, or the code that embeds it in another site's page" data-testid="viewer-share">
+            <i class="bi bi-share me-1" aria-hidden="true"></i>Share
+        </button>
     }
-</div>
+}
 
 @code {
     [Parameter] public bool IsConnected { get; set; }
@@ -50,12 +65,62 @@
     [Parameter] public int Port { get; set; }
     [Parameter] public bool ConnectionCardExpanded { get; set; }
     [Parameter] public bool ImportExportExpanded { get; set; }
-    [Parameter] public int ExpansionLimit { get; set; }
-    [Parameter] public EventCallback<int> OnExpansionLimitChanged { get; set; }
-    [Parameter] public int QueryLimit { get; set; }
-    [Parameter] public EventCallback<int> OnQueryLimitChanged { get; set; }
+    [Parameter] public bool ShowShare { get; set; }
+    [Parameter] public bool ShareExpanded { get; set; }
     [Parameter] public EventCallback OnToggleConnectionCard { get; set; }
     [Parameter] public EventCallback OnToggleImportExport { get; set; }
+    [Parameter] public EventCallback OnToggleShare { get; set; }
+
+    ///<summary>Adds a connection: as tabs, a button with the plug and a + left of Import/Export (the multiple-connections spec).</summary>
+    [Parameter] public EventCallback OnAddConnection { get; set; }
+
+    ///<summary>Closes this connection: as a tab, an × after its name, given only while there are several (the multiple-connections spec).</summary>
+    [Parameter] public EventCallback OnCloseConnection { get; set; }
+
+    ///<summary>Drawn as tabs in the shell's bar rather than as buttons in the workspace's row, and without Share.</summary>
+    [Parameter] public bool AsTabs { get; set; }
+
+    ///<summary>Which of the tabs to draw (AsTabs): both, by default, or the one the page places on its own.</summary>
+    [Parameter] public ViewerTab Tab { get; set; }
+
+    ///<summary>The viewer's tabs one at a time, for a page that places them apart.</summary>
+    public enum ViewerTab
+    {
+        Both,
+        Connection,
+        ImportExport
+    }
+
+    private RenderFragment ConnectionTabItem => @<li class="nav-item">
+        <button type="button" class="nav-link @(ConnectionCardExpanded ? "active" : "") @PulseClass" @onclick="OnToggleConnectionCard" title="@ConnectionTitle" aria-selected="@(ConnectionCardExpanded ? "true" : "false")" data-testid="viewer-connection">
+            @ConnectionIcon
+            <span class="gdbv-conn-label">@LabelText</span>
+            @if (OnCloseConnection.HasDelegate)
+            {
+                <span class="text-secondary" role="button" title="Close connection" aria-label="Close connection" @onclick:stopPropagation="true" @onclick="OnCloseConnection" data-testid="viewer-close-connection">×</span>
+            }
+        </button>
+    </li>;
+
+    //The add-connection button (2026-11-03, the user): the plug with a small +, a narrow tab shaded as Import/Export is,
+    //stretched down to the row's line, since its icons are shorter than a line of text.
+    private RenderFragment AddConnectionTabItem => @<text>
+        @if (OnAddConnection.HasDelegate)
+        {
+            <li class="nav-item d-flex">
+                <button type="button" class="nav-link gdbv-add-conn" @onclick="OnAddConnection" title="New connection" aria-label="New connection" data-testid="viewer-add-connection">
+                    <i class="bi bi-plug" aria-hidden="true"></i><i class="bi bi-plus gdbv-add-conn-plus" aria-hidden="true"></i>
+                </button>
+            </li>
+        }
+    </text>;
+
+    private RenderFragment ImportExportTabItem => @<li class="nav-item">
+        <button type="button" class="nav-link @(ImportExportExpanded ? "active" : "")" @onclick="OnToggleImportExport" title="Paste or import a graph, or export the loaded one" aria-selected="@(ImportExportExpanded ? "true" : "false")" data-testid="viewer-import-export">
+            <i class="bi bi-arrow-down-up" aria-hidden="true"></i>
+            <span>Import/Export</span>
+        </button>
+    </li>;
 
     ///<summary>
     ///What to call the connection when host and port are the wrong words for it. The instance's own
@@ -64,63 +129,100 @@
     ///</summary>
     [Parameter] public string ConnectionLabel { get; set; }
 
-    //The connection button doubles as the app's mode indicator: green when connected, blue while drawing
-    //offline, gray otherwise. Offline mode used to be invisible here — the bar kept saying "Disconnected"
+    //The connection button doubles as the app's mode indicator: the success color when connected, the accent
+    //otherwise, with the plug or the pencil saying which. Offline mode used to be invisible here — the bar kept saying "Disconnected"
     //while the card holding the "Exit offline mode" toggle had closed, leaving no visible way back out.
     private string ConnectionButtonClass
     {
         get
         {
+            var pulse = "";
+
+            if (Pulse)
+                pulse = " gdbv-pulse";
+
             if (IsConnected)
-                return "btn-outline-success";
+                return "btn-outline-success" + pulse;
 
-            if (Offline)
-                return "btn-outline-primary";
-
-            return "btn-outline-secondary";
+            //The accent, like Import/Export beside it, so the two setup buttons stand out from the row (the user,
+            //2026-10-29: "maybe green"; it is the theme's accent, green or blue).
+            return "btn-outline-primary" + pulse;
         }
     }
 
-    private string ConnectionButtonText
+    //The pulse that draws the eye to the connection, on a tab as on the pill.
+    private string PulseClass
     {
         get
         {
-            if (IsConnected)
-                return $"Connected: {HostLabel}";
+            if (Pulse)
+                return "gdbv-pulse";
 
-            if (Offline)
+            return "";
+        }
+    }
+
+    //The plug that says the connection's state, or the pencil while drawing offline: the pill's and the tab's.
+    private RenderFragment ConnectionIcon => @<text>
+        @if (IsConnected)
+        {
+            <i class="bi bi-plug-fill gdbv-conn-ico text-success" aria-hidden="true"></i>
+            <span class="visually-hidden">Connected: </span>
+        }
+        else if (Offline)
+        {
+            <i class="bi bi-pencil-square gdbv-conn-ico" aria-hidden="true"></i>
+        }
+        else
+        {
+            <span class="gdbv-conn-ico gdbv-plug-off" aria-hidden="true"><i class="bi bi-plug"></i><i class="bi bi-x-lg"></i></span>
+            <span class="visually-hidden">Disconnected: </span>
+        }
+    </text>;
+
+    //What the pill shows after its plug: the host, or the mode's name while drawing offline.
+    private string LabelText
+    {
+        get
+        {
+            if (Offline && !IsConnected)
                 return "Offline mode";
 
-            return $"Disconnected: {HostLabel}";
+            return HostLabel;
         }
     }
 
-    private string HostLabel
+    private string ConnectionTitle
     {
         get
         {
-            if (!string.IsNullOrEmpty(ConnectionLabel))
-                return ConnectionLabel;
+            string state;
 
-            if (string.IsNullOrEmpty(Hostname))
-                return $"No host:{Port}";
+            if (IsConnected)
+                state = $"Connected: {HostLabel}";
+            else if (Offline)
+                state = "Offline drawing mode: open the connection dialog to exit it or connect";
+            else
+                state = $"Disconnected: {HostLabel}";
 
-            return $"{Hostname}:{Port}";
+            if (ConnectionCardExpanded)
+                return state + " · close the connection dialog";
+
+            return state + " · open the connection dialog";
         }
     }
 
-    //Whether the Query settings dropdown (query limit + expand limit) is open.
-    private bool showQuerySettings;
+    private string HostLabel => HostText(ConnectionLabel, Hostname, Port);
 
-    private async Task OnExpansionLimitInput(ChangeEventArgs e)
+    ///<summary>What a connection is called: its own label where it has one, else its host and port.</summary>
+    public static string HostText(string connectionLabel, string hostname, int port)
     {
-        if (int.TryParse(e.Value?.ToString(), out var value))
-            await OnExpansionLimitChanged.InvokeAsync(value);
-    }
+        if (!string.IsNullOrEmpty(connectionLabel))
+            return connectionLabel;
 
-    private async Task OnQueryLimitInput(ChangeEventArgs e)
-    {
-        if (int.TryParse(e.Value?.ToString(), out var value))
-            await OnQueryLimitChanged.InvokeAsync(value);
+        if (string.IsNullOrEmpty(hostname))
+            return $"No host:{port}";
+
+        return $"{hostname}:{port}";
     }
 }

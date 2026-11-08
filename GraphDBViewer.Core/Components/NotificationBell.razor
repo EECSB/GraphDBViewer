@@ -1,0 +1,179 @@
+@using System.Net.Http.Json
+@using GraphDBViewerWeb.Code
+@implements IDisposable
+@inject HttpClient Http
+@inject NavigationManager Navigation
+
+@*The bell (the notifications spec, criterion 12): how many of the person's notifications are unread, on every page,
+   kept up to date by the feed as the host publishes them. Opened, it lists the latest few; one opened is marked read
+   and goes to what it is about. The dropdown is the top bar's own: a transparent backdrop and a card at the right.*@
+<div class="position-relative ms-2">
+    <button type="button" class="btn btn-outline-secondary btn-sm text-body-emphasis position-relative gdbv-bar-icon" @onclick="ToggleAsync"
+            title="@Title" aria-label="@Title" aria-haspopup="true" aria-expanded="@(open ? "true" : "false")" data-testid="shell-bell">
+        <i class="bi @(Feed.Unread > 0 ? "bi-bell-fill" : "bi-bell")" style="font-size: 14px; line-height: 1; vertical-align: -2px;" aria-hidden="true"></i>
+        @if (Feed.Unread > 0)
+        {
+            <span class="position-absolute badge rounded-pill bg-danger gdbv-bell-count" style="font-size: .6rem;" data-testid="shell-bell-count">@NotificationsText.Badge(Feed.Unread)</span>
+        }
+    </button>
+
+    @if (open)
+    {
+        <div class="position-fixed top-0 start-0 w-100 h-100" style="z-index: 1070;" @onclick="() => open = false"></div>
+
+        <div class="card position-absolute end-0 mt-1 shadow" style="z-index: 1080; width: 22rem; max-width: calc(100vw - 2rem);" data-testid="shell-bell-menu">
+            <div class="d-flex align-items-center gap-2 px-3 py-2 border-bottom">
+                <strong class="me-auto" style="font-size: .9rem;">Notifications</strong>
+                @if (Feed.Unread > 0)
+                {
+                    <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" @onclick="ReadAllAsync" data-testid="shell-bell-read-all">Mark all read</button>
+                }
+            </div>
+
+            @if (error != null)
+            {
+                <div class="px-3 py-2 small text-danger">@error</div>
+            }
+            else if (latest == null)
+            {
+                <div class="px-3 py-2 small text-body-secondary">Reading them…</div>
+            }
+            else if (latest.Count == 0)
+            {
+                <div class="px-3 py-3 small text-body-secondary" data-testid="shell-bell-empty">Nothing is waiting for you.</div>
+            }
+            else
+            {
+                <div style="max-height: 24rem; overflow-y: auto;">
+                    @foreach (var one in latest)
+                    {
+                        <button type="button" class="dropdown-item d-flex align-items-start gap-2 px-3 py-2 border-bottom text-wrap" @onclick="() => OpenAsync(one)" data-testid="shell-bell-item" data-kind="@one.Kind">
+                            <i class="bi @one.Icon text-primary mt-1" aria-hidden="true"></i>
+                            <span class="flex-grow-1" style="font-size: .85rem;">
+                                <span class="@(one.ReadAt == null ? "fw-semibold" : null) @(one.SettledAt != null ? "text-decoration-line-through text-body-secondary" : null)">@one.Sentence</span>
+                                <span class="d-block small text-body-secondary">@one.Plugin · @NotificationsText.Ago(one.RaisedAt, DateTimeOffset.Now)</span>
+                            </span>
+                            @if (one.ReadAt == null)
+                            {
+                                <span class="rounded-circle bg-primary mt-2 flex-shrink-0" style="width: .5rem; height: .5rem;" title="Unread"></span>
+                            }
+                        </button>
+                    }
+                </div>
+            }
+
+            <a class="d-block text-center small px-3 py-2 text-decoration-none" href="@NotificationsContract.Route" @onclick="() => open = false" data-testid="shell-bell-all">All notifications</a>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public INotificationFeed Feed { get; set; }
+
+    private bool open;
+    private List<NotificationShown> latest;
+    private string error;
+
+    private string Title
+    {
+        get
+        {
+            if (Feed.Unread == 1)
+                return "Notifications: 1 unread";
+            else if (Feed.Unread > 1)
+                return $"Notifications: {Feed.Unread} unread";
+
+            return "Notifications";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        Feed.Changed += OnChanged;
+        await Feed.StartAsync();
+    }
+
+    private void OnChanged(NotificationEvent evt)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (open && evt != null)
+                await LoadAsync();
+
+            StateHasChanged();
+        });
+    }
+
+    private async Task ToggleAsync()
+    {
+        open = !open;
+
+        if (open)
+            await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            var page = await Http.GetFromJsonAsync<NotificationPage>($"{NotificationsContract.BasePath}?limit={NotificationsContract.BellCount}");
+
+            latest = page?.Items ?? [];
+            error = null;
+
+            if (page != null)
+                Feed.Counted(page.Unread);
+        }
+        catch (Exception ex)
+        {
+            error = "The notifications could not be read: " + ex.Message;
+        }
+    }
+
+    private async Task OpenAsync(NotificationShown one)
+    {
+        open = false;
+
+        if (one.ReadAt == null)
+        {
+            try
+            {
+                var answer = await (await Http.PostAsync($"{NotificationsContract.BasePath}/{one.Id}/read", null)).Content.ReadFromJsonAsync<NotificationAnswer>();
+
+                if (answer != null)
+                    Feed.Counted(answer.Unread);
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        if (!string.IsNullOrEmpty(one.Link))
+            Navigation.NavigateTo(one.Link);
+    }
+
+    private async Task ReadAllAsync()
+    {
+        try
+        {
+            var answer = await NotificationRequests.ReadAllAsync(Http);
+
+            if (answer != null)
+                Feed.Counted(answer.Unread);
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            error = "They could not be marked read: " + ex.Message;
+        }
+    }
+
+    public void Dispose()
+    {
+        Feed.Changed -= OnChanged;
+    }
+}

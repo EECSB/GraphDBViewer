@@ -3,14 +3,26 @@ namespace GraphDBViewerWeb.Code;
 ///<summary>
 ///The graph viewer, as the bundled plugin it now is (plugin-system phase 1, task 5): it declares its
 ///route through the same seam a third-party page will use, and the router only knows <c>/</c>
-///because this ran. Nothing about how the viewer works changes — its toolbar contribution already
-///goes through <see cref="ShellState.ToolbarContribution"/> like any page's, and its pages stay
-///where they are. Not removable, deliberately: it owns <c>/</c>, which embeds depend on
+///because this ran. Nothing about how the viewer works changes, and its pages stay where they are; it
+///puts nothing in the shell's bar (<see cref="ShellState.ToolbarContribution"/>), its controls being in
+///its own workspace since 2026-10-29. Not removable, deliberately: it owns <c>/</c>, which embeds depend on
 ///(plugin-system criterion 9).
 ///</summary>
 public sealed class ViewerPlugin : IPluginModule
 {
     public const string PluginId = "treeality.viewer";
+
+    ///<summary>
+    ///The viewer's feature showcase, which the core carries for every host that serves it (2026-11-06), as the standalone
+    ///web edition shows it from its own menu: the standalone app's page, its live demo and how to run it included.
+    ///</summary>
+    public const string ShowcasePath = "_content/GraphDBViewer.Core/showcase/index.html";
+
+    ///<summary>
+    ///The same page as a plugin's Features shows it, inside another app (2026-11-07): told by its address to leave out the
+    ///standalone app's own words - the live demo, that it needs no backend, how to clone and run it - for ones that fit.
+    ///</summary>
+    public const string PluginShowcasePath = $"{ShowcasePath}?shown=plugin";
 
     public void ConfigureServices(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
     {
@@ -37,8 +49,10 @@ public sealed class ViewerPlugin : IPluginModule
             Assembly = typeof(GraphDBViewerWeb.Pages.Home).Assembly,
             Pages =
             [
-                new PluginPage { Route = "/", Title = "Graph viewer", Icon = "favicon.svg", Permission = null }
-            ]
+                new PluginPage { Route = "/", Title = "Graph viewer", Icon = "_content/GraphDBViewer.Core/graph-viewer-icon.svg", Permission = null }
+            ],
+            ShowcaseUrl = PluginShowcasePath,
+            TourRoute = "/"
         });
     }
 }

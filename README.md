@@ -50,7 +50,7 @@ Graph DB Viewer began as part of another project of mine. While exploring graph 
 - [Feature tour](#feature-tour)
   - [Connect to any graph](#-connect-to-any-graph)
   - [Write & run queries](#-write--run-queries)
-  - [Visualize four ways](#-visualize-four-ways)
+  - [Visualize six ways](#-visualize-six-ways)
   - [Map and Globe](#-map-and-globe)
   - [Debug traversals step by step](#-debug-traversals-step-by-step)
   - [Edit the graph safely](#-edit-the-graph-safely)
@@ -62,6 +62,7 @@ Graph DB Viewer began as part of another project of mine. While exploring graph 
 - [Deploying](#deploying)
   - [The server edition (Docker)](#the-server-edition-docker)
 - [Embedding in another page](#embedding-in-another-page)
+- [Claude, through an MCP server](#claude-through-an-mcp-server)
 - [How it works](#how-it-works)
 - [Project layout](#project-layout)
 - [Testing](#testing)
@@ -91,8 +92,8 @@ It's designed for developers who want a fast, private, self-hostable alternative
 | 🔌 **Six engines, browser-direct** | Gremlin (TinkerPop, Cosmos DB), Cypher (Neo4j, Memgraph), AQL (ArangoDB), DQL (Dgraph), GUN and SPARQL/RDF — straight from the browser, no proxy in between. |
 | 🐳 **Optional server edition** | One container for the databases a browser cannot reach: no CORS headers, a private network, or Bolt. Same app, still no accounts and no server-side storage. |
 | 🌍 **Map and Globe** | Vertices that carry coordinates on a world map or a 3D globe, found by the property names data already uses, with the earth's imagery shipped in the app. |
-| 🎨 **Four view modes** | The same result as **JSON**, an interactive **2D** graph, a **3D** graph, or a sortable **Table**. |
-| 🧭 **Multiple layouts** | 6 layouts in 2D (force, tree, concentric, circle, grid, random) and 6 in 3D (force + five DAG modes). |
+| 🎨 **Six view modes** | The same result as **JSON**, an interactive **2D** graph, a **3D** graph, or a sortable **Table** — and, for vertices that carry coordinates, on a **Map** or a **Globe**. |
+| 🧭 **Multiple layouts** | 7 layouts in 2D (force, cluster by label, tree, concentric, circle, grid, random) and 6 in 3D (force + five DAG modes). |
 | 🐞 **gdotV-style query debugger** | Step through a traversal and watch the traverser count after every step — see exactly where results vanish. |
 | ✏️ **Full editing** | Add / edit / delete vertices, edges and properties. Changes are staged and committed explicitly. |
 | 🧠 **Schema-aware autocomplete** | Monaco editor with real vertex labels, edge labels and property keys pulled from your live database. |
@@ -100,7 +101,7 @@ It's designed for developers who want a fast, private, self-hostable alternative
 | ✨ **Text to knowledge graph** | Paste text, a document or a Wikipedia article and get a graph out, previewed and merged before anything is committed. |
 | 📥 **Import** | Paste GraphSON, **Graphviz DOT** or **Mermaid** and visualize it offline — or turn it into `addV`/`addE`. |
 | 📤 **Export** | Table → CSV / colored Excel; graph → PNG / JPEG / SVG; 3D scene → OBJ / PLY / STL / glTF. |
-| 🌙 **Dark mode + PWA** | Persisted dark theme, keyboard shortcuts, and installable/offline via a service worker. |
+| 🌙 **Six themes + PWA** | Dark, light and tinted themes with tuned contrast, persisted, keyboard shortcuts, and installable/offline via a service worker. |
 
 ---
 
@@ -126,24 +127,28 @@ It's designed for developers who want a fast, private, self-hostable alternative
 - **Saved queries** — CRUD, stored locally, one click to reload.
 - **Query history** — the last 20 executed queries, de-duplicated (re-running one moves it to the top), click to restore.
 - **Examples tab** — curated queries grouped into **Inspect**, **Visualize** and **Mutate**, plus one-click **sample graphs** (a table-assembly tree, a social network, flight routes, 3D objects, and cities on a map) that load additively so you always have something to look at.
-- **✨ Ask AI** — describe what you want in plain English and a **bring-your-own-key** AI model (Anthropic / OpenAI / Gemini / any OpenAI-compatible server) writes the Gremlin / openCypher / SPARQL query into the editor for review — grounded in the connected schema. It is a running conversation, not one shot. Tool-capable models can run queries against the live graph to check themselves, under a per-panel setting: **ask each time** (the default), **auto-run reads**, or **auto-run reads and writes**. A write is always something the model proposes — below the top setting it waits for you, on a card that also offers to hand the query to the editor instead.
+- **✨ AI** — describe what you want in plain English and a **bring-your-own-key** AI model (Anthropic / OpenAI / Gemini / any OpenAI-compatible server) writes the Gremlin / openCypher / SPARQL query into the editor for review — grounded in the connected schema. It is a running conversation, not one shot. Tool-capable models can run queries against the live graph to check themselves, under a per-panel setting: **ask each time** (the default), **auto-run reads**, or **auto-run reads and writes**. A write is always something the model proposes — below the top setting it waits for you, on a card that also offers to hand the query to the editor instead.
 - **Cancellable** — connect, Run Query, Load DB, Schema fetch and Commit all run under a cancellation token with a Cancel button.
 
-### 🎨 Visualize four ways
+### 🎨 Visualize six ways
 
-Switch any result between **JSON**, **2D**, **3D** and **Table** instantly.
+Switch any result between **JSON**, **2D**, **3D** and **Table** instantly — and, when the vertices carry coordinates, put them on a **Map** or a **Globe**.
 
 | 2D — Cytoscape.js | 3D — three.js |
 |:---|:---|
-| <img src="docs/img/graph-2d.svg" alt="Interactive 2D graph view" width="400"> | <img src="docs/img/graph-3d.png" alt="Interactive 3D graph view" width="400"> |
+| <img src="docs/img/graph-2d.png" alt="Interactive 2D graph view" width="400"> | <img src="docs/img/graph-3d.png" alt="Interactive 3D graph view" width="400"> |
 | **Table** | **Raw JSON** |
 | <img src="docs/img/graph-table.png" alt="Vertices and edges table view" width="400"> | <img src="docs/img/graph-json.png" alt="Raw JSON results view" width="400"> |
+| **Detailed view** | **Styling** |
+| <img src="docs/img/graph-detailed.png" alt="Detailed view: three labels drawn as cards with their label, name and description" width="400"> | <img src="docs/img/styling.png" alt="The Styling window, one row per label, the Component row opened to its shapes, icon and 3D model" width="400"> |
 
-- **2D — Cytoscape.js** — 6 layouts (Force-directed `cose`, Tree/breadthfirst, Concentric, Circle, Grid, Random), directed labeled edges, and node/edge selection highlighting.
+- **2D — Cytoscape.js** — 7 layouts (Force-directed `cose`, Cluster by label, Tree/breadthfirst, Concentric, Circle, Grid, Random), directed labeled edges, and node/edge selection highlighting.
 - **3D — 3d-force-graph / three.js** — 6 layout modes (free Force, Tree top-down, Tree bottom-up, Left→right, Radial, Z-stack), auto-coloring by vertex-label group, directional arrows, curved parallel edges and hover labels. Cyclic graphs are tolerated.
 - **Table view** — vertices and edges as row/column tables with one column per property; click a row to select the element. Vertex rows are tinted with their label's configured color.
 - **Search & filter** — find nodes by label / id / property value (2D highlights + fits, 3D centers), plus a type-label filter to show/hide vertices by label, in both graph views.
 - **Styling — per label or per node** — color, size, display-property, icon URL and a new **3D-model URL** (an `.obj`/`.zip` that replaces the node's sphere in 3D), set either per vertex label (saved in the browser) or per node (saved to the database as `gdbv*` properties that override the label style and commit like any edit — the per-node scope can also pin the node's X/Y/Z position). Color/size apply live.
+- **Detailed view** — a switch per label in the Styling window draws each vertex of that label as a card: the label, the name and its properties, on the 2D canvas and in its images, and in 3D as a card facing the camera; an edge label's switch puts a card at the middle of each of its edges. Whole stylings are kept as named **stylesheets** to apply again.
+- **Graph algorithms** — degree, PageRank, betweenness, connected components, Louvain communities and shortest paths over the loaded graph, computed in the browser, so they work for every database and on imported data; vertices are sized or colored by the result and listed in the table.
 - **Double-click to expand** — grow the graph outward from a node by loading its neighbors.
 - **Center / fit** control and **live layout switching** with no graph rebuild.
 - **Graph stats** — a `N vertices · M edges` line under each graph, plus the **last query's execution time** (`… · 12 ms query`).
@@ -162,11 +167,14 @@ Vertices that carry coordinates can be drawn where they are: hover **2D** and pi
 
 - **Nothing to configure** — coordinates are found by convention: `lat` / `latitude` with `lon` / `lng` / `long` / `longitude`, or one property holding both (`"48.2, 16.4"`, a GeoJSON point, WKT `POINT(lon lat)`, a Neo4j point). Vertices without a place are hidden, and the view says how many.
 - **Still the same view** — selecting, editing, styling, filtering, searching and exporting work as they do on the plain 2D and 3D graphs. The map and the globe are layouts, and the layout pickers offer them too.
-- **Two looks** — **Satellite** (NASA Blue Marble) or **Outline** (Natural Earth coastlines and borders).
+- **Two looks built in** — **Satellite** (NASA Blue Marble) or **Outline** (Natural Earth coastlines and borders), and free street, topographic and satellite tile servers one click away in the layers menu.
 - **On the map** — routes follow great circles, grid mode draws latitude and longitude lines with their degrees, and PNG / JPEG / SVG exports keep the earth under the graph.
 - **On the globe** — links arc over the surface, and the labels of vertices on the far side of the earth are hidden.
+- **Find a place** — the magnifier under the layers button looks up an address or a place's name and takes the Map or the Globe there, with a pin on it and its coordinates to copy; nothing is sent until you press Enter.
+- **Map settings** — a tile server's URL and key (your own, a free one, or a commercial one), or Google's Map Tiles API with its kind of map and your own key, credited with Google's logo and the copyright for what is on screen, draw the earth from that server down to the street; **Keep tiles in memory**, on by default, can be turned off to let go of every tile but those on screen; and which geocoder looks places up: OpenStreetMap's own, a Photon, or a Nominatim you run, so an address need not leave your network.
+- **Node size on map** — a slider under the map sets how large the nodes are drawn, and they keep that size as you zoom; labels are drawn down to the street.
 - **Small by default, sharp on request** — the satellite earth loads a 0.3 MB image; **High resolution** downloads the 8192 × 4096 one (3.7 MB) only when you choose it.
-- **No tile server** — the imagery ships with the app, so there is no API key and no outside service to reach.
+- **No tile server needed** — the built-in imagery ships with the app, so there is no API key and no outside service to reach unless you choose one.
 
 To try it, run **Geospatial map** from *Examples → Sample graphs* (Gremlin or Cypher): eighteen cities and the routes between them.
 
@@ -206,7 +214,7 @@ A **gdotV-style step-through debugger** for Gremlin:
 
 ### 🌙 Comfort features
 
-- **Dark mode**, persisted, with tuned contrast.
+- **Six themes** — dark and light, green and blue, with tuned contrast, persisted.
 - **Keyboard shortcut**: <kbd>Delete</kbd> removes the selected element.
 - **Installable PWA** with a service worker for offline use.
 - **Full-width toggle** in the top bar — drop the page's side margins to fill the viewport; the margins are sized in `vw` so they hold steady when you zoom, and the choice is remembered per browser.
@@ -342,6 +350,30 @@ appears. Nothing to configure, and no separate download.
 > the Server route a connection's credentials travel to the host rather than staying in your browser.
 > Put TLS and access control in front of it before it goes anywhere public.
 
+## Claude, through an MCP server
+
+`gdbv-mcp` (in `GraphDBViewer.Mcp`) lets Claude, in Claude Code or Claude Desktop, query the database a viewer tab is
+connected to, through that tab, as you watch. Build it and add it to Claude Code:
+
+```bash
+dotnet build GraphDBViewer.Mcp
+claude mcp add gdbv -- dotnet "<this repo>/GraphDBViewer.Mcp/bin/Debug/net10.0/gdbv-mcp.dll"
+```
+
+Then open **Settings → AI settings** in the viewer and press **Start** under *MCP server*. Tell Claude the code it shows
+("link to my Graph DB Viewer tab, code 4821 7356"). Claude gets the same tools the AI window has: read queries, a picture of the
+graph, and what the tab has open. It may only read until you tick **Let it change the database** on the card, which is
+asked again with every new link. The tab dials `ws://127.0.0.1:43708/`, so nothing off your computer can reach the link,
+and only the code you gave Claude links it.
+
+`gdbv-mcp` takes tabs only from pages on your own computer and from the public viewer at https://eecs.blog. A viewer you
+host anywhere else is turned away until its address is given to `--link-origin`, once per address; the *MCP server* card
+shows the command with it filled in:
+
+```bash
+claude mcp add gdbv -- dotnet "<this repo>/GraphDBViewer.Mcp/bin/Debug/net10.0/gdbv-mcp.dll" --link-origin https://your-host
+```
+
 ## Embedding in another page
 
 Drop the viewer into any web page with an `<iframe>`. Pass settings in the URL's query string and it comes up **pre-configured** — connected, with a query already run, in the view you want:
@@ -423,7 +455,7 @@ GraphDBViewer.Core/          # the viewer, as a Razor class library — this is 
 GraphDBViewerWeb/            # the Blazor WebAssembly host — a composition root, and little else
   Program.cs                 # service registration, and what this edition tells the viewer it is
   App.razor                  # the router
-  wwwroot/index.html         # the page shell, favicon, PWA manifest + service workers, showcase/
+  wwwroot/index.html         # the page shell, favicon, PWA manifest + service workers, showcase/ (forwards to the core's)
 GraphDBViewerWeb.Server/     # the optional backend edition: serves the app + the query proxy
   Api/ · Db/                 # the proxy endpoint, its connection pool, the host-side Bolt driver
 Dockerfile                   # builds that host into a container

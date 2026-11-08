@@ -83,6 +83,14 @@ public sealed class GraphDbProvider
     public string EditorLanguage { get; init; }
 
     ///<summary>
+    ///The language the database itself runs, as an editor-language id, or null for an engine with none. Unlike
+    ///<see cref="EditorLanguage"/> it is set for the Gremlin servers too, which leave the editor on the user's
+    ///choice: it is the language Ask AI's query tools are written in and offered for, and the one
+    ///<see cref="QueryBuilder"/>'s guard reads.
+    ///</summary>
+    public string QueryLanguage { get; init; }
+
+    ///<summary>
     ///Monaco language for the staged-edit buffer, when it isn't the editor's. GUN is the case: its reads
     ///are a form and its writes are JavaScript, so the two boxes hold different things.
     ///</summary>
@@ -154,6 +162,14 @@ public sealed class GraphDbProvider
     ///<see cref="GraphDbProviders.RegisterServerDriver"/>. Null means "use <see cref="Create"/>".</summary>
     public Func<GremlinDB.GremlinConnection, IGraphDb> ServerCreate { get; internal set; }
 
+    ///<summary>
+    ///Whether the connection as it stands is dialed over TLS, read the way its driver reads it: the SSL switch
+    ///for an engine addressed by host and port (and port 443 for Gremlin, which GremlinDB always dials with TLS),
+    ///the URL's own scheme for one addressed by URL. The connection card asks it so that a password saved with
+    ///an encrypted connection is not sent over one that is not (the user's rule of 2026-10-03).
+    ///</summary>
+    public Func<GremlinDB.GremlinConnection, bool> Encrypts { get; init; }
+
     ///<summary>Host shown in the top bar — for an endpoint-URL database it's parsed back out of the URL.</summary>
     public Func<GremlinDB.GremlinConnection, string> DisplayHost { get; init; }
     public Func<GremlinDB.GremlinConnection, int> DisplayPort { get; init; }
@@ -170,6 +186,20 @@ public sealed class GraphDbProvider
     public string MissingRequirement { get; init; }
 
     public Func<GremlinDB.GremlinConnection, string> ConnectedMessage { get; init; }
+
+    ///<summary>
+    ///For an engine two servers speak, which of them answered, asked once the probe has: the message to say in place of
+    ///<see cref="ConnectedMessage"/>'s, or null to keep that one. Null on an engine one server speaks. Bolt is the case:
+    ///Neo4j and Memgraph both speak it, and nothing in the connection tells them apart (<see cref="BoltServer"/>).
+    ///</summary>
+    public Func<IGraphDb, CancellationToken, Task<string?>> AskConnectedMessage { get; init; }
+
+    ///<summary>
+    ///What the saved-connections list says after a connection's name: the transport, for an engine reached by either
+    ///(WebSocket or HTTP, Gremlin's choice), and otherwise the engine, which has one way in. Until 2026-10-31 the list
+    ///said the transport of every engine but SPARQL, so a Neo4j connection read "(WebSocket)", the form's default.
+    ///</summary>
+    public Func<GremlinDB.GremlinConnection, string> ListedAs { get; init; }
 
     ///<summary>Extra hint appended when a connection attempt fails, or null.</summary>
     public string ConnectFailedHint { get; init; }
@@ -228,7 +258,7 @@ public static class GraphDbProviders
     };
 
     //Every Gremlin-backed feature is built from GremlinQueryBuilder strings, so a plain RDF endpoint has
-    //none of them. Not a judgement about SPARQL — a Cypher provider will switch them on one at a time.
+    //none of them. Not a judgment about SPARQL — a Cypher provider will switch them on one at a time.
     private static readonly GraphDbCapabilities SparqlCapabilities = new();
 
     //Cypher has a query builder of its own, so the features that are really "the viewer composing a query"
@@ -294,16 +324,19 @@ public static class GraphDbProviders
         DefaultPort = 8182,
         DisplayName = "Apache TinkerPop (Gremlin)",
         EditorLanguage = null,//leave the editor on whatever the user picked
+        QueryLanguage = "gremlin",
         ProbeQuery = GremlinQueryBuilder.TestConnection,
         Capabilities = GremlinCapabilities,
         QueryBuilder = GremlinQueryBuilderAdapter.Instance,
         SchemaSource = GremlinSchemaSource.Instance,
         Debugger = GremlinQueryDebugger.Instance,
         Create = (http, connection) => new GremlinDB(http, connection),
+        Encrypts = GremlinDB.UsesTls,
         DisplayHost = connection => connection.Hostname,
         DisplayPort = connection => connection.Port,
         IsConfigured = connection => true,
         ConnectedMessage = connection => $"Connected OK via {connection.Transport}.",
+        ListedAs = connection => connection.Transport,
         ConnectFailedHint = null
     };
 
@@ -313,6 +346,7 @@ public static class GraphDbProviders
         DefaultPort = 443,
         DisplayName = "Cosmos DB (Gremlin)",
         EditorLanguage = null,
+        QueryLanguage = "gremlin",
         ProbeQuery = GremlinQueryBuilder.TestConnection,
         //Cosmos speaks Gremlin but has no OLAP, so it gets its own entry rather than aliasing TinkerPop —
         //that difference is expected to show up here as capabilities are split finer.
@@ -321,10 +355,12 @@ public static class GraphDbProviders
         SchemaSource = GremlinSchemaSource.Instance,
         Debugger = GremlinQueryDebugger.Instance,
         Create = (http, connection) => new GremlinDB(http, connection),
+        Encrypts = GremlinDB.UsesTls,
         DisplayHost = connection => connection.Hostname,
         DisplayPort = connection => connection.Port,
         IsConfigured = connection => true,
         ConnectedMessage = connection => $"Connected OK via {connection.Transport}.",
+        ListedAs = connection => connection.Transport,
         ConnectFailedHint = null
     };
 
@@ -334,14 +370,17 @@ public static class GraphDbProviders
         DefaultPort = 443,
         DisplayName = "SPARQL / RDF",
         EditorLanguage = "sparql",
+        QueryLanguage = "sparql",
         ProbeQuery = "SELECT * WHERE { ?s ?p ?o } LIMIT 1",
         Capabilities = SparqlCapabilities,
         Create = (http, connection) => new SparqlDb(http, connection),
+        Encrypts = connection => IsHttps(connection.Endpoint),
         DisplayHost = EndpointHost,
         DisplayPort = EndpointPort,
         IsConfigured = connection => !string.IsNullOrWhiteSpace(connection.Endpoint),
         MissingRequirement = "the SPARQL endpoint URL",
         ConnectedMessage = connection => "Connected to SPARQL endpoint.",
+        ListedAs = connection => "SPARQL",
         ConnectFailedHint = "(if this is a CORS error, the endpoint must allow this origin)"
     };
 
@@ -356,6 +395,7 @@ public static class GraphDbProviders
         DefaultPort = 7687,
         DisplayName = "Neo4j / Memgraph (Cypher)",
         EditorLanguage = "cypher",
+        QueryLanguage = "cypher",
         ProbeQuery = "RETURN 1",
         Capabilities = Neo4jCapabilities,
         QueryBuilder = CypherQueryBuilder.Instance,
@@ -365,11 +405,14 @@ public static class GraphDbProviders
             "Bolt is built per route: CreateBrowser (the JS driver) or CreateServer (the host's .NET driver)."),
         BrowserCreate = (js, connection) => new Neo4jBrowserDb(js, connection),
         //ServerCreate is registered by the host at startup — Neo4j.Driver cannot ship to WebAssembly.
+        Encrypts = connection => connection.UseSSL,
         DisplayHost = connection => connection.Hostname,
         DisplayPort = connection => connection.Port,
         IsConfigured = connection => !string.IsNullOrWhiteSpace(connection.Hostname),
         MissingRequirement = "a hostname",
         ConnectedMessage = connection => "Connected to Neo4j.",
+        AskConnectedMessage = BoltServer.ConnectedMessageAsync,
+        ListedAs = connection => "Neo4j / Memgraph",
         ConnectFailedHint = "(check the Bolt port and credentials; the browser route also needs the database to accept Bolt over WebSocket)"
     };
 
@@ -381,6 +424,7 @@ public static class GraphDbProviders
         DefaultPort = 8529,
         DisplayName = "ArangoDB (AQL)",
         EditorLanguage = "aql",
+        QueryLanguage = "aql",
         ProbeQuery = "RETURN 1",
         Capabilities = ArangoCapabilities,
         //Edits work from a document's own id, so the schema-less builder handles them; browse and traverse
@@ -390,11 +434,13 @@ public static class GraphDbProviders
         Debugger = AqlQueryDebugger.Instance,
         QueryBuilderForSchema = schema => new AqlQueryBuilder(schema.VertexLabels, schema.EdgeLabels),
         Create = (http, connection) => new ArangoDb(http, connection),
+        Encrypts = connection => connection.UseSSL,
         DisplayHost = connection => connection.Hostname,
         DisplayPort = connection => connection.Port,
         IsConfigured = connection => !string.IsNullOrWhiteSpace(connection.Hostname),
         MissingRequirement = "a hostname",
         ConnectedMessage = connection => "Connected to ArangoDB.",
+        ListedAs = connection => "ArangoDB",
         ConnectFailedHint = "(check the port, database and credentials; browser-direct also needs the server to allow this origin)"
     };
 
@@ -405,6 +451,7 @@ public static class GraphDbProviders
         DefaultPort = 8080,
         DisplayName = "Dgraph (DQL)",
         EditorLanguage = "dql",
+        QueryLanguage = "dql",
         //Dgraph has no "return 1": the cheapest real query is asking the schema for itself.
         ProbeQuery = "schema {}",
         Capabilities = DgraphCapabilities,
@@ -416,11 +463,13 @@ public static class GraphDbProviders
         StagedLanguage = "jsonview",//a Dgraph write is a JSON mutation, not more DQL
         ImportPreparation = DgraphImportPreparation.Instance,
         Create = (http, connection) => new DgraphDb(http, connection),
+        Encrypts = connection => connection.UseSSL,
         DisplayHost = connection => connection.Hostname,
         DisplayPort = connection => connection.Port,
         IsConfigured = connection => !string.IsNullOrWhiteSpace(connection.Hostname),
         MissingRequirement = "a hostname",
         ConnectedMessage = connection => "Connected to Dgraph.",
+        ListedAs = connection => "Dgraph",
         ConnectFailedHint = "(check the Alpha HTTP port: 8080 by default; an ACL or Cloud cluster also needs its access token in Auth Key)"
     };
 
@@ -444,10 +493,12 @@ public static class GraphDbProviders
         Create = (http, connection) => throw new NotSupportedException(
             "GUN runs in the browser only. It is built by the connect handler, which has the IJSRuntime it needs."),
         BrowserCreate = (js, connection) => new GunDb(js, connection),
+        Encrypts = connection => GunDb.PeerUrls(connection).All(IsHttps),
         DisplayHost = connection => GunDisplayHost(connection),
-        DisplayPort = connection => connection.Port,
+        DisplayPort = connection => GunDisplayPort(connection),
         IsConfigured = connection => true,//no peer at all is valid: that is a purely in-browser graph
         ConnectedMessage = connection => GunConnectedMessage(connection),
+        ListedAs = connection => "GUN",
         ConnectFailedHint = "(a GUN peer URL usually ends in /gun; with no peer the graph is in-browser only)"
     };
 
@@ -462,6 +513,18 @@ public static class GraphDbProviders
             return uri.Host;
 
         return peers[0];
+    }
+
+    //The first peer's port, beside its host. Until 2026-11-02 the bar took the connection's own port, which a peer given
+    //by its URL does not use: a link to 127.0.0.1:9 showed 127.0.0.1:8765, GUN's default.
+    private static int GunDisplayPort(GremlinDB.GremlinConnection connection)
+    {
+        var peers = GunDb.PeerUrls(connection);
+
+        if (peers.Count > 0 && Uri.TryCreate(peers[0], UriKind.Absolute, out var uri))
+            return uri.Port;
+
+        return connection.Port;
     }
 
     private static string GunConnectedMessage(GremlinDB.GremlinConnection connection)
@@ -499,6 +562,19 @@ public static class GraphDbProviders
     }
 
     ///<summary>
+    ///The provider of a database that runs this language, or null when none does: whose guard judges a query
+    ///written in it, connected or not. The first one listed where several share a language, as the Gremlin
+    ///servers share their builder.
+    ///</summary>
+    public static GraphDbProvider ForLanguage(string language)
+    {
+        if (language == null)
+            return null;
+
+        return All.FirstOrDefault(provider => provider.QueryLanguage == language);
+    }
+
+    ///<summary>
     ///True when a port is one no one chose — unset, or some engine's default left behind by the database
     ///type it was picked for. Switching engines replaces one of those and keeps anything else, so a port
     ///typed by hand survives and a stale 7687 does not follow you to ArangoDB.
@@ -523,6 +599,15 @@ public static class GraphDbProviders
     public static void RegisterServerDriver(string databaseType, Func<GremlinDB.GremlinConnection, IGraphDb> factory)
     {
         For(databaseType).ServerCreate = factory;
+    }
+
+    ///<summary>Whether a URL names an encrypted transport: https, or wss for a GUN peer given as a WebSocket.</summary>
+    private static bool IsHttps(string url)
+    {
+        if (!Uri.TryCreate((url ?? "").Trim(), UriKind.Absolute, out var uri))
+            return false;
+
+        return uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeWss;
     }
 
     private static string EndpointHost(GremlinDB.GremlinConnection connection)

@@ -22,6 +22,32 @@ public class EmbedSettingsTests
         Assert.True(s.HasAny);
     }
 
+    //The documented link names the flag with no value: /embed?instance&q=…. Until 2026-10-31 that read as nothing.
+    [Fact]
+    public void AFlagNamedWithNoValue_IsOn()
+    {
+        var s = EmbedSettings.Parse("?instance&q=g.V().limit(1)&run");
+
+        Assert.True(s.InstanceGraph);
+        Assert.True(s.AutoRun);
+        Assert.Equal("g.V().limit(1)", s.Query);
+        Assert.False(EmbedSettings.Parse("?instance=false").InstanceGraph);
+        Assert.Null(EmbedSettings.Parse("?instance=maybe").InstanceGraph);
+    }
+
+    [Fact]
+    public void Parse_TheInstancesOwnGraph_IsNamedRatherThanDescribed()
+    {
+        //How a plugin's page opens the viewer on what it found: recall's "Draw it" (Customers' phase 4).
+        var s = EmbedSettings.Parse("?instance=true&view=2d&query=g.V().limit(1)");
+
+        Assert.True(s.InstanceGraph);
+        Assert.False(s.HasConnection);
+        Assert.True(s.HasAny);
+        Assert.Equal("g.V().limit(1)", s.Query);
+        Assert.Null(EmbedSettings.Parse("?view=2d").InstanceGraph);
+    }
+
     [Fact]
     public void Parse_GremlinConnectionFields()
     {
@@ -109,11 +135,23 @@ public class EmbedSettingsTests
         Assert.True(conn.UseSSL);
     }
 
+    //An address that says nothing about SSL gets it, on whatever port it names (the user's rule of 2026-10-03:
+    //what the product defaults to is the secure option). It used to be read off the port, so 8182 meant plain.
     [Fact]
-    public void BuildConnection_NonTlsPortImpliesNoSsl()
+    public void BuildConnection_APortSaysNothingAboutSsl_SoSslStaysOn()
     {
         var s = EmbedSettings.Parse("?host=192.168.1.5&port=8182");
         var conn = s.BuildConnection();
+
+        Assert.Equal(8182, conn.Port);
+        Assert.True(conn.UseSSL);
+    }
+
+    //Plain is still anybody's choice, and an address that asks for it gets it.
+    [Fact]
+    public void BuildConnection_SslFalse_IsKept()
+    {
+        var conn = EmbedSettings.Parse("?host=192.168.1.5&port=8182&ssl=false").BuildConnection();
 
         Assert.Equal(8182, conn.Port);
         Assert.False(conn.UseSSL);
@@ -151,6 +189,89 @@ public class EmbedSettingsTests
         //freezing the value that happened to be current when the embed URL was written.
         Assert.Null(s.ViaServer);
         Assert.Equal(new GremlinDB.GremlinConnection().ViaServer, s.BuildConnection().ViaServer);
+    }
+
+    ///<summary>The embedded viewer's theme, for the page around it (2026-10-21): ShellState's three, by their names, and nothing else.</summary>
+    [Fact]
+    public void Parse_TheEmbeddedViewersTheme_IsOneOfTheShells()
+    {
+        Assert.Equal(ShellState.ThemeLight, EmbedSettings.Parse("?theme=light").Theme);
+        Assert.Equal(ShellState.ThemeDark, EmbedSettings.Parse("?theme=DARK").Theme);
+        Assert.Equal(ShellState.ThemeLightTinted, EmbedSettings.Parse("?theme=tinted").Theme);
+        Assert.Equal(ShellState.ThemeLightTinted, EmbedSettings.Parse("?theme=light-tinted").Theme);
+        Assert.Equal(ShellState.ThemeDarkBlue, EmbedSettings.Parse("?theme=dark-blue").Theme);
+        Assert.Equal(ShellState.ThemeLightBlue, EmbedSettings.Parse("?theme=light-blue").Theme);
+        Assert.Equal(ShellState.ThemeLightBlueTinted, EmbedSettings.Parse("?theme=blue-tinted").Theme);
+        Assert.Null(EmbedSettings.Parse("?theme=solarized").Theme);
+        Assert.Null(EmbedSettings.Parse("?view=2d").Theme);
+
+        //A look is not a setting the viewer acts on, so a theme alone leaves it as it was.
+        Assert.False(EmbedSettings.Parse("?theme=light").HasAny);
+    }
+
+    ///<summary>
+    ///The embedding page's origin, which turns the embedded viewer's messages on (2026-10-23): written the way a browser
+    ///writes a message's origin, so the two compare exactly.
+    ///</summary>
+    [Theory]
+    [InlineData("https://example.com", "https://example.com")]
+    [InlineData("http://127.0.0.1:5998", "http://127.0.0.1:5998")]
+    [InlineData("https://example.com/", "https://example.com")]
+    [InlineData("HTTPS://Example.COM", "https://example.com")]
+    [InlineData("https://example.com:443", "https://example.com")]
+    [InlineData("http://example.com:80", "http://example.com")]
+    [InlineData("http://example.com:443", "http://example.com:443")]
+    [InlineData("https://shop.example.com:8443", "https://shop.example.com:8443")]
+    [InlineData("http://[::1]:5998", "http://[::1]:5998")]
+    [InlineData("https://bücher.example", "https://xn--bcher-kva.example")]
+    [InlineData("  https://example.com  ", "https://example.com")]
+    public void NormalizeOrigin_AnAbsoluteHttpOrigin_IsWrittenAsABrowserWritesIt(string given, string expected)
+    {
+        Assert.Equal(expected, EmbedSettings.NormalizeOrigin(given));
+    }
+
+    ///<summary>Anything that is not an absolute http(s) origin leaves the messages off, rather than being guessed at.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("*")]
+    [InlineData("null")]
+    [InlineData("example.com")]
+    [InlineData("//example.com")]
+    [InlineData("/embed")]
+    [InlineData("https://")]
+    [InlineData("https:///example.com")]
+    [InlineData("https://example.com/page")]
+    [InlineData("https://example.com/..")]
+    [InlineData("https://example.com//")]
+    [InlineData("https://example.com?x=1")]
+    [InlineData("https://example.com#top")]
+    [InlineData("https://user:secret@example.com")]
+    [InlineData("https://example.com\\evil.example")]
+    [InlineData("https://ex%61mple.com")]
+    [InlineData("https://exa mple.com")]
+    [InlineData("https://example.com:99999")]
+    [InlineData("ftp://example.com")]
+    [InlineData("file:///C:/page.html")]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("data:text/html,hi")]
+    [InlineData("ws://example.com")]
+    public void NormalizeOrigin_AnythingElse_IsNone(string given)
+    {
+        Assert.Null(EmbedSettings.NormalizeOrigin(given));
+    }
+
+    [Fact]
+    public void Parse_TheEmbeddingPagesOrigin_IsReadEncodedOrNot_AndActsOnNothingElse()
+    {
+        Assert.Equal("http://127.0.0.1:5998", EmbedSettings.Parse("?instance=true&origin=http%3A%2F%2F127.0.0.1%3A5998").Origin);
+        Assert.Equal("https://example.com", EmbedSettings.Parse("?ORIGIN=https://example.com/&view=2d").Origin);
+        Assert.Null(EmbedSettings.Parse("?origin=https://example.com/page").Origin);
+        Assert.Null(EmbedSettings.Parse("?view=2d").Origin);
+
+        //Like the theme, it says who may talk with the viewer, not what the viewer shows: alone, it applies nothing.
+        Assert.False(EmbedSettings.Parse("?origin=https://example.com").HasAny);
     }
 
     [Fact]

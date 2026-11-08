@@ -47,6 +47,21 @@ public static class DatasetStores
 {
     ///<summary>PostgreSQL with TimescaleDB, behind <c>IReadingStore</c> (ADR 0016, question 2).</summary>
     public const string Readings = "readings";
+
+    ///<summary>
+    ///The asset store, behind <c>IBlobStore</c>: the payload as files under the vertex's key, one row set per
+    ///file — ADR 0016 §1's uniform table kept the way §1 says a file is kept. The second store module
+    ///(2026-09-20), for Manufacturing's checks on every unit of a serialized build, and the shape Instruments'
+    ///procedure runs are planned to leave.
+    ///</summary>
+    public const string Blobs = "blobs";
+
+    ///<summary>
+    ///The instance's own database, beside the accounts: the third store (2026-10-19), for the notifications, which are
+    ///per person and kept there rather than in the graph (the notifications spec, question 2). Its reader answers each
+    ///person with their own rows only.
+    ///</summary>
+    public const string Instance = "instance";
 }
 
 ///<summary>What shape a dataset is, which decides what the viewer draws (ADR 0016, question 5).</summary>
@@ -234,10 +249,8 @@ public static class DatasetVertex
     public static string OrderedBy(IEnumerable<DatasetColumn> columns)
     {
         foreach (var column in columns ?? [])
-        {
             if (column.Orders)
                 return column.Name;
-        }
 
         return null;
     }

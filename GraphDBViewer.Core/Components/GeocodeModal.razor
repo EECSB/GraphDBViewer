@@ -1,0 +1,339 @@
+﻿@using System.Text.Json
+@using GraphDBViewerWeb.Code
+@inject HttpClient Http
+@inject ShellState Shell
+
+@* "Find coordinates": looks up the vertices the Map cannot place, by the address their properties spell
+   or by the name the canvas draws, and stages the answers as gdbvLat / gdbvLon edits like every other
+   change the viewer makes. A geocoder is somebody else's service and the names asked about leave the
+   browser to reach it, so this shows exactly what would be sent and to which host, and sends nothing
+   until the button is pressed. Only the vertices ticked are sent, and none is ticked when it opens
+   (2026-11-06, the user). It stages; the caller commits, as always. *@
+
+<FloatingDialog Visible="Visible"
+                OnClose="OnClose"
+                Title="Find coordinates"
+                TitleGlyph="bi-globe-americas"
+                StorageKey="geocode-1"
+                Width="min(860px, 94vw)"
+                Height="min(760px, 90vh)"
+                Resizable="false"
+                Class="gdbv-geocode-window">
+
+    <ChildContent>
+        @if (candidates.Count == 0)
+        {
+            <p class="text-body-secondary mb-0">Every vertex in this graph already has a place on the earth. Nothing to look up.</p>
+        }
+        else
+        {
+            @* What happens, and where the names would go: an info card over the list (2026-11-06, the user). *@
+            <div class="card p-2 mb-2">
+                <div class="d-flex align-items-start gap-2">
+                    <i class="bi bi-info-circle text-body-secondary" aria-hidden="true"></i>
+                    <p class="text-body-secondary small mb-0 flex-grow-1" data-testid="geocode-warning">
+                        @if (Askable == 0)
+                        {
+                            <text>Tick the vertices to look up: @Lookable of @candidates.Count unplaced @(candidates.Count == 1 ? "vertex has" : "vertices have") something to look up. The ones ticked go to <strong>@Geocoding.HostOf(endpoint)</strong>, one a second, when the button is pressed.</text>
+                        }
+                        else
+                        {
+                            <text>@Askable ticked, of @Lookable with something to look up. Pressing the button sends @(Askable == 1 ? "that name" : "those names") to <strong>@Geocoding.HostOf(endpoint)</strong>, one a second — about @Seconds.</text>
+                        }
+                        @* The space before each sentence is an expression: Blazor drops whitespace next to a code block. *@
+                        @if (!running && !done)
+                        {
+                            <text>@(" ")Nothing has been sent yet.</text>
+                        }
+                        @(" ")<span class="text-nowrap">The geocoder is set in Map settings.</span>
+                    </p>
+                </div>
+
+                @* OpenStreetMap runs its geocoder for people finding places, not for machines working
+                   through lists, and says so in terms that carry no number. Said here rather than in a
+                   document nobody reads at the moment it stops being somebody's business. *@
+                @if (IsBulk)
+                {
+                    <div class="alert alert-warning py-2 px-3 small mt-2 mb-0" data-testid="geocode-bulk">
+                        That is more than OpenStreetMap means its public geocoder for. Its policy asks that
+                        the service not be used for bulk geocoding, and a run this size can get your address
+                        blocked — for this app and for everything else on your network. Point the geocoder
+                        at one of your own in Map settings, or look up fewer at a time.
+                    </div>
+                }
+            </div>
+
+            @* The list in a card of its own, its two actions at the very top of it, both in the theme's blue (2026-11-06, the user): Look up for the
+               ticked ones, and Place on map for what was found, as edits to review and commit; what was Stage in a bar
+               along the bottom. The list scrolls under its header when the window has no more room. *@
+            <div class="card gdbv-geocode-list">
+                <div class="d-flex align-items-center flex-wrap gap-2 p-2 border-bottom">
+                    @if (running)
+                    {
+                        <button class="btn btn-outline-danger btn-sm text-nowrap" @onclick="Stop"><i class="bi bi-stop-circle me-1" aria-hidden="true"></i>Stop</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-primary btn-sm text-nowrap" @onclick="RunAsync" disabled="@(Askable == 0)" data-testid="geocode-go"><i class="bi bi-search me-1" aria-hidden="true"></i>Look up @Askable</button>
+                    }
+                    <button class="btn btn-primary btn-sm text-nowrap" @onclick="StageAsync" disabled="@(found == 0 || running)" title="Puts what was found on the map, as gdbvLat / gdbvLon edits to review and commit" data-testid="geocode-place"><i class="bi bi-geo-alt me-1" aria-hidden="true"></i>Place @found on map</button>
+
+                    @if (running || done)
+                    {
+                        <div class="d-flex align-items-center gap-2 flex-grow-1 ms-2" style="min-width: 180px;">
+                            <div class="progress flex-grow-1" style="height: 6px;">
+                                <div class="progress-bar" style="width: @(Percent)%"></div>
+                            </div>
+                            <span class="small text-body-secondary text-nowrap" data-testid="geocode-progress">@asked of @Askable · @found found</span>
+                        </div>
+                    }
+                </div>
+
+                @if (failure != null)
+                {
+                    <div class="alert alert-danger py-2 px-3 small m-2 mb-0">@failure</div>
+                }
+
+                <div class="gdbv-geocode-scroll">
+                    <table class="table table-sm align-middle mb-0" data-testid="geocode-rows">
+                        <thead>
+                            <tr>
+                                <th style="width: 2rem;">
+                                    <input type="checkbox" class="form-check-input" checked="@(Lookable > 0 && Askable == Lookable)" @onchange="ToggleAll" disabled="@(running || Lookable == 0)" title="Tick every vertex with something to look up, or none" aria-label="Tick all" data-testid="geocode-all" />
+                                </th>
+                                <th>Vertex</th>
+                                <th>Looked up</th>
+                                <th>Found</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var candidate in candidates)
+                            {
+                                var c = candidate;
+                                <tr>
+                                    <td>
+                                        <input type="checkbox" class="form-check-input" checked="@chosen.Contains(c.Id)" @onchange="e => Choose(c, e)" disabled="@(running || c.Query == null)" title="@(c.Query == null ? "Nothing to look up: no address and no name" : "Look this one up")" aria-label="@($"Look up {c.Name ?? c.Id}")" data-testid="geocode-pick" />
+                                    </td>
+                                    <td><span class="badge bg-secondary me-1">@c.TypeLabel</span>@(c.Name ?? c.Id)</td>
+                                    <td class="small">@(c.Query ?? "—")</td>
+                                    <td class="small">@Answer(c)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    </ChildContent>
+</FloatingDialog>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    ///<summary>The drawn graph, read for the vertices that have no place.</summary>
+    [Parameter] public JsonElement CurrentGraph { get; set; }
+
+    ///<summary>The per-label styles, because a label's coordinate mapping decides what counts as unplaced.</summary>
+    [Parameter] public IReadOnlyDictionary<string, LabelStyle> LabelStyles { get; set; }
+
+    ///<summary>The connection's own language, which writes the property edits this stages.</summary>
+    [Parameter] public IGraphQueryBuilder QueryBuilder { get; set; }
+
+    ///<summary>Where the staged lines go — the caller owns the buffer, as with every other staged edit.</summary>
+    [Parameter] public EventCallback<string> OnStage { get; set; }
+
+    private List<GeoCandidate> candidates = new();
+    private readonly Dictionary<string, GeoHit> answers = new();
+    private readonly HashSet<string> chosen = new();
+    private string endpoint = Geocoding.DefaultEndpoint;
+    private bool running;
+    private bool done;
+    private int asked;
+    private int found;
+    private string failure;
+    private CancellationTokenSource cancel;
+
+    //Only a vertex with something to ask about can be ticked, and only a ticked one is counted, so the sentence and the
+    //button say what will really be sent rather than how many vertices happen to be unplaced.
+    private int Lookable => candidates.Count(c => c.Query != null);
+
+    private int Askable => candidates.Count(c => c.Query != null && chosen.Contains(c.Id));
+
+    //A run long enough to be somebody working through a list rather than finding a few places, against
+    //the service whose terms say not to. A geocoder of one's own is one's own business, so it is not said.
+    private bool IsBulk => Askable > Geocoding.Bulk && Geocoding.IsPublicNominatim(endpoint);
+
+    private int Percent
+    {
+        get
+        {
+            if (Askable == 0)
+                return 0;
+
+            return asked * 100 / Askable;
+        }
+    }
+
+    private string Seconds
+    {
+        get
+        {
+            var total = (int)(Askable * Geocoding.Pace.TotalSeconds);
+
+            if (total == 1)
+                return "1 second";
+            else if (total < 60)
+                return $"{total} seconds";
+
+            return $"{total / 60} min {total % 60} s";
+        }
+    }
+
+    private bool wasVisible;
+
+    //The dialog is built from the graph each time it opens: what is unplaced is a fact about the drawing
+    //on screen, and the drawing changes behind it — not least because the last run's coordinates were
+    //staged onto it.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Visible == wasVisible)
+            return;
+
+        wasVisible = Visible;
+
+        if (!Visible)
+            return;
+
+        answers.Clear();
+        chosen.Clear();
+        asked = 0;
+        found = 0;
+        done = false;
+        failure = null;
+        candidates = GraphDataConverter.UnlocatedVertices(CurrentGraph, LabelStyles);
+
+        //The geocoder is Map settings' (2026-11-06, the user), read on each opening so a change there is the one named here.
+        endpoint = await Shell.Geocoder.GetAsync();
+    }
+
+    private void Choose(GeoCandidate candidate, ChangeEventArgs e)
+    {
+        if (e.Value is true)
+            chosen.Add(candidate.Id);
+        else
+            chosen.Remove(candidate.Id);
+    }
+
+    //Every vertex with something to look up, or none: none when they all are already.
+    private void ToggleAll()
+    {
+        var all = Askable == Lookable;
+
+        chosen.Clear();
+
+        if (!all)
+            foreach (var candidate in candidates.Where(c => c.Query != null))
+                chosen.Add(candidate.Id);
+    }
+
+    private string Answer(GeoCandidate candidate)
+    {
+        if (!answers.TryGetValue(candidate.Id, out var hit))
+            return "";
+
+        if (hit.Error != null)
+            return "could not ask: " + hit.Error;
+
+        if (!hit.Located)
+            return "not found";
+
+        return $"{Geocoding.Degrees(hit.Latitude)}, {Geocoding.Degrees(hit.Longitude)} — {hit.Found}";
+    }
+
+    private async Task RunAsync()
+    {
+        running = true;
+        done = false;
+        failure = null;
+        asked = 0;
+        cancel = new CancellationTokenSource();
+
+        //Ticked ones asked again lose their last answer; what an earlier run found for the rest is kept, to stage too.
+        foreach (var id in chosen)
+            answers.Remove(id);
+
+        found = answers.Values.Count(h => h.Located);
+
+        try
+        {
+            //One request per distinct text: two vertices in the same town are one question, and the
+            //pace below is a second of somebody's afternoon each time it is asked needlessly.
+            var byQuery = new Dictionary<string, GeoHit>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate.Query == null || !chosen.Contains(candidate.Id))
+                    continue;
+
+                if (cancel.IsCancellationRequested)
+                    break;
+
+                if (!byQuery.TryGetValue(candidate.Query, out var hit))
+                {
+                    if (byQuery.Count > 0)
+                        await Task.Delay(Geocoding.Pace, cancel.Token);
+
+                    hit = await Geocoding.LookupAsync(Http, endpoint, candidate.Query, cancel.Token);
+                    byQuery[candidate.Query] = hit;
+                }
+
+                answers[candidate.Id] = hit;
+                asked++;
+
+                if (hit.Located)
+                    found++;
+
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            failure = "The lookup stopped: " + ex.Message;
+        }
+
+        running = false;
+        done = true;
+    }
+
+    private void Stop()
+    {
+        cancel?.Cancel();
+    }
+
+    //What was found, as the connection's own property edits. gdbvLat / gdbvLon is where the viewer keeps
+    //a place it was told rather than one it read, and GeoCoordinates reads that pair before anything else.
+    private async Task StageAsync()
+    {
+        var builder = QueryBuilder ?? GremlinQueryBuilderAdapter.Instance;
+        var lines = new List<string>();
+
+        foreach (var candidate in candidates)
+        {
+            if (!answers.TryGetValue(candidate.Id, out var hit) || !hit.Located)
+                continue;
+
+            lines.Add(builder.SetProperty("node", candidate.Id, GdbvKeys.Lat, Geocoding.Degrees(hit.Latitude), candidate.IdType));
+            lines.Add(builder.SetProperty("node", candidate.Id, GdbvKeys.Lon, Geocoding.Degrees(hit.Longitude), candidate.IdType));
+        }
+
+        if (lines.Count == 0)
+            return;
+
+        await OnStage.InvokeAsync(string.Join("\n", lines));
+        await OnClose.InvokeAsync();
+    }
+}

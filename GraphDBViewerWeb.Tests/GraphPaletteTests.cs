@@ -6,11 +6,12 @@ namespace GraphDBViewerWeb.Tests;
 
 public class GraphPaletteTests
 {
+    //A pinned value, since two calls in one run agree for any hash: string.GetHashCode too, which differs from one run
+    //to the next.
     [Fact]
-    public void ColorForLabel_IsStableForTheSameLabel()
+    public void ColorForLabel_IsTheSameInEveryRun()
     {
-        Assert.Equal(GraphPalette.ColorForLabel("Component"), GraphPalette.ColorForLabel("Component"));
-        Assert.Equal(GraphPalette.ColorForLabel("composes"), GraphPalette.ColorForLabel("composes"));
+        Assert.Equal("#6610f2", GraphPalette.ColorForLabel("Component"));
     }
 
     [Fact]

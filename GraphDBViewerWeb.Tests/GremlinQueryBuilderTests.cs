@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using GraphDBViewerWeb.Code;
 
 namespace GraphDBViewerWeb.Tests;
@@ -31,6 +32,16 @@ public class GremlinQueryBuilderTests
         Assert.Equal("a\\\\b", GremlinQueryBuilder.Escape("a\\b"));
     }
 
+    [Fact]
+    public void Escape_LineBreaks_AreEscaped_BecauseGroovyRefusesThemRaw()
+    {
+        //g.inject('Red<LF>Blue') is "Unexpected character" on a real Gremlin Server, and g.inject('Red\nBlue') is
+        //the same two words on two lines (2026-09-15). A backslash before them is still only doubled.
+        Assert.Equal("Red\\nBlue", GremlinQueryBuilder.Escape("Red\nBlue"));
+        Assert.Equal("one\\r\\ntwo", GremlinQueryBuilder.Escape("one\r\ntwo"));
+        Assert.Equal("a\\\\nb", GremlinQueryBuilder.Escape("a\\nb"));
+    }
+
     //── FormatId ────────────────────────────────────────────────────────
 
     [Theory]
@@ -52,6 +63,20 @@ public class GremlinQueryBuilderTests
     public void FormatId_NonNumericWithQuote_IsQuotedAndEscaped()
     {
         Assert.Equal("'O\\'Brien'", GremlinQueryBuilder.FormatId("O'Brien"));
+    }
+
+    //Digits are written bare only in the form a number is written in. Bare, Groovy reads 007 as the octal 7, another
+    //element's id, and 08 as no number at all; +5 and " 5" it reads as 5. Each is a string id, and quoted it is the
+    //one it names. A leading zero is one rule whatever Groovy makes of the digits after it: 007 stands for 08 and 00.
+    [Theory]
+    [InlineData("007")]
+    [InlineData("+5")]
+    [InlineData(" 5")]
+    [InlineData("-0")]
+    public void FormatId_DigitsNotInANumbersOwnForm_AreQuoted(string id)
+    {
+        Assert.Equal($"'{id}'", GremlinQueryBuilder.FormatId(id));
+        Assert.Equal($"'{id}'", GremlinQueryBuilder.FormatId(id, null));
     }
 
     //── ElementPrefix ───────────────────────────────────────────────────
@@ -149,18 +174,6 @@ public class GremlinQueryBuilderTests
 
     //── Deletion ────────────────────────────────────────────────────────
 
-    [Fact]
-    public void DropVertex_ProducesDrop()
-    {
-        Assert.Equal("g.V(1).drop()", GremlinQueryBuilder.DropVertex("1"));
-    }
-
-    [Fact]
-    public void DropEdge_ProducesDrop()
-    {
-        Assert.Equal("g.E(1).drop()", GremlinQueryBuilder.DropEdge("1"));
-    }
-
     [Theory]
     [InlineData("node", "g.V(1).drop()")]
     [InlineData("edge", "g.E(1).drop()")]
@@ -197,6 +210,17 @@ public class GremlinQueryBuilderTests
         Assert.Equal("g.V().limit(1)", GremlinQueryBuilder.TestConnection);
     }
 
+    //One read for a whole label, whatever a generated graph named: this is what keeps matching a hundred
+    //entities against the database from being a hundred queries. The names are one list, not an argument each,
+    //since a Groovy call with 254 of them was refused on the development JanusGraph (2026-10-23).
+    [Fact]
+    public void VerticesByName_AsksForOneLabelsNames_Escaped_AsOneList()
+    {
+        var query = GremlinQueryBuilder.VerticesByName("Company", new[] { "Acme Inc.", "O'Neill & Sons" }, 100);
+
+        Assert.Equal("g.V().hasLabel('Company').has('name', within(['Acme Inc.', 'O\\'Neill & Sons'])).limit(100)", query);
+    }
+
     [Fact]
     public void LimitedVertices_AppliesLimit()
     {
@@ -212,16 +236,8 @@ public class GremlinQueryBuilderTests
     [Fact]
     public void FullGraph_WithoutLimit_WalksWholeGraph()
     {
+        //Regression: the old bothE()-based query dropped edgeless vertices. The union keeps every vertex.
         Assert.Equal("g.V().fold().union(__.unfold(), __.unfold().outE())", GremlinQueryBuilder.FullGraph(null));
-    }
-
-    [Fact]
-    public void FullGraph_UsesUnionNotBothE_SoIsolatedVerticesSurvive()
-    {
-        //Regression: the old bothE()-based query dropped edgeless vertices.
-        var query = GremlinQueryBuilder.FullGraph(null);
-        Assert.Contains("union", query);
-        Assert.DoesNotContain("bothE", query);
     }
 
     //── Inspection ──────────────────────────────────────────────────────
@@ -273,17 +289,15 @@ public class GremlinQueryBuilderTests
     [Fact]
     public void GdbvKeys_All_HoldsEveryReservedKeyWithThePrefix()
     {
-        Assert.Contains(GdbvKeys.Image, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Model, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.X, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Y, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Z, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Color, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Size, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Shape, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Shape3d, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Display, GdbvKeys.All);
-        Assert.Contains(GdbvKeys.Show, GdbvKeys.All);
+        //Every key constant, found by reflection, so one added later and left out of All, which the database cleanup
+        //strips, fails here. And All holds nothing that is not one of them.
+        var keys = typeof(GdbvKeys).GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string) && f.Name != nameof(GdbvKeys.Prefix))
+            .Select(f => (string)f.GetRawConstantValue())
+            .ToList();
+
+        Assert.Empty(keys.Except(GdbvKeys.All));
+        Assert.Empty(GdbvKeys.All.Except(keys));
         Assert.All(GdbvKeys.All, k => Assert.StartsWith(GdbvKeys.Prefix, k));
     }
 
@@ -315,11 +329,12 @@ public class GremlinQueryBuilderTests
         Assert.Equal("'abc'", GremlinQueryBuilder.FormatId("abc", "g:Int64"));
     }
 
+    //A typed id is the number its type says, and is written the way that number is: 010L is the octal 8 to Groovy.
     [Fact]
-    public void DropEdge_Int64Id_UsesLongLiteral()
+    public void FormatId_TypedNumberWithALeadingZero_IsWrittenAsTheNumber()
     {
-        //Regression: a bare g.E(727) is an Integer and silently matches no Long-id edge.
-        Assert.Equal("g.E(727L).drop()", GremlinQueryBuilder.DropEdge("727", "g:Int64"));
+        Assert.Equal("10L", GremlinQueryBuilder.FormatId("010", "g:Int64"));
+        Assert.Equal("10", GremlinQueryBuilder.FormatId("010", "g:Int32"));
     }
 
     [Fact]
@@ -343,6 +358,7 @@ public class GremlinQueryBuilderTests
     [Fact]
     public void DropElement_Int64Edge_UsesLongLiteral()
     {
+        //Regression: a bare g.E(727) is an Integer and silently matches no Long-id edge.
         Assert.Equal("g.E(727L).drop()", GremlinQueryBuilder.DropElement("edge", "727", "g:Int64"));
     }
 }

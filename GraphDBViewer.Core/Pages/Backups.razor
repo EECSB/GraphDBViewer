@@ -1,6 +1,7 @@
 @page "/backups"
 @using System.Net.Http.Json
 @using GraphDBViewerWeb.Code
+@implements IDisposable
 @inject GraphDBViewerWeb.Code.ViewerHostOptions HostOptions
 @inject HttpClient Http
 
@@ -12,7 +13,13 @@
 {
     <PageTitle>Backups · @HostOptions.AppName</PageTitle>
 
-    <h3>Backups</h3>
+    <div class="gdbv-head">
+        <div class="gdbv-head-icon"><i class="bi bi-archive"></i></div>
+        <div>
+            <h3 class="gdbv-head-title">Backups</h3>
+            <div class="gdbv-head-sub">Copies of the instance graph: where they go, how often, and putting one back.</div>
+        </div>
+    </div>
 
     @if (Account == null || state == null)
     {
@@ -34,7 +41,45 @@
             <div class="alert alert-success" style="max-width: 52rem;" data-testid="backups-notice">@notice</div>
         }
 
-        <div class="card gdbv-tint p-3 mb-3" style="max-width: 52rem;" data-testid="backups-latest">
+        @*A run happens on the server and this watches it. Both of these used to be a request the browser
+           held open, which is why neither could be done to a real catalog: the client gives up after 100
+           seconds and took the run down with it.*@
+        @if (Running)
+        {
+            <div class="card gdbv-panel-card gdbv-tint p-3 mb-3" style="max-width: 52rem;" data-testid="backups-running">
+                <div class="d-flex align-items-center gap-2">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <strong>@Doing(job)</strong>
+                </div>
+
+                <div class="text-body-secondary mt-2" style="font-size: .85rem;" data-testid="backups-phase">
+                    @job.Phase — @job.Vertices.ToString("N0") vertices and @job.Edges.ToString("N0") edges so far,
+                    @Elapsed(job) in.@if (job.RefusedCount > 0) { <text> @job.RefusedCount.ToString("N0") could not be written.</text> }
+                </div>
+
+                <div class="text-body-secondary mt-1" style="font-size: .8rem;">
+                    It runs on the server, started by @job.By. Closing this page does not stop it.
+                </div>
+
+                <div class="mt-2">
+                    <button type="button" class="btn btn-outline-danger btn-sm" disabled="@job.Stopped" @onclick="StopAsync" data-testid="backups-stop">
+                        @(job.Stopped ? "Stopping…" : "Stop")
+                    </button>
+                </div>
+            </div>
+        }
+        @*A run that did not succeed stays on the page until another one replaces it. It is the server's own
+           record, so it outlives the tab that started it: a restore that stopped halfway is a graph holding
+           part of a backup, and somebody has to be able to find that out by opening the page.*@
+        else if (job != null && !job.Ok && !string.IsNullOrEmpty(job.Kind))
+        {
+            <div class="alert alert-warning" style="max-width: 52rem;" data-testid="backups-unfinished">
+                <strong>@Doing(job), started @job.StartedAt.ToLocalTime().ToString("f"), @Ended(job).</strong>
+                @job.Error
+            </div>
+        }
+
+        <div class="card gdbv-panel-card gdbv-tint p-3 mb-3" style="max-width: 52rem;" data-testid="backups-latest">
             @if (state.Latest == null)
             {
                 <strong>Nothing has ever been backed up from this instance.</strong>
@@ -49,10 +94,10 @@
                 <div class="text-body-secondary mt-1" style="font-size: .85rem;">
                     @state.Latest.Vertices.ToString("N0") vertices and @state.Latest.Edges.ToString("N0") edges — read back
                     and counted, not just written — from a @state.Latest.Engine, taken by @state.Latest.By.
-                    @Human(state.Latest.GraphBytes) of graph@(state.Latest.DatabaseBytes > 0 ? $", {Human(state.Latest.DatabaseBytes)} of accounts and settings" : "").
+                    @ByteSizes.Human(state.Latest.GraphBytes) of graph@(state.Latest.DatabaseBytes > 0 ? $", {ByteSizes.Human(state.Latest.DatabaseBytes)} of accounts and settings" : "").
                 </div>
                 <div class="text-body-secondary mt-1" style="font-size: .85rem;">
-                    Its assets were not copied: @state.Latest.Assets.ToString("N0") files, @Human(state.Latest.AssetBytes),
+                    Its assets were not copied: @state.Latest.Assets.ToString("N0") files, @ByteSizes.Human(state.Latest.AssetBytes),
                     in @state.Latest.AssetStore — that store has its own procedure.
                 </div>
             }
@@ -60,7 +105,7 @@
 
         @if (!state.Configured)
         {
-            <div class="card gdbv-tint p-3 mb-3" style="max-width: 52rem;" data-testid="backups-unconfigured">
+            <div class="card gdbv-panel-card gdbv-tint p-3 mb-3" style="max-width: 52rem;" data-testid="backups-unconfigured">
                 <strong>No destination is set yet</strong>
                 <p class="text-body-secondary mt-2 mb-0" style="font-size: .85rem;">
                     @state.Problem Backups go where you say and nowhere else — this app has no default destination and
@@ -75,8 +120,8 @@
 
         @if (state.MayTake)
         {
-            <div class="card gdbv-tint p-3 mb-3" style="max-width: 52rem;">
-                <h5 class="mb-2">Where backups go</h5>
+            <div class="card gdbv-panel-card p-3 mb-3" style="max-width: 52rem;">
+                <div class="gdbv-card-title"><i class="bi bi-signpost text-primary"></i><span>Where backups go</span></div>
 
                 <div class="d-flex flex-wrap gap-3 mb-2">
                     @foreach (var choice in Destinations)
@@ -103,7 +148,7 @@
                     <div class="row g-2 mb-2">
                         <div class="col-7">
                             <label class="form-label small mb-1">Endpoint</label>
-                            <input class="form-control form-control-sm" @bind="settings.Endpoint" data-testid="backups-endpoint" />
+                            <input class="form-control form-control-sm" placeholder="https://s3.example.com" @bind="settings.Endpoint" data-testid="backups-endpoint" />
                         </div>
                         <div class="col-5">
                             <label class="form-label small mb-1">Bucket</label>
@@ -115,9 +160,19 @@
                         </div>
                         <div class="col-6">
                             <label class="form-label small mb-1">Secret key</label>
-                            <input class="form-control form-control-sm" type="password" placeholder="unchanged" @bind="settings.SecretKey" />
+                            <input class="form-control form-control-sm" type="password" placeholder="@(ForgetsSecret ? "none: type it again" : "unchanged")" @bind="settings.SecretKey" />
                         </div>
                     </div>
+
+                    @*Said before the save, as the server will do it: a secret given for an endpoint with TLS is not kept
+                      for one without unless it is typed again (the user's rule of 2026-10-03).*@
+                    @if (ForgetsSecret)
+                    {
+                        <div class="text-warning mb-2" style="font-size: .8rem;" data-testid="backups-secret-forgotten">
+                            The secret key was given for an endpoint with TLS, so a save to one without forgets it: type it again
+                            to keep it for this one.
+                        </div>
+                    }
                 }
 
                 <h5 class="mb-2 mt-2">How often</h5>
@@ -162,22 +217,39 @@
                     </label>
                 </div>
 
+                @*Criterion 10: how long one takes, where somebody choosing a schedule reads it. Both numbers are from
+                   one measured catalog (specs/research/backup-export-2026-09-15.md, since the export reads by id), so
+                   the sentence names its size rather than promising how a larger graph scales.*@
+                <div class="text-body-secondary mb-2" style="font-size: .8rem;" data-testid="backups-measured">
+                    Measured on a catalog of ten thousand parts, 280,426 vertices and about 250 MB of export: a backup took
+                    <strong>55 seconds</strong> from a JanusGraph and <strong>40 seconds</strong> from a TinkerGraph with
+                    the memory to hold it. It reads the whole graph, so pick an hour when nobody needs the graph to be quick.
+                </div>
+
                 <div class="text-body-secondary mb-2" style="font-size: .8rem;">
                     The window is how recent a backup has to be before this instance will let anything destroy data —
-                    the plugin purge asks it. @if (state.NextRunAt != null) { <text>Next scheduled backup @state.NextRunAt.Value.ToLocalTime().ToString("f").</text> }
-                    @if (!string.IsNullOrEmpty(state.LastScheduled)) { <text> Last scheduled run — @state.LastScheduled</text> }
+                    the plugin purge asks it.
+                    @if (state.NextRunAt != null)
+                    {
+                        <text>Next scheduled backup @state.NextRunAt.Value.ToLocalTime().ToString("f").</text>
+                    }
+
+                    @if (!string.IsNullOrEmpty(state.LastScheduled))
+                    {
+                        <text> Last scheduled run — @state.LastScheduled</text>
+                    }
                 </div>
 
                 <div class="d-flex gap-2">
-                    <button type="button" class="btn btn-outline-secondary" disabled="@busy" @onclick="SaveAsync" data-testid="backups-save">Save settings</button>
-                    <button type="button" class="btn btn-primary" disabled="@(busy || !state.Configured)" @onclick="TakeAsync" data-testid="backups-take">
+                    <button type="button" class="btn btn-outline-secondary" disabled="@(busy || Running)" @onclick="SaveAsync" data-testid="backups-save">Save settings</button>
+                    <button type="button" class="btn btn-primary" disabled="@(busy || Running || !state.Configured)" @onclick="TakeAsync" data-testid="backups-take">
                         @(busy ? "Working…" : "Back up now")
                     </button>
                 </div>
             </div>
         }
 
-        <div class="card gdbv-tint" style="max-width: 52rem;">
+        <div class="card gdbv-panel-card gdbv-tint" style="max-width: 52rem;">
             <div class="list-group list-group-flush">
                 @if (state.Backups.Count == 0)
                 {
@@ -190,13 +262,13 @@
                         <div class="flex-grow-1">
                             <div><strong>@backup.TakenAt.ToLocalTime().ToString("f")</strong></div>
                             <div class="text-body-secondary" style="font-size: .8rem;">
-                                @backup.Vertices.ToString("N0") vertices, @backup.Edges.ToString("N0") edges, @Human(backup.GraphBytes) · @backup.By · @backup.Engine
+                                @backup.Vertices.ToString("N0") vertices, @backup.Edges.ToString("N0") edges, @ByteSizes.Human(backup.GraphBytes) · @backup.By · @backup.Engine
                             </div>
                         </div>
 
                         @if (state.MayTake)
                         {
-                            <button type="button" class="btn btn-outline-danger btn-sm" disabled="@busy" @onclick="() => AskAsync(backup.Stamp)" data-testid="backups-restore">Restore</button>
+                            <button type="button" class="btn btn-outline-danger btn-sm" disabled="@(busy || Running)" @onclick="() => AskAsync(backup.Stamp)" data-testid="backups-restore">Restore</button>
                         }
                     </div>
                 }
@@ -205,11 +277,17 @@
 
         @if (restoring != null)
         {
-            <div class="card gdbv-tint p-3 mt-3" style="max-width: 52rem;" data-testid="backups-confirm">
+            <div class="card gdbv-panel-card gdbv-tint p-3 mt-3" style="max-width: 52rem;" data-testid="backups-confirm">
                 <strong>Restore the backup from @restoring?</strong>
                 <p class="text-body-secondary mt-2 mb-2" style="font-size: .85rem;">
                     This writes the backup's graph into the instance graph. Tick the box to <strong>empty the graph
                     first</strong> — without it, the backup is added to whatever is already there.
+                    <br />
+                    @*Criterion 10 again, on the side that takes the longer: somebody about to empty a graph should
+                       read how long it will then be part-restored. Measured, and named with its size.*@
+                    Measured on a catalog of ten thousand parts, 280,426 vertices and 320,263 edges: a restore took
+                    between <strong>19 and 37 minutes</strong>. It runs on the server and reports back here, so you
+                    can close the page — but until it finishes the graph holds part of a backup and nothing else.
                     <br />
                     The accounts and settings file is <strong>not</strong> restored from here: it is
                     <code>instance.db</code> beside the graph in the destination, and an operator puts it back with the
@@ -222,8 +300,8 @@
                 </label>
 
                 <div class="d-flex gap-2">
-                    <button type="button" class="btn btn-danger" disabled="@busy" @onclick="RestoreAsync" data-testid="backups-restore-confirm">Restore</button>
-                    <button type="button" class="btn btn-outline-secondary" disabled="@busy" @onclick="() => restoring = null">Cancel</button>
+                    <button type="button" class="btn btn-danger" disabled="@(busy || Running)" @onclick="RestoreAsync" data-testid="backups-restore-confirm">Restore</button>
+                    <button type="button" class="btn btn-outline-secondary" disabled="@(busy || Running)" @onclick="() => restoring = null">Cancel</button>
                 </div>
             </div>
         }
@@ -250,12 +328,26 @@ else
 
     private BackupsState state;
     private BackupSettings settings = new();
+
+    ///<summary>The endpoint as the server last answered it: what a save's transport is measured against.</summary>
+    private string savedEndpoint;
+
+    ///<summary>Whether saving the form as it stands forgets the secret kept for the destination, as the server will.</summary>
+    private bool ForgetsSecret => BackupsContract.ForgetsSecret(new BackupSettings { Endpoint = savedEndpoint }, settings);
     private bool loaded;
     private bool busy;
     private string error;
     private string notice;
     private string restoring;
     private bool replaceExisting;
+
+    ///<summary>The run going on, or the last one there was — the server's answer, never this page's guess.</summary>
+    private BackupJobState job;
+
+    private bool watching;
+    private readonly CancellationTokenSource closing = new();
+
+    private bool Running => job != null && job.Running;
 
     ///<summary>
     ///The first load waits for the account, which the layout fetches — the same reason the plugin pages
@@ -284,6 +376,13 @@ else
 
         state ??= new BackupsState { Problem = "The app did not answer its own backups endpoint — reload and try again." };
         settings = state.Settings ?? new BackupSettings();
+        savedEndpoint = settings.Endpoint;
+        job = state.Job;
+
+        //A run started before this page was opened — by the schedule, by somebody else, or by this account
+        //in a tab that has since been closed — is picked up and watched like any other.
+        if (Running)
+            _ = WatchAsync();
     }
 
     private async Task SaveAsync()
@@ -325,17 +424,7 @@ else
 
         try
         {
-            var response = await Http.PostAsync(BackupsContract.TakePath, null);
-            var answer = await response.Content.ReadFromJsonAsync<BackupResult>();
-
-            if (answer == null)
-                error = "The server did not answer the backup.";
-            else if (!answer.Ok)
-                error = answer.Error;
-            else
-                notice = $"Backed up {answer.Vertices:N0} vertices and {answer.Edges:N0} edges, read back and counted.";
-
-            await RefreshAsync();
+            await BegunAsync(await Http.PostAsync(BackupsContract.TakePath, null));
         }
         catch (Exception ex)
         {
@@ -365,19 +454,11 @@ else
 
         try
         {
-            var response = await Http.PostAsJsonAsync(BackupsContract.RestorePath, new BackupRestoreRequest { Stamp = restoring, ReplaceExisting = replaceExisting });
-            var answer = await response.Content.ReadFromJsonAsync<BackupResult>();
-
-            if (answer == null)
-                error = "The server did not answer the restore.";
-            else if (!answer.Ok)
-                error = answer.Error;
-            else
-                notice = Restored(answer);
+            var asked = new BackupRestoreRequest { Stamp = restoring, ReplaceExisting = replaceExisting };
 
             restoring = null;
 
-            await RefreshAsync();
+            await BegunAsync(await Http.PostAsJsonAsync(BackupsContract.RestorePath, asked));
         }
         catch (Exception ex)
         {
@@ -389,28 +470,156 @@ else
         }
     }
 
-    ///<summary>What a restore did, including what it would not write — named rather than counted away.</summary>
-    private static string Restored(BackupResult answer)
+    ///<summary>
+    ///What the server said when asked to start one. A run that began is watched; one that could not begin —
+    ///no destination, no instance graph — says so at once, which is an answer and not a failure.
+    ///</summary>
+    private async Task BegunAsync(HttpResponseMessage response)
     {
-        var said = $"Restored {answer.Vertices:N0} vertices and {answer.Edges:N0} edges.";
+        var answer = await response.Content.ReadFromJsonAsync<BackupJobState>();
 
-        if (answer.Refused.Count == 0)
-            return said;
+        if (answer == null)
+        {
+            error = "The server did not answer.";
 
-        return said + $" {answer.Refused.Count} element(s) could not be written: " + string.Join(" ", answer.Refused.Take(3));
+            return;
+        }
+
+        if (answer.Running)
+        {
+            job = answer;
+
+            _ = WatchAsync();
+
+            return;
+        }
+
+        //Nothing started — no destination, no instance graph. That is a sentence, not a run, so it is said
+        //rather than drawn as one: what the page shows as the last run stays whatever the server recorded.
+        error = answer.Error;
+
+        await RefreshAsync();
     }
 
-    private static string Human(long bytes)
+    ///<summary>
+    ///Asks the server what the run is doing, once a second, until it is not running. This is the whole of
+    ///the page's part in it: the work is the server's, and closing the tab ends the watching and nothing else.
+    ///</summary>
+    private async Task WatchAsync()
     {
-        if (bytes < 1024)
-            return bytes + " B";
+        if (watching)
+            return;
 
-        if (bytes < 1024 * 1024)
-            return (bytes / 1024.0).ToString("0.#") + " KB";
+        watching = true;
 
-        if (bytes < 1024L * 1024 * 1024)
-            return (bytes / (1024.0 * 1024)).ToString("0.#") + " MB";
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(BackupsContract.JobPollMs, closing.Token);
 
-        return (bytes / (1024.0 * 1024 * 1024)).ToString("0.#") + " GB";
+                job = await Http.GetFromJsonAsync<BackupJobState>(BackupsContract.JobPath, closing.Token);
+
+                if (job == null || !job.Running)
+                    break;
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            error = "This page lost track of the run: " + ex.Message + " It is still going on the server — reload to pick it up again.";
+        }
+        finally
+        {
+            watching = false;
+        }
+
+        if (job != null && !job.Running)
+        {
+            Finished();
+
+            await RefreshAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    ///<summary>Asks the run to stop. It stops where it is; the page then reports where that was.</summary>
+    private async Task StopAsync()
+    {
+        try
+        {
+            job = await (await Http.PostAsync(BackupsContract.StopPath, null)).Content.ReadFromJsonAsync<BackupJobState>();
+        }
+        catch (Exception ex)
+        {
+            error = "The stop did not reach the server: " + ex.Message;
+        }
+    }
+
+    ///<summary>What a finished run did, in the words the page shows — including what it would not write.</summary>
+    private void Finished()
+    {
+        if (!job.Ok)
+        {
+            error = job.Error;
+
+            return;
+        }
+
+        if (job.Kind == BackupsContract.JobTake)
+        {
+            notice = $"Backed up {job.Vertices:N0} vertices and {job.Edges:N0} edges, read back and counted.";
+
+            return;
+        }
+
+        notice = $"Restored {job.Vertices:N0} vertices and {job.Edges:N0} edges.";
+
+        if (job.RefusedCount > 0)
+            notice += $" {job.RefusedCount:N0} element(s) could not be written: " + string.Join(" ", job.Refused.Take(3));
+    }
+
+    private static string Doing(BackupJobState job)
+    {
+        if (job.Kind == BackupsContract.JobRestore)
+            return "Restoring the backup from " + job.Stamp;
+
+        return "Taking a backup";
+    }
+
+    ///<summary>How it ended. Two words; why is the sentence after it, which the server wrote.</summary>
+    private static string Ended(BackupJobState job)
+    {
+        if (job.Stopped)
+            return "was stopped";
+
+        return "did not finish";
+    }
+
+    ///<summary>How long it has been going. No estimate of what is left: nothing here knows the total.</summary>
+    private static string Elapsed(BackupJobState job)
+    {
+        var seconds = (long)(DateTimeOffset.UtcNow - job.StartedAt).TotalSeconds;
+
+        if (seconds < 0)
+            seconds = 0;
+
+        if (seconds < 60)
+            return seconds + " s";
+
+        return $"{seconds / 60} min {seconds % 60} s";
+    }
+
+    public void Dispose()
+    {
+        //Canceled, not disposed: the watching loop is inside a Task.Delay on this token, and disposing it
+        //from under that is a different exception on a page that is already gone.
+        closing.Cancel();
     }
 }

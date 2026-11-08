@@ -31,7 +31,7 @@ public class GremlinDB : IGraphDb
         _http = httpClient;
         _connection = connection;
 
-        bool useSsl = connection.UseSSL || connection.Port == 443;
+        bool useSsl = UsesTls(connection);
         if (useSsl)
         {
             _httpScheme = "https";
@@ -57,6 +57,12 @@ public class GremlinDB : IGraphDb
 
         if (_isCosmos)
             _cosmosUsername = $"/dbs/{connection.Database}/colls/{connection.Collection}";
+    }
+
+    ///<summary>Whether a connection is dialed over TLS: when it says so, and always on 443, which is TLS's port.</summary>
+    public static bool UsesTls(GremlinConnection connection)
+    {
+        return connection.UseSSL || connection.Port == 443;
     }
 
     public GremlinDB(HttpClient httpClient, string transport, string hostname, string authKey, int port, bool useSSL, string database, string collection)
@@ -224,7 +230,12 @@ public class GremlinDB : IGraphDb
             {
                 var (json, closed) = await ReceiveFullMessageAsync(cancellationToken);
                 if (closed)
+                {
+                    //The server closed it, so the next query has to dial a new one.
+                    AbandonSocket();
+
                     return GraphDbResult.Failure("WebSocket closed unexpectedly.");
+                }
 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
@@ -305,6 +316,16 @@ public class GremlinDB : IGraphDb
             var combined = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(allValues));
 
             return GraphDbResult.Success(combined);
+        }
+        catch (WebSocketException)
+        {
+            //A socket the server dropped, as a restart drops every one, still reads as open until it is used,
+            //and then throws. Kept, it failed every query after this one, and the host's pool kept it for good,
+            //since every failure counts as use (found restarting a JanusGraph, 2026-09-19). Abandoned, the next
+            //query dials afresh. This one is not sent again: whether it ran is not known.
+            AbandonSocket();
+
+            throw;
         }
         finally
         {
@@ -478,12 +499,10 @@ public class GremlinDB : IGraphDb
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
-        {
             if (HasLogin)
                 return GraphDbResult.Failure("HTTP 401: the server did not accept the username and password.");
             else
                 return GraphDbResult.Failure($"HTTP 401: {LoginRequired}");
-        }
 
         if (!response.IsSuccessStatusCode)
             return GraphDbResult.Failure($"HTTP {(int)response.StatusCode}: {json}");
@@ -501,13 +520,11 @@ public class GremlinDB : IGraphDb
         var root = doc.RootElement;
 
         if (root.TryGetProperty("result", out var result) && result.TryGetProperty("data", out var data))
-        {
             //data is JSON null on empty results — don't call TryGetProperty on a non-object.
             if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("@value", out var value))
                 return GraphDbResult.Success(value.Clone());
             else
                 return GraphDbResult.Success(data.Clone());
-        }
 
         return GraphDbResult.Success(root.Clone());
     }
@@ -527,7 +544,6 @@ public class GremlinDB : IGraphDb
         if (_ws is not null)
         {
             if (_ws.State == WebSocketState.Open)
-            {
                 try
                 {
                     await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Client disposing", CancellationToken.None);
@@ -536,7 +552,6 @@ public class GremlinDB : IGraphDb
                 {
                     /* ignore errors on close */ 
                 }
-            }
 
             _ws.Dispose();
         }
@@ -582,6 +597,27 @@ public class GremlinDB : IGraphDb
             ViaServer = copy.ViaServer;
         }
 
+        ///<summary>Whether saving this over the other would change nothing. A box typed in and emptied again is the same as one never touched. A new property belongs here as well as in the copy constructor.</summary>
+        public bool SameSettings(GremlinConnection other)
+        {
+            return SameText(Transport, other.Transport)
+                && Port == other.Port
+                && UseSSL == other.UseSSL
+                && SameText(Hostname, other.Hostname)
+                && SameText(AuthKey, other.AuthKey)
+                && SameText(Database, other.Database)
+                && SameText(Collection, other.Collection)
+                && SameText(DatabaseType, other.DatabaseType)
+                && SameText(Endpoint, other.Endpoint)
+                && SameText(Username, other.Username)
+                && ViaServer == other.ViaServer;
+        }
+
+        private static bool SameText(string left, string right)
+        {
+            return string.Equals(left ?? "", right ?? "", StringComparison.Ordinal);
+        }
+
         ///<summary>HTTP | WebSocket</summary>
         public string Transport { get; set; }
 
@@ -592,10 +628,10 @@ public class GremlinDB : IGraphDb
         public string Database { get; set; }
         public string Collection { get; set; }
 
-        ///<summary>Provider family: "ApacheTinkerPop" | "CosmosDb" | "Sparql". Defaults to TinkerPop for older saved connections.</summary>
+        ///<summary>Provider family, one of <see cref="GraphDbProviders"/>' keys ("ApacheTinkerPop", "CosmosDb", "Sparql", "Neo4j", "ArangoDb", "Dgraph", "Gun", …). Defaults to TinkerPop for older saved connections.</summary>
         public string DatabaseType { get; set; } = "ApacheTinkerPop";
 
-        ///<summary>SPARQL endpoint URL (e.g. https://query.wikidata.org/sparql). Used only when DatabaseType == "Sparql".</summary>
+        ///<summary>SPARQL endpoint URL (e.g. https://query.wikidata.org/sparql), read when DatabaseType is "Sparql"; and a GUN connection's relay peers, comma-separated, which <see cref="GunDb"/> reads before the hostname.</summary>
         public string Endpoint { get; set; }
 
         ///<summary>

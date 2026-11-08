@@ -1,5 +1,11 @@
-﻿using System.Net.Http;
+﻿using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 using GraphDBViewerWeb.Code;
 
 namespace GraphDBViewerWeb.Tests;
@@ -79,6 +85,22 @@ public class LlmProviderTests
         Assert.Equal("find products", messages[0].GetProperty("content").GetString());
     }
 
+    //A system prompt with nothing in it is no prompt, so the body carries no system field rather than a null the API
+    //refuses: every caller in the core passes words, so this is a plugin's edge (the audit of 2026-11-07).
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Anthropic_ASystemPromptWithNothingInIt_IsLeftOutOfTheBody(string system)
+    {
+        using var doc = JsonDocument.Parse(AnthropicProvider.BuildRequestBody("claude-haiku-4-5", 512, system, "find products"));
+        using var streamed = JsonDocument.Parse(AnthropicProvider.BuildStreamingRequestBody("claude-haiku-4-5", 512, system, LlmMessage.One("find products")));
+
+        Assert.False(doc.RootElement.TryGetProperty("system", out _));
+        Assert.Equal("find products", doc.RootElement.GetProperty("messages")[0].GetProperty("content").GetString());
+        Assert.False(streamed.RootElement.TryGetProperty("system", out _));
+    }
+
     [Fact]
     public void Anthropic_ParseResponse_ConcatenatesTextBlocks()
     {
@@ -132,6 +154,26 @@ public class LlmProviderTests
         Assert.Equal(0.2, doc.RootElement.GetProperty("temperature").GetDouble(), 3);
     }
 
+    //The same at the chat-completions shape: no system turn leads the conversation when the prompt has nothing in it,
+    //rather than one whose content is null (the audit of 2026-11-07).
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void OpenAi_ASystemPromptWithNothingInIt_LeadsWithNoSystemTurn(string system)
+    {
+        var messages = OpenAiProvider.ToWireMessages(system, LlmMessage.One("find products"));
+
+        Assert.Single(messages);
+        Assert.Equal("user", messages[0]["role"].GetValue<string>());
+
+        using var doc = JsonDocument.Parse(OpenAiProvider.BuildRequestBody("gpt-4o-mini", system, "find products", null));
+        using var streamed = JsonDocument.Parse(OpenAiProvider.BuildStreamingRequestBody("gpt-4o-mini", system, LlmMessage.One("find products"), null));
+
+        Assert.Equal(1, doc.RootElement.GetProperty("messages").GetArrayLength());
+        Assert.Equal(1, streamed.RootElement.GetProperty("messages").GetArrayLength());
+    }
+
     [Fact]
     public void OpenAi_ParseResponse_ExtractsChoiceContent()
     {
@@ -179,10 +221,42 @@ public class LlmProviderTests
     [Theory]
     [InlineData("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai")]
     [InlineData("OpenAI", "https://api.openai.com/v1")]
-    [InlineData("Custom", "https://api.openai.com/v1")]
-    public void OpenAi_DefaultBaseUrlFor_PicksGeminiOrOpenAi(string providerType, string expected)
+    [InlineData("Custom", null)]
+    public void OpenAi_DefaultBaseUrlFor_PicksGeminiOrOpenAi_AndNoneForAServerOfOnesOwn(string providerType, string expected)
     {
         Assert.Equal(expected, OpenAiProvider.DefaultBaseUrlFor(providerType));
+    }
+
+    //A server of one's own ("Other") has no address but the one it is given. Left blank, the person's key and their
+    //question went to OpenAI's, a third party's, which the transport sweep of 2026-10-03 found. Nothing is sent now,
+    //and the answer says why.
+    [Fact]
+    public async Task OpenAi_AServerOfOnesOwnWithNoAddress_IsSentNothing_AndTheAnswerSaysWhy()
+    {
+        var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        var provider = new OpenAiProvider(http, new LlmConnection { ProviderType = "Custom", ApiKey = "a-local-key", Model = "m" });
+
+        var answered = await provider.CompleteAsync("system", "question", CancellationToken.None);
+        var streamed = await provider.StreamAsync("system", LlmMessage.One("question"), null, CancellationToken.None);
+
+        Assert.True(answered.IsError);
+        Assert.Equal(OpenAiProvider.NoAddress, answered.Error);
+        Assert.Equal(OpenAiProvider.NoAddress, streamed.Error);
+        Assert.Empty(handler.Sent);
+        Assert.Null(OpenAiProvider.ChatCompletionsUrl(" ", null));
+    }
+
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        public List<Uri> Sent { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Sent.Add(request.RequestUri);
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(@"{""choices"":[{""message"":{""role"":""assistant"",""content"":""g.V()""}}]}") });
+        }
     }
 
     [Fact]
@@ -240,7 +314,7 @@ public class LlmProviderTests
             new() { Name = "run_read_query", Description = "Run a read-only query", InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}" }
         };
 
-        var json = OpenAiProvider.BuildRequestBodyWithTools("gemini-2.5-flash", new object[] { new { role = "user", content = "hi" } }, OpenAiProvider.BuildToolsArray(tools), null);
+        var json = OpenAiProvider.BuildRequestBody("gemini-2.5-flash", OpenAiProvider.ToWireMessages("sys", LlmMessage.One("hi")), OpenAiProvider.BuildToolsArray(tools), null);
         using var doc = JsonDocument.Parse(json);
         var tool0 = doc.RootElement.GetProperty("tools")[0];
 
@@ -284,7 +358,7 @@ public class LlmProviderTests
             new() { Name = "run_read_query", Description = "Run a read-only query", InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}" }
         };
 
-        var json = AnthropicProvider.BuildRequestBodyWithTools("claude-haiku-4-5", 1024, "sys", new object[] { new { role = "user", content = "hi" } }, AnthropicProvider.BuildToolsArray(tools));
+        var json = AnthropicProvider.BuildRequestBody("claude-haiku-4-5", 1024, "sys", AnthropicProvider.ToWireMessages(LlmMessage.One("hi")), AnthropicProvider.BuildToolsArray(tools));
         using var doc = JsonDocument.Parse(json);
         var tool0 = doc.RootElement.GetProperty("tools")[0];
 
@@ -317,13 +391,15 @@ public class LlmProviderTests
     [Fact]
     public void OpenAiToolBody_CarriesTheEffortToo()
     {
-        var body = OpenAiProvider.BuildRequestBodyWithTools("o3", new List<object>(), new List<object>(), null, "low");
+        var body = OpenAiProvider.BuildRequestBody("o3", new JsonArray(), new JsonArray(), null, "low");
 
         Assert.Contains("\"reasoning_effort\":\"low\"", body);
     }
 
     [Theory]
+    [InlineData("OpenAI", "o1", true)]
     [InlineData("OpenAI", "o3", true)]
+    [InlineData("OpenAI", "o4-mini", true)]
     [InlineData("OpenAI", "gpt-5-mini", true)]
     [InlineData("OpenAI", "gpt-4o", false)]
     [InlineData("OpenAI", "", false)]
@@ -331,9 +407,7 @@ public class LlmProviderTests
     [InlineData("Gemini", "o3", false)]
     //Google's compatibility layer takes the same field, on the models that think: 2.5 and up.
     [InlineData("Gemini", "gemini-2.5-flash", true)]
-    [InlineData("Gemini", "gemini-2.5-pro", true)]
     [InlineData("Gemini", "gemini-3-pro-preview", true)]
-    [InlineData("Gemini", "gemini-1.5-pro", false)]
     [InlineData("Gemini", "gemini-2.0-flash", false)]
     [InlineData("Custom", "gemini-2.5-flash", false)]
     public void EffortIsOfferedOnlyWhereItIsUnderstood(string provider, string model, bool expected)

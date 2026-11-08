@@ -39,6 +39,10 @@ public static class WikipediaSource
     ///so is the Wikipedia it came from: a German link asks the German Wikipedia rather than missing in
     ///English. Anything that is not a Wikipedia URL is left exactly as typed, so a title that happens to
     ///contain a slash still works.
+    ///
+    ///Only wikipedia.org itself and its subdomains are Wikipedia's. A host that merely ends in the letters, such
+    ///as evilwikipedia.org, was taken for one until 2026-11-07, and a link the model was given or made up had
+    ///the tool fetch from somebody else's server and answer the model with whatever it said.
     ///</summary>
     public static (string Title, string ApiBase) ParseSource(string input)
     {
@@ -53,7 +57,7 @@ public static class WikipediaSource
         if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
             return (text, ApiBase);
 
-        if (!uri.Host.EndsWith("wikipedia.org", StringComparison.OrdinalIgnoreCase))
+        if (!IsWikipedia(uri.Host))
             return (text, ApiBase);
 
         var apiBase = $"https://{uri.Host}/w/api.php";
@@ -63,6 +67,15 @@ public static class WikipediaSource
             return (text, apiBase);
 
         return (title, apiBase);
+    }
+
+    ///<summary>Whether a host is Wikipedia's: wikipedia.org itself, or a subdomain of it.</summary>
+    public static bool IsWikipedia(string host)
+    {
+        if (string.IsNullOrEmpty(host))
+            return false;
+
+        return host.Equals("wikipedia.org", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".wikipedia.org", StringComparison.OrdinalIgnoreCase);
     }
 
     //Both shapes a Wikipedia link comes in: /wiki/Title, and /w/index.php?title=Title.

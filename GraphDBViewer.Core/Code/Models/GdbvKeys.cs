@@ -37,7 +37,9 @@ public static class GdbvKeys
     //GeoCoordinates also reads — so a place assigned in the viewer wins over one imported with the data.
     public const string Lat = "gdbvLat";
     public const string Lon = "gdbvLon";
+    //Show details on canvas for this vertex alone: "true" or "false", over its label's style.
+    public const string Details = "gdbvDetails";
 
     ///<summary>Every viewer-reserved key, for bulk operations such as the database cleanup.</summary>
-    public static readonly string[] All = { Image, Model, X, Y, Z, X3d, Y3d, Z3d, Color, Size, Shape, Shape3d, Display, Show, Lat, Lon };
+    public static readonly string[] All = { Image, Model, X, Y, Z, X3d, Y3d, Z3d, Color, Size, Shape, Shape3d, Display, Show, Lat, Lon, Details };
 }

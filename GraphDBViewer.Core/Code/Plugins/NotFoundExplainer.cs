@@ -45,14 +45,11 @@ public static class NotFoundExplainer
 
         if (entry.Outcome == PluginBootOutcome.Loaded)
             return new Explanation($"This is {name}'s page", $"{name} is loaded, but has no page at this address.", id);
-
-        if (entry.Outcome == PluginBootOutcome.Disabled)
+        else if (entry.Outcome == PluginBootOutcome.Disabled)
             return new Explanation($"This is {name}'s page", $"{name} is installed but disabled. Restore it on the Plugins page.", id);
-
-        if (entry.Outcome == PluginBootOutcome.SafeMode)
+        else if (entry.Outcome == PluginBootOutcome.SafeMode)
             return new Explanation($"This is {name}'s page", $"{name} was not loaded: this session runs in safe mode. Reload without ?safemode=1.", id);
-
-        if (entry.Outcome == PluginBootOutcome.Quarantined)
+        else if (entry.Outcome == PluginBootOutcome.Quarantined)
             return new Explanation($"This is {name}'s page", $"{name} was quarantined at boot — {entry.Detail} The Plugins page can clear the mark.", id);
 
         return new Explanation($"This is {name}'s page", $"{name} failed to load at this boot — {entry.Detail} It will be skipped next boot until the mark is cleared.", id);
@@ -70,10 +67,8 @@ public static class NotFoundExplainer
                 continue;
 
             foreach (var route in record.Manifest.Routes ?? [])
-            {
                 if (Owns(route, path))
                     return record;
-            }
         }
 
         return null;

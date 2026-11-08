@@ -7,7 +7,7 @@
     @if (table.Nodes.Count > 0 || table.Edges.Count > 0)
     {
         <details class="mt-2 flex-shrink-0">
-            <summary class="text-muted" style="font-size: 0.85em; cursor: pointer;">
+            <summary class="gdbv-text-sm gdbv-pointer text-muted">
                 <span class="fw-bold">@table.Nodes.Count</span> vertices · <span class="fw-bold">@table.Edges.Count</span> edges
                 @if (QueryMs.HasValue)
                 {
@@ -17,11 +17,11 @@
 
             @*Vertex labels and edge labels sit as two side-by-side columns; each scrolls in both axes so a
               long or crowded label list stays inside its column instead of pushing the panel around.*@
-            <div class="d-flex gap-3 mt-2" style="font-size: 0.8em;">
+            <div class="gdbv-text-sm d-flex gap-3 mt-2">
                 @if (table.Nodes.Count > 0)
                 {
                     <div style="flex: 1 1 0; min-width: 0;">
-                        <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.7em;">Vertex labels</div>
+                        <div class="gdbv-text-xs text-muted text-uppercase fw-bold mb-1">Vertex labels</div>
                         @*Cap the rendered badges and scroll the rest — a graph whose vertices each carry a
                           unique label would otherwise emit thousands of chips that overflow the panel.*@
                         <div class="pe-1" style="max-height: 180px; overflow: auto;">
@@ -36,10 +36,11 @@
                         </div>
                     </div>
                 }
+
                 @if (table.Edges.Count > 0)
                 {
                     <div style="flex: 1 1 0; min-width: 0;">
-                        <div class="text-muted text-uppercase fw-bold mb-1" style="font-size: 0.7em;">Edge labels</div>
+                        <div class="gdbv-text-xs text-muted text-uppercase fw-bold mb-1">Edge labels</div>
                         <div class="pe-1" style="max-height: 180px; overflow: auto;">
                             @foreach (var grp in edgeGroups.Take(MaxLabelBadges))
                             {
@@ -59,7 +60,6 @@
 
 @code {
     [Parameter] public JsonElement GraphData { get; set; }
-    [Parameter] public JsonElement FallbackData { get; set; }
     [Parameter] public double? QueryMs { get; set; }
 
     //Most distinct labels to render as badges; the rest collapse into a "+N more" chip. Keeps a graph
@@ -75,17 +75,6 @@
             return $"{ms:0} ms";
     }
 
-    private JsonElement Data
-    {
-        get
-        {
-            if (GraphData.ValueKind != JsonValueKind.Undefined)
-                return GraphData;
-            else
-                return FallbackData;
-        }
-    }
-
     //Walking the graph is the expensive part, and this component renders whenever Home does — which is on
     //every selection, tab switch and staged edit, not only when the graph changed. So it is done here,
     //where a JsonElement that is the same document at the same index means the same graph and can be
@@ -99,7 +88,7 @@
 
     protected override void OnParametersSet()
     {
-        var data = Data;
+        var data = GraphData;
 
         if (read && data.Equals(lastData))
             return;

@@ -1,7 +1,8 @@
 //Double-click node expansion — the one interaction that needs a live database (OnNodeExpand
 //runs a Neighbors() query). Opt-in: set GREMLIN_E2E_HOST (and optionally GREMLIN_E2E_PORT) to
-//a reachable, seeded Gremlin server (e.g. run gremlin-load-sample.ps1 against the dev server);
-//skipped otherwise, matching the SKIP_GREMLIN_TESTS convention of the C# integration tests.
+//a reachable, seeded Gremlin server (e.g. a throwaway one gremlin-load-sample.ps1 has seeded: it
+//empties the graph first, so never the dev graph); skipped otherwise, as the C# live-server tests
+//are without GREMLIN_HOST.
 //Uses the embed URL parameters (EmbedSettings) to auto-connect and auto-run the seed query.
 const { test, expect } = require('@playwright/test');
 const { cyPositions, waitForStableLayout, cyScreenPoint } = require('./helpers');
@@ -14,6 +15,7 @@ if (!port)
 test('double-clicking a node expands its neighbors from the database', async ({ page }) => {
     test.skip(!host, 'set GREMLIN_E2E_HOST to run against a live, seeded Gremlin server');
 
+    //No sign-in first: this host has no accounts, where Treeality's copy of this spec signs in as the administrator.
     const query = encodeURIComponent('g.V().limit(1)');
     await page.goto(`/?host=${host}&port=${port}&ssl=false&query=${query}`);
 

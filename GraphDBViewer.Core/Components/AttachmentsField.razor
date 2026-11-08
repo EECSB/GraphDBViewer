@@ -1,0 +1,213 @@
+@using GraphDBViewerWeb.Code
+@using Microsoft.AspNetCore.Components.Forms
+@inject IServiceProvider Services
+
+@*A field that lists files, one Markdown link per line (AttachmentLines): each shown by its name and taken off
+  with Remove, and more added with Choose, Upload, or a web link pasted in. Upload follows AssetField's rules: an
+  account that may give the source a file, into the folder the caller names, a private one for a private list,
+  which says it is private so that its picker uploads nowhere else (2026-10-03). The
+  fieldset carries the data-testid the caller gives and a data-field naming the property, and disables every
+  control inside it for a reader (2026-09-30).*@
+<fieldset class="mb-2 border-0 p-0" disabled="@Disabled" data-testid="@TestId" data-field="@FieldName">
+    @if (!string.IsNullOrEmpty(Label))
+    {
+        <legend class="form-label mb-0 float-none w-auto" style="font-size: .85rem;">@Label</legend>
+    }
+
+    @if (files.Count == 0)
+    {
+        <div class="text-body-secondary" style="font-size: .8rem;" data-testid="@($"{TestId}-none")">None yet.</div>
+    }
+    else
+    {
+        <ul class="list-unstyled mb-1" style="font-size: .85rem;">
+            @foreach (var file in files)
+            {
+                <li class="d-flex gap-2 align-items-center" data-testid="@($"{TestId}-file")">
+                    <a href="@file.Url" target="_blank" rel="noopener" class="text-truncate" title="@file.Url">@file.Name</a>
+
+                    @if (!Disabled)
+                    {
+                        <button type="button" class="btn btn-link btn-sm text-danger text-decoration-none p-0" @onclick="() => RemoveAsync(file)" data-testid="@($"{TestId}-remove")">Remove</button>
+                    }
+                </li>
+            }
+        </ul>
+    }
+
+    @if (!Disabled)
+    {
+        <div class="input-group input-group-sm">
+            @*Bound as it is typed or pasted, not when it loses focus: Add is enabled by the text, and a click on a disabled
+              button is lost, so a change made by that same click took a second one (2026-10-03).*@
+            <input class="form-control" placeholder="Paste a link to add it" @bind="pasted" @bind:event="oninput" data-testid="@($"{TestId}-link")" />
+            <button type="button" class="btn btn-outline-secondary" disabled="@string.IsNullOrWhiteSpace(pasted)" @onclick="AddPastedAsync" data-testid="@($"{TestId}-add")">Add</button>
+
+            @if (source != null)
+            {
+                <button type="button" class="btn btn-outline-secondary" @onclick="() => picking = true" data-testid="@($"{TestId}-choose")">Choose</button>
+            }
+
+            @if (Offered)
+            {
+                <label class="btn btn-outline-secondary mb-0 @(uploading ? "disabled" : "")" data-testid="@($"{TestId}-upload")">
+                    @(uploading ? "Uploading…" : "Upload")
+                    <InputFile class="d-none" OnChange="UploadAsync" disabled="@uploading" />
+                </label>
+            }
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(problem))
+    {
+        <div class="text-danger mt-1" style="font-size: .8rem;" data-testid="@($"{TestId}-problem")">@problem</div>
+    }
+
+    @if (source != null)
+    {
+        <AssetPicker Visible="picking" Kind="@AssetKinds.Any" Folder="@Folder" Uploads="@AllowUpload" Private="@Private" OnPicked="PickedAsync" OnClose="() => picking = false" />
+    }
+</fieldset>
+
+@code {
+    [Parameter] public string Label { get; set; }
+
+    ///<summary>The list as it is kept: one Markdown link per line.</summary>
+    [Parameter] public string Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    ///<summary>Whether Upload is offered at all; a private list's caller names a private folder instead of turning it off.</summary>
+    [Parameter] public bool AllowUpload { get; set; } = true;
+
+    ///<summary>Whether the list's files are private: the folder it names is one the source keeps private, and its picker uploads nowhere else.</summary>
+    [Parameter] public bool Private { get; set; }
+
+    ///<summary>The folder an upload lands in and Choose opens at; the top level when empty.</summary>
+    [Parameter] public string Folder { get; set; }
+
+    [Parameter] public string TestId { get; set; } = "attachments-field";
+
+    ///<summary>The property the field is, as the fieldset's data-field says it.</summary>
+    [Parameter] public string FieldName { get; set; }
+
+    ///<summary>Who is signed in, cascaded by the layout: whether they may upload.</summary>
+    [CascadingParameter] public AccountInfo Account { get; set; }
+
+    private IAssetSource source;
+    private List<AttachedFile> files = new();
+    private string pasted = "";
+    private bool picking;
+    private bool uploading;
+    private string problem;
+
+    protected override void OnInitialized()
+    {
+        source = Services.GetService(typeof(IAssetSource)) as IAssetSource;
+    }
+
+    protected override void OnParametersSet()
+    {
+        files = AttachmentLines.Parse(Value);
+    }
+
+    private bool Offered
+    {
+        get
+        {
+            if (Disabled || !AllowUpload)
+                return false;
+
+            return AssetUploads.MayUpload(source, Account);
+        }
+    }
+
+    private Task SaveAsync(List<AttachedFile> list)
+    {
+        files = list;
+
+        return ValueChanged.InvokeAsync(AttachmentLines.Format(list));
+    }
+
+    private Task AddAsync(AttachedFile file)
+    {
+        var list = files.ToList();
+
+        //The same file once: a second pick of it adds nothing.
+        if (list.All(f => f.Url != file.Url))
+            list.Add(file);
+
+        return SaveAsync(list);
+    }
+
+    private Task RemoveAsync(AttachedFile file)
+    {
+        problem = null;
+
+        return SaveAsync(files.Where(f => f != file).ToList());
+    }
+
+    private async Task AddPastedAsync()
+    {
+        var url = (pasted ?? "").Trim();
+
+        problem = null;
+
+        if (url.Length == 0)
+            return;
+
+        if (url.Any(char.IsWhiteSpace))
+        {
+            problem = "A link has no spaces in it.";
+
+            return;
+        }
+
+        //Every list draws its files as links, so only a web link is taken (AttachmentLines.IsWebLink).
+        if (!AttachmentLines.IsWebLink(url))
+        {
+            problem = "A link begins with http:// or https://, or with a slash for a file on this site.";
+
+            return;
+        }
+
+        pasted = "";
+
+        await AddAsync(new AttachedFile(AttachmentLines.LastSegment(url), url));
+    }
+
+    ///<summary>A picked asset, named as the source names it.</summary>
+    private async Task PickedAsync(string url)
+    {
+        problem = null;
+
+        var name = AttachmentLines.LastSegment(url);
+
+        try
+        {
+            var lookup = await source.LookupAsync(url, CancellationToken.None);
+
+            if (lookup?.Item != null && !string.IsNullOrWhiteSpace(lookup.Item.Name))
+                name = lookup.Item.Name;
+        }
+        catch { }
+
+        await AddAsync(new AttachedFile(name, url));
+    }
+
+    private async Task UploadAsync(InputFileChangeEventArgs e)
+    {
+        uploading = true;
+        problem = null;
+
+        try
+        {
+            problem = await AssetUploads.SendAsync(source, e.File, Folder, item => AddAsync(new AttachedFile(item.Name, item.Url)));
+        }
+        finally
+        {
+            uploading = false;
+        }
+    }
+}

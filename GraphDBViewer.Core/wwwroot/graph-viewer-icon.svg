@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 -15 100 90" fill="none" stroke="#3B82F6" stroke-width="2">
+    <g transform="scale(1.59) translate(-16.6,-8.49)">
+        <g transform="rotate(-5)">
+            <!-- Graph edges -->
+            <line x1="18.42" y1="23.19" x2="38.64" y2="10.75"></line>
+            <line x1="18.42" y1="23.19" x2="29.19" y2="48.67"></line>
+            <line x1="38.64" y1="10.75" x2="62.84" y2="28.17"></line>
+            <line x1="38.64" y1="10.75" x2="44.17" y2="33.01"></line>
+            <line x1="29.19" y1="48.67" x2="44.17" y2="33.01"></line>
+            <line x1="62.84" y1="28.17" x2="44.17" y2="33.01"></line>
+
+            <!-- Graph nodes -->
+            <circle cx="18.42" cy="23.19" r="4" fill="#3B82F6"></circle>
+            <circle cx="38.64" cy="10.75" r="4" fill="#3B82F6"></circle>
+            <circle cx="29.19" cy="48.67" r="4" fill="#3B82F6"></circle>
+            <circle cx="44.17" cy="33.01" r="4" fill="#3B82F6"></circle>
+            <circle cx="62.84" cy="28.17" r="4" fill="#3B82F6"></circle>
+        </g>
+        <!-- Eye -->
+        <g transform="translate(32.59,21.53) scale(0.7)">
+            <path d="M22 32c4-6 11-10 15-10s11 4 15 10c-4 6-11 10-15 10S26 38 22 32z" stroke="#3B82F6" fill="none"></path>
+            <circle cx="37" cy="32" r="6" fill="#3B82F6"></circle>
+        </g>
+    </g>
+</svg>
