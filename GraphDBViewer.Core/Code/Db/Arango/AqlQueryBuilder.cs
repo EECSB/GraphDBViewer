@@ -306,6 +306,14 @@ public sealed class AqlQueryBuilder : IGraphQueryBuilder
         return $"INSERT {{ name: {Literal(name)}, {QuoteIdentifier(GdbvKeys.X)}: {Literal(xs)}, {QuoteIdentifier(GdbvKeys.Y)}: {Literal(ys)} }} INTO {QuoteIdentifier(label)} RETURN NEW";
     }
 
+    public string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude)
+    {
+        var lat = Geocoding.Degrees(latitude);
+        var lon = Geocoding.Degrees(longitude);
+
+        return $"INSERT {{ name: {Literal(name)}, {QuoteIdentifier(GdbvKeys.Lat)}: {Literal(lat)}, {QuoteIdentifier(GdbvKeys.Lon)}: {Literal(lon)} }} INTO {QuoteIdentifier(label)} RETURN NEW";
+    }
+
     ///<summary>
     ///Creates a document under a key derived from the incoming id, so an import keeps its own identity and
     ///the edges that reference it can find it again.

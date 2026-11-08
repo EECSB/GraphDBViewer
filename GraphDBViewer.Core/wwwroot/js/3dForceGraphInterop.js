@@ -258,6 +258,45 @@ window.graph3DInterop = {
         this.globeRotateBase = null;
     },
 
+    //Where on the earth the globe is under a point of the window, { lat, lng }, or null where the pointer misses it.
+    globePlaceAt: function (clientX, clientY) {
+        const THREE = window.THREE;
+
+        if (!THREE || !this.instance || !this.globeMesh)
+            return null;
+
+        const rect = this.instance.renderer().domElement.getBoundingClientRect();
+        const pointer = new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+        const ray = new THREE.Raycaster();
+        ray.setFromCamera(pointer, this.instance.camera());
+
+        //The ray meets the sphere itself: the mesh takes no raycast of its own, so that it never stands in front of a
+        //node's click.
+        const mesh = this.globeMesh;
+        const center = mesh.getWorldPosition(new THREE.Vector3());
+        const sphere = new THREE.Sphere(center, mesh.geometry.parameters.radius * mesh.scale.x);
+        const hit = ray.ray.intersectSphere(sphere, new THREE.Vector3());
+
+        if (!hit)
+            return null;
+
+        const p = mesh.worldToLocal(hit);
+
+        return window.graphGeometry.cartesianToGeo(p.x, p.y, p.z);
+    },
+
+    //Pins a located node to the globe's sphere, where its place on the earth is.
+    pinToGlobe: function (n) {
+        const p = window.graphGeometry.geoToCartesian(n.geoLat, n.geoLng, this.GLOBE_RADIUS);
+
+        n.fx = p.x;
+        n.fy = p.y;
+        n.fz = p.z;
+        n.x = p.x;
+        n.y = p.y;
+        n.z = p.z;
+    },
+
     applyGlobe: function (graph) {
         const geo = window.graphGeometry;
         const R = this.GLOBE_RADIUS;
@@ -285,16 +324,8 @@ window.graph3DInterop = {
              .onDagError(() => { });
 
         (data.nodes || []).forEach(n => {
-            if (!self.isLocated(n))
-                return;
-
-            const p = place(n);
-            n.fx = p.x;
-            n.fy = p.y;
-            n.fz = p.z;
-            n.x = p.x;
-            n.y = p.y;
-            n.z = p.z;
+            if (self.isLocated(n))
+                self.pinToGlobe(n);
         });
 
         //The flat curvature (a fan's spread, a self-loop's size — assignLinkCurves) is kept aside and
@@ -1432,14 +1463,31 @@ window.graph3DInterop = {
                 }
             })
             .onBackgroundRightClick(event => {
-                //The page's menu for the canvas; the 3D force layout places a new component (2026-11-05, the user).
-                if (self.dotNetRef)
+                //The page's menu for the canvas; the 3D force layout places a new component (2026-11-05, the user), and on
+                //the globe the place on the earth under the pointer does.
+                if (!self.dotNetRef)
+                    return;
+
+                if (self.globeOn) {
+                    const place = self.globePlaceAt(event.clientX, event.clientY);
+
+                    self.dotNetRef.invokeMethodAsync('OnEarthContextMenu', event.clientX, event.clientY, place && place.lat, place && place.lng);
+                }
+                else
                     self.dotNetRef.invokeMethodAsync('OnCanvasContextMenu', event.clientX, event.clientY, null, null);
             })
-            .onBackgroundClick(() => {
+            .onBackgroundClick(event => {
                 //Empty-space click: add-component mode drops a new node here (the 3D force layout
-                //positions it); otherwise .NET treats it as a deselect.
-                if (self.dotNetRef)
+                //positions it, the globe by the place on the earth under the click); otherwise .NET treats it as a deselect.
+                if (!self.dotNetRef)
+                    return;
+
+                if (self.globeOn) {
+                    const place = self.globePlaceAt(event.clientX, event.clientY);
+
+                    self.dotNetRef.invokeMethodAsync('OnEarthTapped', place && place.lat, place && place.lng);
+                }
+                else
                     self.dotNetRef.invokeMethodAsync('OnCanvasTapped3d');
             })
             //A right-click on a vertex or a link opens the page's menu for it where the pointer is, as on the 2D
@@ -1645,8 +1693,13 @@ window.graph3DInterop = {
 
                 nodes.push(existing);
             }
-            else
+            else {
+                //On the globe a new node with a place on the earth goes there, as every other does.
+                if (this.globeOn && this.isLocated(inc))
+                    this.pinToGlobe(inc);
+
                 nodes.push(inc);
+            }
         });
 
         const linkKey = l => {

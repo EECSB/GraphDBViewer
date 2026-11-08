@@ -165,6 +165,9 @@
     [Parameter] public bool Visible { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
+    ///<summary>Opens on Google at this kind of map, for the layers menu's click with no Google key kept yet; null opens on what is drawn from.</summary>
+    [Parameter] public string GoogleMapType { get; set; }
+
     //What is kept, and what the boxes hold now. The key box starts empty whatever is kept: a kept key is never drawn back.
     private MapTileSettings kept = new();
     private string url = "";
@@ -220,6 +223,12 @@
 
             if (kept.IsGoogle)
                 mapType = kept.MapType;
+
+            if (GoogleMapType != null)
+            {
+                source = MapTilesPreference.Google;
+                mapType = GoogleMapType;
+            }
 
             keptGeocoder = await Shell.Geocoder.GetAsync();
             geocoder = GeocoderShown(keptGeocoder);
@@ -357,8 +366,8 @@
             await DrawKeptAsync();
     }
 
-    //Google pressed: its kind of map and key, and Google drawn from again if it is kept with its key behind the built-in map.
-    //A URL's server kept is not Google's, and is not drawn from for it.
+    //Google pressed: its kind of map and key, and Google drawn from again if it is kept with its key behind the built-in map,
+    //or if its key was set aside for another server. A URL's server kept is not Google's, and is not drawn from for it.
     private async Task UseGoogleAsync()
     {
         source = MapTilesPreference.Google;
@@ -367,6 +376,8 @@
 
         if (kept.IsGoogle)
             await DrawKeptAsync();
+        else if (!string.IsNullOrEmpty(kept.GoogleKey))
+            await SaveGoogleAsync();
     }
 
     //The server kept drawn from, the built-in map chosen over it turned off (which does nothing with no server kept).

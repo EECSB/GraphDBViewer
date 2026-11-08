@@ -224,6 +224,14 @@ RETURN {DisplayLabel("n")} AS label";
         return $"CREATE (n:{QuoteIdentifier(label)} {{name: {Literal(name)}, {ImportSafeKey(GdbvKeys.X)}: {Literal(xs)}, {ImportSafeKey(GdbvKeys.Y)}: {Literal(ys)}}}) RETURN n";
     }
 
+    public string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude)
+    {
+        var lat = Geocoding.Degrees(latitude);
+        var lon = Geocoding.Degrees(longitude);
+
+        return $"CREATE (n:{QuoteIdentifier(label)} {{name: {Literal(name)}, {ImportSafeKey(GdbvKeys.Lat)}: {Literal(lat)}, {ImportSafeKey(GdbvKeys.Lon)}: {Literal(lon)}}}) RETURN n";
+    }
+
     ///<summary>
     ///Creates a node carrying its original id in <see cref="ImportIdKey"/>. Neo4j assigns element ids and
     ///will not accept one, so an imported id becomes a property — which is also what

@@ -823,6 +823,13 @@ function geoPlanePoint(p) {
     return { x: p.x * geoPlane.scale + geoPlane.x, y: p.y * geoPlane.scale + geoPlane.y };
 }
 
+//Where on the earth a point of the graph is while the map is on, { lat, lng }, or null off the earth: geoPosition backward.
+function geoPlaceAt(p) {
+    const plane = { x: (p.x - geoPlane.x) / geoPlane.scale, y: (p.y - geoPlane.y) / geoPlane.scale };
+
+    return window.graphGeometry.geoUnproject(plane.x, plane.y, GEO_MAP_WIDTH, GEO_MAP_HEIGHT);
+}
+
 function geoPosition(n) {
     const lat = n.data('geoLat');
     const lng = n.data('geoLng');
@@ -2521,6 +2528,14 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
         if (evt.target !== cy || !dotNetRef || !e)
             return;
 
+        //On the map a new component goes to the place on the earth under the pointer, which is how the map places it.
+        if (geoLayerOn) {
+            const place = geoPlaceAt(evt.position);
+
+            dotNetRef.invokeMethodAsync('OnEarthContextMenu', e.clientX, e.clientY, place && place.lat, place && place.lng);
+            return;
+        }
+
         let x = evt.position.x;
         let y = evt.position.y;
 
@@ -2549,7 +2564,13 @@ function drawCytoscapeGraph(elementsJson, containerId, layoutName) {
     cy.on('tap', function (evt) {
         //A tap on empty canvas: report the click position so add-component mode can place a node there;
         //when that mode is off, .NET treats it as a deselect. In grid mode the position snaps to the grid.
-        if (evt.target === cy && dotNetRef) {
+        if (evt.target === cy && dotNetRef && geoLayerOn) {
+            //On the map, the place on the earth under the click: a component placed there gets it, and the map places it by it.
+            const place = geoPlaceAt(evt.position);
+
+            dotNetRef.invokeMethodAsync('OnEarthTapped', place && place.lat, place && place.lng);
+        }
+        else if (evt.target === cy && dotNetRef) {
             let x = evt.position.x;
             let y = evt.position.y;
             if (gridEnabled) {
@@ -2719,6 +2740,24 @@ function syncCytoscapeGraph(elementsJson) {
     });
 
     const added = cy.add(toAdd);
+
+    //On the map the earth places a new node, as it does every other: at its place, or hidden with its edges when it has none.
+    if (geoLayerOn) {
+        added.nodes().forEach(n => {
+            const p = geoPosition(n);
+
+            if (p) {
+                n.position(p);
+                n.removeClass('gdbv-unlocated');
+            }
+            else
+                n.addClass('gdbv-unlocated');
+        });
+
+        applyGeoEdgeBends();
+        applyGeoMarkerScale();
+        return;
+    }
 
     //New nodes given an explicit position (click-to-place / gdbv-pinned) stay exactly where placed;
     //only the position-less new nodes get laid out, with everything else locked so it doesn't move.

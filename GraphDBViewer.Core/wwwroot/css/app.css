@@ -1767,16 +1767,20 @@ h1:focus {
     padding: 0;
 }
 
-/* The property panel's header row. A long element id used to squeeze the buttons beside it until their
-   icon and label folded onto two lines, which turned a normal button into a tall block. The id is the
-   thing with slack, so it is the thing that wraps; the buttons keep their shape. */
-.gdbv-element-header > .btn {
+/* The property panel's header row: the title, the element's type and id, and its buttons. Short of room, the row
+   goes on to another line rather than squeezing a part. The buttons go as one group, still at the right, and keep
+   their icon and label on one line; the id goes down whole, and breaks only when it is longer than a line. Squeezed,
+   the buttons once folded into tall blocks, and later the id came out a letter to a line, or as nothing at all where
+   the fonts are wider (GitHub's Linux runner, 2026-11-08). e2e/element-header.spec.js holds it to this. */
+.gdbv-element-header {
+    flex-wrap: wrap;
+}
+
+.gdbv-element-actions {
     flex-shrink: 0;
-    white-space: nowrap;
 }
 
 .gdbv-element-id {
-    min-width: 0;
     overflow-wrap: anywhere;
 }
 

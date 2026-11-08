@@ -273,6 +273,15 @@ public sealed class DqlQueryBuilder : IGraphQueryBuilder
         return Set(node);
     }
 
+    public string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude)
+    {
+        var node = NewNode(label, name);
+        node[GdbvKeys.Lat] = Geocoding.Degrees(latitude);
+        node[GdbvKeys.Lon] = Geocoding.Degrees(longitude);
+
+        return Set(node);
+    }
+
     ///<summary>
     ///An imported node, as an <b>upsert</b> keyed on the id it came with.
     ///

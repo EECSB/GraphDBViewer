@@ -115,6 +115,11 @@ public sealed class SparqlInsertBuilder : IGraphQueryBuilder
         throw Unwritable();
     }
 
+    public string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude)
+    {
+        throw Unwritable();
+    }
+
     //An entity with no id has no IRI to be written under, and RDF has no id to hand back the way a graph
     //database does. Every graph this writes names its entities, so nothing reaches these.
     private static NotSupportedException Unwritable()

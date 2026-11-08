@@ -70,6 +70,8 @@ public interface IGraphQueryBuilder
     string AddVertex(string label);
     string AddVertexWithName(string label, string name);
     string AddVertexWithNameAt(string label, string name, double x, double y);
+    ///<summary>A named vertex at a place on the earth (gdbvLat / gdbvLon), for click-to-place on the Map and the Globe.</summary>
+    string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude);
     string AddVertexWithProperties(string label, string id, IReadOnlyDictionary<string, string> properties);
     string AddEdge(string sourceId, string label, string targetId);
     string AddEdgeWithProperties(string sourceId, string label, string targetId, IReadOnlyDictionary<string, string> properties);

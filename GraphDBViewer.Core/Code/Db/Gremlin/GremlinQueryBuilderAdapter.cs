@@ -139,6 +139,11 @@ public sealed class GremlinQueryBuilderAdapter : IGraphQueryBuilder
         return GremlinQueryBuilder.AddVertexWithNameAt(label, name, x, y);
     }
 
+    public string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude)
+    {
+        return GremlinQueryBuilder.AddVertexWithNameOnEarth(label, name, latitude, longitude);
+    }
+
     public string AddVertexWithProperties(string label, string id, IReadOnlyDictionary<string, string> properties)
     {
         return GremlinQueryBuilder.AddVertexWithProperties(label, id, properties);

@@ -483,12 +483,16 @@ public partial class Home
     //Map tiles' window, opened from the Map's and the Globe's dropdown.
     private bool showMapTiles;
 
+    //The kind of Google's map the window opens on, from the layers menu with no Google key kept yet; else null.
+    private string mapTilesGoogleType;
+
     private void OpenMapTiles()
     {
         show2dOptions = false;
         show3dOptions = false;
         showLayers = false;
         showMapTiles = true;
+        mapTilesGoogleType = null;
     }
 
     //The layers menu in the Map's and the Globe's top right corner.
@@ -661,6 +665,24 @@ public partial class Home
 
         if (problem == null)
             await Shell.MapTiles.SetBuiltInAsync(false);
+    }
+
+    //Google's map of the kind clicked, drawn from at once with the key kept for it (2026-11-08, the user). With none kept
+    //yet, Map settings opens on Google at that kind, for the key.
+    private async Task ChooseGoogleLayerAsync(string mapType)
+    {
+        showLayers = false;
+
+        var problem = await Shell.MapTiles.SetGoogleAsync(mapType, null);
+
+        if (problem == null)
+        {
+            await Shell.MapTiles.SetBuiltInAsync(false);
+            return;
+        }
+
+        OpenMapTiles();
+        mapTilesGoogleType = mapType;
     }
 
     //Where the canvas's zoom buttons stand: in 3D well over VR / AR, in that corner too (2026-11-05, the user: a bit more room

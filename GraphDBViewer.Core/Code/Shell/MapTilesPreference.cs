@@ -108,7 +108,8 @@ public sealed class MapTilesPreference
     ///the key box, null when nothing was, which keeps the key there was while the URL has a {key} for it; but a URL that
     ///goes from https to plain http drops a kept key unless this save types one, so a key is never sent in the clear
     ///without being given again (the rule every connection here follows). Nor is Google's key sent to a server of one's
-    ///own: going from Google to a URL drops it unless this save types one (2026-11-07).
+    ///own: going from Google to a URL leaves it out of the URL's key unless this save types one (2026-11-07), and sets it
+    ///aside for Google, so coming back from the layers menu needs nothing typed (2026-11-08, the user).
     ///</summary>
     public async Task<string> SetAsync(string url, string key)
     {
@@ -138,7 +139,15 @@ public sealed class MapTilesPreference
             }
 
             //The built-in earth's switch stays as it was: a server edited while it is on is kept for when it is turned off.
-            next = new MapTileSettings { Provider = TileUrl, Url = url, Key = keep.Trim(), BuiltIn = current.BuiltIn, KeepInMemory = current.KeepInMemory };
+            next = new MapTileSettings
+            {
+                Provider = TileUrl,
+                Url = url,
+                Key = keep.Trim(),
+                GoogleKey = current.KeyForGoogle(),
+                BuiltIn = current.BuiltIn,
+                KeepInMemory = current.KeepInMemory
+            };
 
             var problem = Problem(next);
 
@@ -156,7 +165,8 @@ public sealed class MapTilesPreference
 
     ///<summary>
     ///Keeps Google's Map Tiles API as the earth (2026-11-07): its kind of map, and the key typed, null when nothing was. Nothing
-    ///typed keeps the key Google had, but never one typed for a server of one's own, which is not sent to Google. A session
+    ///typed keeps the key Google had, kept aside if another server is drawn from now (<see cref="MapTileSettings.GoogleKey"/>),
+    ///but never one typed for a server of one's own, which is not sent to Google. A session
     ///made for the same key is kept with it; one made for another kind of map is made again when drawn
     ///(<see cref="GoogleMapTiles"/>). The built-in earth's switch stays as it was, as a URL's save leaves it.
     ///</summary>
@@ -166,12 +176,7 @@ public sealed class MapTilesPreference
         var keep = key;
 
         if (keep == null)
-        {
-            if (current.IsGoogle)
-                keep = current.Key ?? "";
-            else
-                keep = "";
-        }
+            keep = current.KeyForGoogle();
 
         var next = new MapTileSettings
         {
@@ -366,6 +371,7 @@ public sealed class MapTilesPreference
         kept.Provider ??= "";
         kept.Url ??= "";
         kept.Key ??= "";
+        kept.GoogleKey ??= "";
         kept.MapType ??= "";
         kept.Session ??= "";
         kept.SessionFor ??= "";
@@ -425,18 +431,6 @@ public sealed class MapTilesPreference
             return "Google's map tiles need your API key: type it under Key.";
 
         return null;
-    }
-
-    ///<summary>
-    ///What the layers menu calls the earth a setting draws from when it is none of the free servers: Google's map by its kind,
-    ///or a server of one's own by its address.
-    ///</summary>
-    public static string Name(MapTileSettings settings)
-    {
-        if (settings.IsGoogle)
-            return "Google Maps · " + GoogleMapTiles.NameOf(settings.MapType);
-
-        return Host(settings.Url);
     }
 
     ///<summary>Whether a URL is plain http, which sends the tiles, and any key in it, unencrypted.</summary>
@@ -503,6 +497,12 @@ public sealed class MapTileSettings
     public string Url { get; set; } = "";
     public string Key { get; set; } = "";
 
+    ///<summary>
+    ///Google's key while another server is drawn from (2026-11-08, the user wanted Google in the layers menu beside the free
+    ///servers, a click away). Empty while Google is the setting, whose key is <see cref="Key"/>. Never read for any other server.
+    ///</summary>
+    public string GoogleKey { get; set; } = "";
+
     ///<summary>Google's kind of map (<see cref="GoogleMapTiles.MapTypes"/>).</summary>
     public string MapType { get; set; } = "";
 
@@ -536,6 +536,15 @@ public sealed class MapTileSettings
 
     ///<summary>Whether the earth comes from tiles: a server is kept and the built-in earth is not chosen over it.</summary>
     public bool IsOn => HasServer && !BuiltIn;
+
+    ///<summary>The key Google is drawn with: the one in use while Google is the setting, else the one set aside for it.</summary>
+    public string KeyForGoogle()
+    {
+        if (IsGoogle)
+            return Key;
+
+        return GoogleKey;
+    }
 
     public MapTileSettings Copy()
     {

@@ -123,6 +123,15 @@ public static class GremlinQueryBuilder
     }
 
     ///<summary>
+    ///addV with a name and a place on the earth (gdbvLat / gdbvLon), for click-to-place on the Map and the Globe,
+    ///which place a vertex by where it is on the earth and hide one with no place.
+    ///</summary>
+    public static string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude)
+    {
+        return $"g.addV('{Escape((label ?? string.Empty).Trim())}').property('name', '{Escape(name)}').property('{GdbvKeys.Lat}', '{Geocoding.Degrees(latitude)}').property('{GdbvKeys.Lon}', '{Geocoding.Degrees(longitude)}')";
+    }
+
+    ///<summary>
     ///Builds an addE query going from sourceId to targetId.
     ///Uses the anonymous traversal __.V(...) inside .to() as required by TinkerPop.
     ///</summary>

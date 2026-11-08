@@ -1434,11 +1434,22 @@
                                             }
                                         }
 
-                                        @if (mapTiles.IsOn && chosenServer == null)
+                                        @* Google's map beside the free servers, a click away once its key is kept (2026-11-08, the user). *@
+                                        <div class="dropdown-divider"></div>
+                                        <h6 class="dropdown-header">Google Maps</h6>
+                                        @foreach (var googleKind in GoogleMapTiles.MapTypes)
+                                        {
+                                            var type = googleKind.Type;
+                                            var on = mapTiles.IsOn && mapTiles.MapType == type;
+                                            <button type="button" class="dropdown-item d-flex align-items-center gap-2" @onclick="() => ChooseGoogleLayerAsync(type)" title="Google's own map, from its Map Tiles API, with your Google key" aria-pressed="@(on ? "true" : "false")" data-testid="map-layer-google"><i class="bi bi-check-lg @(on ? "" : "invisible")" aria-hidden="true"></i>@googleKind.Name@if (string.IsNullOrEmpty(mapTiles.KeyForGoogle()))
+                                            {<span class="ms-auto ps-3 small text-body-secondary" data-testid="map-layer-google-key">needs a key</span>}</button>
+                                        }
+
+                                        @if (mapTiles.IsOn && chosenServer == null && !mapTiles.IsGoogle)
                                         {
                                             <div class="dropdown-divider"></div>
                                             <h6 class="dropdown-header">Your server</h6>
-                                            <div class="dropdown-item-text d-flex align-items-center gap-2" data-testid="map-layer-own"><i class="bi bi-check-lg" aria-hidden="true"></i>@MapTilesPreference.Name(mapTiles)</div>
+                                            <div class="dropdown-item-text d-flex align-items-center gap-2" data-testid="map-layer-own"><i class="bi bi-check-lg" aria-hidden="true"></i>@MapTilesPreference.Host(mapTiles.Url)</div>
                                         }
 
                                         <div class="dropdown-divider"></div>
@@ -1999,53 +2010,55 @@
                             <div class="d-flex align-items-center gap-2 mb-2 gdbv-element-header">
                                 <h6 class="mb-0">Component Properties</h6>
                                 <span class="badge bg-secondary">@selectedElement.Type</span>
-                                @* The id is the one part of this row allowed to give: it wraps, and the
-                                   buttons beside it keep their icon and label on one line. *@
+                                @* Short of room, the row goes on to another line instead of squeezing a part: the
+                                   buttons go together, still at the right (app.css, gdbv-element-header). *@
                                 <span class="gdbv-text-sm text-muted gdbv-element-id">@selectedElement.Id</span>
-                                @if (selectedElement.Type == "node")
-                                {
-                                    <button class="btn btn-outline-secondary btn-sm ms-auto gdbv-btn-label gdbv-icon-soft" @onclick="() => OnNodeExpand(selectedElement.Id)" disabled="@(!isConnected)" title="@(isConnected ? "Explore: load and render every node connected to this one (same as double-clicking it)" : "Connect to a database to explore this node's neighbors")">
-                                        @* Three arrows radiating out from a node — "explore neighbors". *@
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 16 16" class="me-1" style="vertical-align: -6px;">
-                                            <g stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                                                <line x1="8" y1="5.6" x2="8" y2="1.7"/>
-                                                <polyline points="7,3.2 8,1.7 9,3.2"/>
-                                                <line x1="6.3" y1="9.7" x2="3.55" y2="12.45"/>
-                                                <polyline points="5.3,12.1 3.55,12.45 3.9,10.7"/>
-                                                <line x1="9.7" y1="9.7" x2="12.45" y2="12.45"/>
-                                                <polyline points="12.1,10.7 12.45,12.45 10.7,12.1"/>
-                                            </g>
-                                            <circle cx="8" cy="8" r="1" fill="currentColor"/>
-                                        </svg>Explore
-                                    </button>
-                                    <button class="btn btn-outline-secondary btn-sm gdbv-btn-label gdbv-icon-soft" @onclick="OpenStyleForSelected" aria-label="Style" title="Style this vertex label (color, size, icon, display-property)">
-                                        @* Monochrome painter's palette (currentColor) with the paint blobs kept colored. *@
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" class="gdbv-ico">
-                                            <path d="M8 2.4 C4.4 2.4 1.5 4.7 1.5 7.6 C1.5 9.4 2.9 10.6 4.6 10.6 C5.4 10.6 5.9 11.1 5.9 11.9 C5.9 13 6.8 13.6 8 13.6 C11.6 13.6 14.5 11.1 14.5 7.8 C14.5 4.7 11.6 2.4 8 2.4 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-                                            <circle cx="4.6" cy="8.4" r="1.05" fill="currentColor"/>
-                                            <circle cx="5.6" cy="5.4" r="0.9" fill="#e6194b"/>
-                                            <circle cx="8" cy="4.7" r="0.9" fill="#f5a623"/>
-                                            <circle cx="10.7" cy="5.6" r="0.9" fill="#3cb44b"/>
-                                        </svg>
-                                    </button>
-                                }
-                                else if (selectedElement.Type == "edge")
-                                {
-                                    <button class="btn btn-outline-secondary btn-sm ms-auto gdbv-btn-label gdbv-icon-soft" @onclick="OpenStyleForSelected" aria-label="Style" title="Style this edge's color (by its label)">
-                                        @* Same painter's palette as the vertex Style button. *@
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" class="gdbv-ico">
-                                            <path d="M8 2.4 C4.4 2.4 1.5 4.7 1.5 7.6 C1.5 9.4 2.9 10.6 4.6 10.6 C5.4 10.6 5.9 11.1 5.9 11.9 C5.9 13 6.8 13.6 8 13.6 C11.6 13.6 14.5 11.1 14.5 7.8 C14.5 4.7 11.6 2.4 8 2.4 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-                                            <circle cx="4.6" cy="8.4" r="1.05" fill="currentColor"/>
-                                            <circle cx="5.6" cy="5.4" r="0.9" fill="#e6194b"/>
-                                            <circle cx="8" cy="4.7" r="0.9" fill="#f5a623"/>
-                                            <circle cx="10.7" cy="5.6" r="0.9" fill="#3cb44b"/>
-                                        </svg>
-                                    </button>
-                                }
-                                @if (EditsAllowed)
-                                {
-                                    <button class="btn btn-danger btn-sm @(selectedElement.Type == "node" || selectedElement.Type == "edge" ? "" : "ms-auto")" @onclick="DeleteSelectedElement" title="Delete this element">X</button>
-                                }
+                                <div class="d-flex gap-2 ms-auto gdbv-element-actions">
+                                    @if (selectedElement.Type == "node")
+                                    {
+                                        <button class="btn btn-outline-secondary btn-sm gdbv-btn-label gdbv-icon-soft" @onclick="() => OnNodeExpand(selectedElement.Id)" disabled="@(!isConnected)" title="@(isConnected ? "Explore: load and render every node connected to this one (same as double-clicking it)" : "Connect to a database to explore this node's neighbors")">
+                                            @* Three arrows radiating out from a node — "explore neighbors". *@
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 16 16" class="me-1" style="vertical-align: -6px;">
+                                                <g stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                                    <line x1="8" y1="5.6" x2="8" y2="1.7"/>
+                                                    <polyline points="7,3.2 8,1.7 9,3.2"/>
+                                                    <line x1="6.3" y1="9.7" x2="3.55" y2="12.45"/>
+                                                    <polyline points="5.3,12.1 3.55,12.45 3.9,10.7"/>
+                                                    <line x1="9.7" y1="9.7" x2="12.45" y2="12.45"/>
+                                                    <polyline points="12.1,10.7 12.45,12.45 10.7,12.1"/>
+                                                </g>
+                                                <circle cx="8" cy="8" r="1" fill="currentColor"/>
+                                            </svg>Explore
+                                        </button>
+                                        <button class="btn btn-outline-secondary btn-sm gdbv-btn-label gdbv-icon-soft" @onclick="OpenStyleForSelected" aria-label="Style" title="Style this vertex label (color, size, icon, display-property)">
+                                            @* Monochrome painter's palette (currentColor) with the paint blobs kept colored. *@
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" class="gdbv-ico">
+                                                <path d="M8 2.4 C4.4 2.4 1.5 4.7 1.5 7.6 C1.5 9.4 2.9 10.6 4.6 10.6 C5.4 10.6 5.9 11.1 5.9 11.9 C5.9 13 6.8 13.6 8 13.6 C11.6 13.6 14.5 11.1 14.5 7.8 C14.5 4.7 11.6 2.4 8 2.4 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                                                <circle cx="4.6" cy="8.4" r="1.05" fill="currentColor"/>
+                                                <circle cx="5.6" cy="5.4" r="0.9" fill="#e6194b"/>
+                                                <circle cx="8" cy="4.7" r="0.9" fill="#f5a623"/>
+                                                <circle cx="10.7" cy="5.6" r="0.9" fill="#3cb44b"/>
+                                            </svg>
+                                        </button>
+                                    }
+                                    else if (selectedElement.Type == "edge")
+                                    {
+                                        <button class="btn btn-outline-secondary btn-sm gdbv-btn-label gdbv-icon-soft" @onclick="OpenStyleForSelected" aria-label="Style" title="Style this edge's color (by its label)">
+                                            @* Same painter's palette as the vertex Style button. *@
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16" class="gdbv-ico">
+                                                <path d="M8 2.4 C4.4 2.4 1.5 4.7 1.5 7.6 C1.5 9.4 2.9 10.6 4.6 10.6 C5.4 10.6 5.9 11.1 5.9 11.9 C5.9 13 6.8 13.6 8 13.6 C11.6 13.6 14.5 11.1 14.5 7.8 C14.5 4.7 11.6 2.4 8 2.4 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                                                <circle cx="4.6" cy="8.4" r="1.05" fill="currentColor"/>
+                                                <circle cx="5.6" cy="5.4" r="0.9" fill="#e6194b"/>
+                                                <circle cx="8" cy="4.7" r="0.9" fill="#f5a623"/>
+                                                <circle cx="10.7" cy="5.6" r="0.9" fill="#3cb44b"/>
+                                            </svg>
+                                        </button>
+                                    }
+                                    @if (EditsAllowed)
+                                    {
+                                        <button class="btn btn-danger btn-sm" @onclick="DeleteSelectedElement" title="Delete this element">X</button>
+                                    }
+                                </div>
                             </div>
 
                             @* Read-only where nothing can be staged (EditsAllowed): the values show, and no control changes them. Its
@@ -2468,7 +2481,7 @@
 {
     <div class="gdbv-element-menu-sheet" @onmousedown="CloseCanvasMenu" @oncontextmenu:preventDefault="true"></div>
     <div class="card shadow gdbv-element-menu py-1" style="@CanvasMenuPlace()" role="menu" aria-label="Canvas" data-testid="canvas-menu" @oncontextmenu:preventDefault="true">
-        <button type="button" class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row" role="menuitem" @onclick="NewComponentFromCanvasMenuAsync" disabled="@(!EditsAllowed)" title="@(EditsAllowed ? "Drop a new component here" : "This connection cannot stage an edit")" data-testid="canvas-menu-new">
+        <button type="button" class="dropdown-item d-flex align-items-center gap-2 gdbv-menu-row" role="menuitem" @onclick="NewComponentFromCanvasMenuAsync" disabled="@(!EditsAllowed || CanvasMenuOffEarth)" title="@CanvasMenuNewTitle()" data-testid="canvas-menu-new">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" class="gdbv-menu-row-icon" aria-hidden="true">
                 <path d="M7.5 12 H2 V2 H12 V7.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                 <path fill="currentColor" d="M11.2 9.5 h1.6 v1.7 h1.7 v1.6 h-1.7 v1.7 h-1.6 v-1.7 h-1.7 v-1.6 h1.7 z"/>
@@ -2501,7 +2514,7 @@
                  OnFocus="FocusAlgorithmAsync" />
 
 @* Map tiles, opened from the Map's and the Globe's dropdown (2026-11-05, the user): the same window Settings opens. *@
-<MapTilesDialog Visible="showMapTiles" OnClose="() => showMapTiles = false" />
+<MapTilesDialog Visible="showMapTiles" GoogleMapType="@mapTilesGoogleType" OnClose="() => showMapTiles = false" />
 
 @if (showStyle)
 {

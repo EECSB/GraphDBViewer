@@ -157,6 +157,16 @@ public sealed class GunQueryBuilder : IGraphQueryBuilder
         return GunWrite.Put(NewSoul(label), values).ToStatement();
     }
 
+    public string AddVertexWithNameOnEarth(string label, string name, double latitude, double longitude)
+    {
+        var values = Typed(label);
+        values["name"] = name;
+        values[GdbvKeys.Lat] = Geocoding.Degrees(latitude);
+        values[GdbvKeys.Lon] = Geocoding.Degrees(longitude);
+
+        return GunWrite.Put(NewSoul(label), values).ToStatement();
+    }
+
     ///<summary>
     ///A node whose key is already decided — an import's. GUN keys are the caller's to choose, so an
     ///imported id is used as the soul directly, and re-importing the same graph writes over itself rather

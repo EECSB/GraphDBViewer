@@ -296,6 +296,22 @@ public partial class Home
         OnElementDeselected();
     }
 
+    //An empty-space click on the Map or the Globe, with the place on the earth under it, or none where it missed the earth.
+    //Both views place a vertex by its place and hide one without, so a new component gets the place clicked, and a click
+    //off the earth adds nothing: on the globe one went in with no place, drawn inside the earth (2026-11-08, the user).
+    [JSInvokable]
+    public async Task OnEarthTapped(double? latitude, double? longitude)
+    {
+        if (!addNodeMode)
+        {
+            OnElementDeselected();
+            return;
+        }
+
+        if (latitude.HasValue && longitude.HasValue)
+            await PlaceComponentOnEarthAsync(latitude.Value, longitude.Value);
+    }
+
     [JSInvokable]
     public async Task OnDeleteKeyPressed()
     {
@@ -1279,6 +1295,20 @@ public partial class Home
         else
             query = Qb.AddVertexWithName("Component", name);
 
+        await StageComponentAsync(query);
+    }
+
+    //Places a fresh component at a place on the earth (gdbvLat / gdbvLon), for the Map and the Globe, which place it by it.
+    private async Task PlaceComponentOnEarthAsync(double latitude, double longitude)
+    {
+        if (!EditsAllowed)
+            return;
+
+        await StageComponentAsync(Qb.AddVertexWithNameOnEarth("Component", NextComponentName(), latitude, longitude));
+    }
+
+    private async Task StageComponentAsync(string query)
+    {
         AppendGeneratedQuery(query);
         queryEditorTab = 2;
 

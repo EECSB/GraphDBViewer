@@ -132,6 +132,15 @@ public class GremlinQueryBuilderTests
             GremlinQueryBuilder.AddVertexWithNameAt("Component", "Component 1", 12.5, -3));
     }
 
+    //A component placed on the Map or the Globe gets the place clicked, which is how both views place it.
+    [Fact]
+    public void AddVertexWithNameOnEarth_EmitsNameAndGdbvPlace()
+    {
+        Assert.Equal(
+            "g.addV('Component').property('name', 'Component 1').property('gdbvLat', '48.208176').property('gdbvLon', '-16.5')",
+            GremlinQueryBuilder.AddVertexWithNameOnEarth("Component", "Component 1", 48.2081763, -16.5));
+    }
+
     [Fact]
     public void AddEdge_NumericIds_UsesAnonymousTraversal()
     {

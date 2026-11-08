@@ -1061,6 +1061,29 @@
         };
     }
 
+    //Where on the earth a point of geoProject's plane is: { lat, lng }, or null off the earth. A click on the Map places a
+    //new vertex by it.
+    function geoUnproject(x, y, width, height) {
+        const lng = x / width * 360 - 180;
+        const lat = 90 - y / height * 180;
+
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180)
+            return null;
+
+        return { lat: lat, lng: lng };
+    }
+
+    //Where on the earth a point of geoToCartesian's frame is, whatever its distance from the center: { lat, lng }. A
+    //click on the Globe places a new vertex by it.
+    function cartesianToGeo(x, y, z) {
+        const r = Math.hypot(x, y, z);
+
+        return {
+            lat: Math.asin(y / r) * 180 / Math.PI,
+            lng: Math.atan2(-z, x) * 180 / Math.PI
+        };
+    }
+
     //── Map tiles ─────────────────────────────────────────────────────────────────────────────
     //A tile server set in Settings (MapTilesPreference.cs) serves the earth as Web Mercator tiles: at zoom z the world is
     //2^z × 2^z tiles of 256 pixels, x from the antimeridian eastward, y from the north. The Map and the Globe are
@@ -1757,6 +1780,8 @@
         normalizeModelUrl: normalizeModelUrl,
         geoProject: geoProject,
         geoToCartesian: geoToCartesian,
+        geoUnproject: geoUnproject,
+        cartesianToGeo: cartesianToGeo,
         geoTileUrl: geoTileUrl,
         geoTileViewReporter: geoTileViewReporter,
         geoTileLat: geoTileLat,

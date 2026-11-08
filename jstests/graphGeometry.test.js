@@ -694,3 +694,28 @@ test('geoTileStripCount cuts low-zoom tiles finely and leaves a street\'s tile w
         });
     }
 });
+
+//A click on the Map or the Globe places a new component by the place on the earth under it (2026-11-08, the user: on the globe
+//one went in with no place, drawn inside the earth): the two projections backward.
+test('geoUnproject is geoProject backward, and null off the earth', () => {
+    const p = geo.geoProject(48.2, -16.5, 2048, 1024);
+    const back = geo.geoUnproject(p.x, p.y, 2048, 1024);
+
+    assert.ok(Math.abs(back.lat - 48.2) < 1e-9);
+    assert.ok(Math.abs(back.lng + 16.5) < 1e-9);
+    assert.strictEqual(geo.geoUnproject(-1, 500, 2048, 1024), null);
+    assert.strictEqual(geo.geoUnproject(2049, 500, 2048, 1024), null);
+    assert.strictEqual(geo.geoUnproject(1000, -1, 2048, 1024), null);
+    assert.strictEqual(geo.geoUnproject(1000, 1025, 2048, 1024), null);
+});
+
+test('cartesianToGeo is geoToCartesian backward, at any distance from the center', () => {
+    for (const r of [1, 216.7, 900])
+        for (const [lat, lng] of [[48.2, -16.5], [-33.87, 151.21], [0, 179], [70, -120]]) {
+            const p = geo.geoToCartesian(lat, lng, r);
+            const back = geo.cartesianToGeo(p.x, p.y, p.z);
+
+            assert.ok(Math.abs(back.lat - lat) < 1e-9, `${lat} at ${r} came back as ${back.lat}`);
+            assert.ok(Math.abs(back.lng - lng) < 1e-9, `${lng} at ${r} came back as ${back.lng}`);
+        }
+});

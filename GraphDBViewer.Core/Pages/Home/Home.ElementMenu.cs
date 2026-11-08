@@ -44,10 +44,14 @@ public partial class Home
         OpenStyleForSelected();
     }
 
-    ///<summary>A right-click's menu on the canvas's empty space, or null. GraphX and GraphY are where a new component goes; null in 3D, whose force layout places it.</summary>
+    ///<summary>
+    ///A right-click's menu on the canvas's empty space, or null. GraphX and GraphY are where a new component goes; null in 3D,
+    ///whose force layout places it. On the Map and the Globe (OnEarth) it goes to the place on the earth under the pointer,
+    ///Latitude and Longitude, null where the pointer missed the earth.
+    ///</summary>
     private CanvasMenu canvasMenu;
 
-    private sealed record CanvasMenu(double X, double Y, double? GraphX, double? GraphY);
+    private sealed record CanvasMenu(double X, double Y, double? GraphX, double? GraphY, bool OnEarth = false, double? Latitude = null, double? Longitude = null);
 
     [JSInvokable]
     public void OnCanvasContextMenu(double x, double y, double? graphX, double? graphY)
@@ -56,6 +60,28 @@ public partial class Home
         canvasMenu = new CanvasMenu(x, y, graphX, graphY);
 
         StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnEarthContextMenu(double x, double y, double? latitude, double? longitude)
+    {
+        elementMenu = null;
+        canvasMenu = new CanvasMenu(x, y, null, null, true, latitude, longitude);
+
+        StateHasChanged();
+    }
+
+    //Off the earth the Map and the Globe have no place for a new component, and one without a place they would not draw.
+    private bool CanvasMenuOffEarth => canvasMenu != null && canvasMenu.OnEarth && !canvasMenu.Latitude.HasValue;
+
+    private string CanvasMenuNewTitle()
+    {
+        if (!EditsAllowed)
+            return "This connection cannot stage an edit";
+        else if (CanvasMenuOffEarth)
+            return "Right-click the earth to drop a new component there";
+
+        return "Drop a new component here";
     }
 
     private void CloseCanvasMenu()
@@ -74,8 +100,12 @@ public partial class Home
 
         canvasMenu = null;
 
-        if (menu != null)
+        if (menu == null)
+            return;
+        else if (!menu.OnEarth)
             await PlaceComponentAsync(menu.GraphX, menu.GraphY);
+        else if (menu.Latitude.HasValue && menu.Longitude.HasValue)
+            await PlaceComponentOnEarthAsync(menu.Latitude.Value, menu.Longitude.Value);
     }
 
     private async Task ClearFromCanvasMenuAsync()
