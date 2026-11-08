@@ -28,7 +28,7 @@ Connect, run queries, and see your data as an interactive **2D** or **3D** graph
 </div>
 
 <div align="center">
-<img src="docs/img/app-2d.png" alt="Graph DB Viewer showing a loaded graph in the interactive 2D view" width="900" />
+<img src="docs/img/readme/app-2d.png" alt="Graph DB Viewer showing a loaded graph in the interactive 2D view" width="100%" />
 </div>
 
 ---
@@ -119,7 +119,7 @@ It's designed for developers who want a fast, private, self-hostable alternative
 
 ### 📝 Write & run queries
 
-<img src="docs/img/query-editor.png" alt="The Monaco query editor with a syntax-highlighted Gremlin query" width="460" />
+<img src="docs/img/readme/query-editor.png" alt="The Monaco query editor with a syntax-highlighted Gremlin query" width="100%" />
 
 - **Monaco query editor** (self-hosted — no npm/bundler) with syntax highlighting for **Gremlin** (custom Monarch grammar), **openCypher** and **SPARQL**, auto-indentation and bracket/quote auto-closing. Pick the language per tab.
 - **Schema-aware Gremlin autocomplete** — step completion **plus** real vertex labels, edge labels and property keys fetched from the connected database. It's context-aware: `hasLabel('…` suggests vertex labels, `out('…` edge labels, `has('…` / `values('…` property keys. Refreshed on connect and after every commit.
@@ -134,13 +134,29 @@ It's designed for developers who want a fast, private, self-hostable alternative
 
 Switch any result between **JSON**, **2D**, **3D** and **Table** instantly — and, when the vertices carry coordinates, put them on a **Map** or a **Globe**.
 
-| 2D — Cytoscape.js | 3D — three.js |
-|:---|:---|
-| <img src="docs/img/graph-2d.png" alt="Interactive 2D graph view" width="400"> | <img src="docs/img/graph-3d.png" alt="Interactive 3D graph view" width="400"> |
-| **Table** | **Raw JSON** |
-| <img src="docs/img/graph-table.png" alt="Vertices and edges table view" width="400"> | <img src="docs/img/graph-json.png" alt="Raw JSON results view" width="400"> |
-| **Detailed view** | **Styling** |
-| <img src="docs/img/graph-detailed.png" alt="Detailed view: three labels drawn as cards with their label, name and description" width="400"> | <img src="docs/img/styling.png" alt="The Styling window, one row per label, the Component row opened to its shapes, icon and 3D model" width="400"> |
+**2D — Cytoscape.js**
+
+<img src="docs/img/readme/graph-2d.png" alt="Interactive 2D graph view" width="100%">
+
+**3D — three.js**
+
+<img src="docs/img/readme/graph-3d.png" alt="Interactive 3D graph view" width="100%">
+
+**Table**
+
+<img src="docs/img/readme/graph-table.png" alt="Vertices and edges table view" width="100%">
+
+**Raw JSON**
+
+<img src="docs/img/readme/graph-json.png" alt="Raw JSON results view" width="100%">
+
+**Detailed view**
+
+<img src="docs/img/readme/graph-detailed.png" alt="Detailed view: three labels drawn as cards with their label, name and description" width="100%">
+
+**Styling**
+
+<img src="docs/img/readme/styling.png" alt="The Styling window, one row per label, the Component row opened to its shapes, icon and 3D model" width="100%">
 
 - **2D — Cytoscape.js** — 7 layouts (Force-directed `cose`, Cluster by label, Tree/breadthfirst, Concentric, Circle, Grid, Random), directed labeled edges, and node/edge selection highlighting.
 - **3D — 3d-force-graph / three.js** — 6 layout modes (free Force, Tree top-down, Tree bottom-up, Left→right, Radial, Z-stack), auto-coloring by vertex-label group, directional arrows, curved parallel edges and hover labels. Cyclic graphs are tolerated.
@@ -158,12 +174,9 @@ Switch any result between **JSON**, **2D**, **3D** and **Table** instantly — a
 
 Vertices that carry coordinates can be drawn where they are: hover **2D** and pick **Map** for a world map, or hover **3D** and pick **Globe**. The same cities and routes, both ways:
 
-<table>
-  <tr>
-    <td><img src="docs/img/graph-map.jpg" alt="The Map: cities in North America and Europe placed by their coordinates on a satellite world map, with the routes between them following great circles" width="460" /></td>
-    <td><img src="docs/img/graph-globe.jpg" alt="The Globe: the same cities and routes on a 3D globe, arcing over the Atlantic" width="460" /></td>
-  </tr>
-</table>
+<img src="docs/img/readme/graph-map.jpg" alt="The Map: cities in North America and Europe placed by their coordinates on a satellite world map, with the routes between them following great circles" width="100%" />
+
+<img src="docs/img/readme/graph-globe.jpg" alt="The Globe: the same cities and routes on a 3D globe, arcing over the Atlantic" width="100%" />
 
 - **Nothing to configure** — coordinates are found by convention: `lat` / `latitude` with `lon` / `lng` / `long` / `longitude`, or one property holding both (`"48.2, 16.4"`, a GeoJSON point, WKT `POINT(lon lat)`, a Neo4j point). Vertices without a place are hidden, and the view says how many.
 - **Still the same view** — selecting, editing, styling, filtering, searching and exporting work as they do on the plain 2D and 3D graphs. The map and the globe are layouts, and the layout pickers offer them too.
@@ -182,7 +195,7 @@ To try it, run **Geospatial map** from *Examples → Sample graphs* (Gremlin or 
 
 A **gdotV-style step-through debugger** for Gremlin:
 
-<img src="docs/img/debugger.png" alt="The step debugger showing the traverser count after each step, with the final step's drop to zero highlighted in red" width="640" />
+<img src="docs/img/readme/debugger.png" alt="The step debugger showing the traverser count after each step, with the final step's drop to zero highlighted in red" width="100%" />
 
 - Runs the query truncated at each step (prefix re-execution) and shows the **traverser count after every step**, with **zero-drops highlighted** so you can see exactly where results disappear.
 - Steps are **underlined and clickable in the editor** — click one to sample it or **visualize that intermediate result** in 2D/3D. The editor goes read-only during a debug session.
